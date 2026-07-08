@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>纪念碑谷风格 · 方块升起概念</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0E0E14;
+    color: #E8E4DA;
+    font-family: -apple-system, "PingFang SC", sans-serif;
+    min-height: 100vh;
+    padding: 32px 24px;
+  }
+  .container { max-width: 1280px; margin: 0 auto; }
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+  }
+  .sub {
+    font-size: 13px;
+    color: #7A7468;
+    margin-bottom: 32px;
+    line-height: 1.6;
+  }
+  .stage {
+    background: linear-gradient(180deg, #14141C 0%, #0A0A12 100%);
+    border-radius: 12px;
+    padding: 48px 32px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid #1F1F2A;
+  }
+  .stage-label {
+    position: absolute;
+    top: 16px;
+    left: 20px;
+    font-size: 10px;
+    color: #555;
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0.15em;
+  }
+  .svg-wrap { display: flex; justify-content: center; }
+  .svg-wrap svg { width: 100%; max-width: 900px; height: auto; display: block; }
+  
+  .stages-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  @media (min-width: 1024px) {
+    .stages-grid { grid-template-columns: 1fr 1fr; }
+  }
+  
+  .palette {
+    margin-top: 32px;
+    padding: 24px;
+    background: #14141C;
+    border-radius: 12px;
+    border: 1px solid #1F1F2A;
+  }
+  .palette h3 {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 16px;
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0.1em;
+  }
+  .swatches {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .swatch {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    background: #0A0A12;
+    border-radius: 6px;
+  }
+  .swatch-chip {
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .swatch-info { font-size: 11px; line-height: 1.4; }
+  .swatch-name { color: #E8E4DA; }
+  .swatch-hex { color: #666; font-family: ui-monospace, monospace; }
+  
+  .notes {
+    margin-top: 24px;
+    padding: 20px;
+    background: rgba(201, 169, 97, 0.05);
+    border-left: 2px solid #C9A961;
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1.7;
+    color: #B5A88A;
+  }
+  .notes strong { color: #C9A961; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>纪念碑谷风格 · 方块升起概念</h1>
+  <p class="sub">等距视角 / 虚空升起 / Agent 发言触发方块浮现 / 最终多路径连接</p>
+
+  <!-- 阶段1：初始 - 角色站在虚空小方块上 -->
+  <div class="stage">
+    <div class="stage-label">PHASE 01 / 初始 · 立卦</div>
+    <div class="svg-wrap">
+      <svg viewBox="0 0 800 360" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <!-- 方块顶面（亮） -->
+          <linearGradient id="topFace" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#F5EFE2"/>
+            <stop offset="100%" stop-color="#E8DFCC"/>
+          </linearGradient>
+          <!-- 方块左面（中） -->
+          <linearGradient id="leftFace" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#C4B8A0"/>
+            <stop offset="100%" stop-color="#9A8E76"/>
+          </linearGradient>
+          <!-- 方块右面（暗） -->
+          <linearGradient id="rightFace" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#8A7E66"/>
+            <stop offset="100%" stop-color="#5E5444"/>
+          </linearGradient>
+          <!-- 虚空渐变 -->
+          <radialGradient id="void" cx="50%" cy="100%" r="80%">
+            <stop offset="0%" stop-color="#1A1A26" stop-opacity="0.6"/>
+            <stop offset="100%" stop-color="#0A0A12" stop-opacity="0"/>
+          </radialGradient>
+          <!-- 角色光晕 -->
+          <radialGradient id="charGlow">
+            <stop offset="0%" stop-color="#C9A961" stop-opacity="0.4"/>
+            <stop offset="100%" stop-color="#C9A961" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        
+        <!-- 背景虚空 -->
+        <rect width="800" height="360" fill="url(#void)"/>
+        
+        <!-- 等距网格（淡） -->
+        <g stroke="#1F1F2A" stroke-width="0.5" opacity="0.4">
+          <path d="M 400 80 L 600 180 L 400 280 L 200 180 Z"/>
+          <path d="M 400 120 L 560 200 L 400 280 L 240 200 Z"/>
+          <path d="M 400 160 L 520 220 L 400 280 L 280 220 Z"/>
+        </g>
+        
+        <!-- 起始方块（角色站立处） -->
+        <g transform="translate(400, 220)">
+          <!-- 顶面 -->
+          <path d="M 0 -40 L 60 0 L 0 40 L -60 0 Z" fill="url(#topFace)" stroke="#C9A961" stroke-width="0.8"/>
+          <!-- 左面 -->
+          <path d="M -60 0 L 0 40 L 0 80 L -60 40 Z" fill="url(#leftFace)"/>
+          <!-- 右面 -->
+          <path d="M 60 0 L 0 40 L 0 80 L 60 40 Z" fill="url(#rightFace)"/>
+          <!-- 顶面纹路 -->
+          <path d="M 0 -40 L 0 40 M -60 0 L 60 0" stroke="#C9A961" stroke-width="0.3" opacity="0.4"/>
+        </g>
+        
+        <!-- 角色光晕 -->
+        <circle cx="400" cy="200" r="40" fill="url(#charGlow)"/>
+        <!-- 角色（简约小圆点 + 光环） -->
+        <circle cx="400" cy="200" r="8" fill="#C9A961" stroke="#F5EFE2" stroke-width="1.5"/>
+        <circle cx="400" cy="200" r="14" fill="none" stroke="#C9A961" stroke-width="0.5" opacity="0.5"/>
+        
+        <!-- 提示文字 -->
+        <text x="400" y="340" text-anchor="middle" fill="#555" font-size="10" font-family="ui-monospace, monospace" letter-spacing="0.2em">立卦 · 角色悬浮于虚空方块</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 阶段2-4：双栏 -->
+  <div class="stages-grid">
+    
+    <!-- 阶段2：Agent 发言中，方块升起 -->
+    <div class="stage">
+      <div class="stage-label">PHASE 02 / 六方推演 · 方块升起</div>
+      <div class="svg-wrap">
+        <svg viewBox="0 0 400 360" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="topFace2" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#F5EFE2"/>
+              <stop offset="100%" stop-color="#E8DFCC"/>
+            </linearGradient>
+            <linearGradient id="leftFace2" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#C4B8A0"/>
+              <stop offset="100%" stop-color="#9A8E76"/>
+            </linearGradient>
+            <linearGradient id="rightFace2" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#8A7E66"/>
+              <stop offset="100%" stop-color="#5E5444"/>
+            </linearGradient>
+            <radialGradient id="void2">
+              <stop offset="0%" stop-color="#1A1A26" stop-opacity="0.6"/>
+              <stop offset="100%" stop-color="#0A0A12" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          
+          <rect width="400" height="360" fill="url(#void2)"/>
+          
+          <!-- 当前位置（角色） -->
+          <g transform="translate(200, 240)">
+            <path d="M 0 -30 L 45 0 L 0 30 L -45 0 Z" fill="url(#topFace2)" stroke="#C9A961" stroke-width="0.8"/>
+            <path d="M -45 0 L 0 30 L 0 60 L -45 30 Z" fill="url(#leftFace2)"/>
+            <path d="M 45 0 L 0 30 L 0 60 L 45 30 Z" fill="url(#rightFace2)"/>
+            <circle cx="0" cy="-20" r="6" fill="#C9A961" stroke="#F5EFE2" stroke-width="1"/>
+          </g>
+          
+          <!-- 升起中的方块 1（已升起 - 钱谷） -->
+          <g transform="translate(120, 180) translate(0, 0)">
+            <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="url(#topFace2)" stroke="#E8A830" stroke-width="0.6" opacity="0.95"/>
+            <path d="M -35 0 L 0 25 L 0 45 L -35 20 Z" fill="url(#leftFace2)" opacity="0.95"/>
+            <path d="M 35 0 L 0 25 L 0 45 L 35 20 Z" fill="url(#rightFace2)" opacity="0.95"/>
+            <text x="0" y="3" text-anchor="middle" fill="#E8A830" font-size="9" font-family="serif">钱</text>
+          </g>
+          
+          <!-- 升起中的方块 2（已升起 - 路向） -->
+          <g transform="translate(280, 180)">
+            <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="url(#topFace2)" stroke="#00A86B" stroke-width="0.6"/>
+            <path d="M -35 0 L 0 25 L 0 45 L -35 20 Z" fill="url(#leftFace2)"/>
+            <path d="M 35 0 L 0 25 L 0 45 L 35 20 Z" fill="url(#rightFace2)"/>
+            <text x="0" y="3" text-anchor="middle" fill="#00A86B" font-size="9" font-family="serif">路</text>
+          </g>
+          
+          <!-- 正在升起的方块 3（半透明 - 风眼） -->
+          <g transform="translate(80, 120) translate(0, 20)" opacity="0.7">
+            <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="url(#topFace2)" stroke="#D94F4F" stroke-width="0.6"/>
+            <path d="M -35 0 L 0 25 L 0 45 L -35 20 Z" fill="url(#leftFace2)"/>
+            <path d="M 35 0 L 0 25 L 0 45 L 35 20 Z" fill="url(#rightFace2)"/>
+            <text x="0" y="3" text-anchor="middle" fill="#D94F4F" font-size="9" font-family="serif">风</text>
+          </g>
+          
+          <!-- 还在虚空中的方块轮廓（虚线） -->
+          <g transform="translate(320, 120)" opacity="0.2">
+            <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="none" stroke="#888" stroke-width="0.5" stroke-dasharray="2 2"/>
+            <text x="0" y="3" text-anchor="middle" fill="#666" font-size="9" font-family="serif">?</text>
+          </g>
+          <g transform="translate(200, 80)" opacity="0.15">
+            <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="none" stroke="#888" stroke-width="0.5" stroke-dasharray="2 2"/>
+            <text x="0" y="3" text-anchor="middle" fill="#555" font-size="9" font-family="serif">?</text>
+          </g>
+          
+          <!-- 连接线（已形成的路径） -->
+          <g stroke="#C9A961" stroke-width="0.8" fill="none" opacity="0.5" stroke-dasharray="3 2">
+            <path d="M 200 215 L 155 195"/>
+            <path d="M 200 215 L 245 195"/>
+          </g>
+          
+          <!-- 升起动画指示 -->
+          <g opacity="0.6">
+            <path d="M 80 180 L 80 140" stroke="#D94F4F" stroke-width="0.5" stroke-dasharray="1 2"/>
+            <polygon points="80,140 78,144 82,144" fill="#D94F4F"/>
+          </g>
+          
+          <text x="200" y="340" text-anchor="middle" fill="#555" font-size="9" font-family="ui-monospace, monospace" letter-spacing="0.15em">Agent 发言 → 对应方块从虚空升起</text>
+        </svg>
+      </div>
+    </div>
+    
+    <!-- 阶段3：全部升起，多路径形成 -->
+    <div class="stage">
+      <div class="stage-label">PHASE 03 / 揭雾 · 多路径形成</div>
+      <div class="svg-wrap">
+        <svg viewBox="0 0 400 360" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="topFace3" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#F5EFE2"/>
+              <stop offset="100%" stop-color="#E8DFCC"/>
+            </linearGradient>
+            <linearGradient id="leftFace3" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#C4B8A0"/>
+              <stop offset="100%" stop-color="#9A8E76"/>
+            </linearGradient>
+            <linearGradient id="rightFace3" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#8A7E66"/>
+              <stop offset="100%" stop-color="#5E5444"/>
+            </linearGradient>
+            <radialGradient id="void3">
+              <stop offset="0%" stop-color="#1A1A26" stop-opacity="0.4"/>
+              <stop offset="100%" stop-color="#0A0A12" stop-opacity="0"/>
+            </radialGradient>
+            <radialGradient id="pathGlow">
+              <stop offset="0%" stop-color="#C9A961" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="#C9A961" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          
+          <rect width="400" height="360" fill="url(#void3)"/>
+          
+          <!-- 路径光晕 -->
+          <ellipse cx="200" cy="180" rx="160" ry="80" fill="url(#pathGlow)"/>
+          
+          <!-- 当前位置（角色） -->
+          <g transform="translate(200, 240)">
+            <path d="M 0 -30 L 45 0 L 0 30 L -45 0 Z" fill="url(#topFace3)" stroke="#C9A961" stroke-width="1"/>
+            <path d="M -45 0 L 0 30 L 0 60 L -45 30 Z" fill="url(#leftFace3)"/>
+            <path d="M 45 0 L 0 30 L 0 60 L 45 30 Z" fill="url(#rightFace3)"/>
+            <circle cx="0" cy="-20" r="7" fill="#C9A961" stroke="#F5EFE2" stroke-width="1.5"/>
+          </g>
+          
+          <!-- 第一层连接（已升起的 6 个方块） -->
+          <!-- 左上 -->
+          <g transform="translate(80, 160)">
+            <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="url(#topFace3)" stroke="#E8A830" stroke-width="0.6"/>
+            <path d="M -35 0 L 0 25 L 0 45 L -35 20 Z" fill="url(#leftFace3)"/>
+            <path d="M 35 0 L 0 25 L 0 45 L 35 20 Z" fill="url(#rightFace3)"/>
+            <text x="0" y="3" text-anchor="middle" fill="#E8A830" font-size="8" font-family="serif">钱</text>
+          </g>
+          <!-- 中左上 -->
+          <g transform="translate(160, 120)">
+            <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="url(#topFace3)" stroke="#00A86B" stroke-width="0.6"/>
+            <path d="M -35 0 L 0 25 L 0 45 L -35 20 Z" fill="url(#leftFace3)"/>
+            <path d="M 35 0 L 0 25 L 0 45 L 35 20 Z" fill="url(#rightFace3)"/>
+            <text x="0" y="3" text-anchor="middle" fill="#00A86B" font-size="8" font-family="serif">路</text>
+          </g>
+          <!-- 中右上 -->
+          <g transform="translate(240, 120)">
+            <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="url(#topFace3)" stroke="#D94F4F" stroke-width="0.6"/>
+            <path d="M -35 0 L 0 25 L 0 45 L -35 20 Z" fill="url(#leftFace3)"/>
+            <path d="M 35 0 L 0 25 L 0 45 L 35 20 Z" fill="url(#rightFace3)"/>
+            <text x="0" y="3" text-anchor="middle" fill="#D94F4F" font-size="8" font-family="serif">风</text>
+          </g>
+          <!-- 右上 -->
+          <g transform="translate(320, 160)">
+            <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="url(#topFace3)" stroke="#C77DBA" stroke-width="0.6"/>
+            <path d="M -35 0 L 0 25 L 0 45 L -35 20 Z" fill="url(#leftFace3)"/>
+            <path d="M 35 0 L 0 25 L 0 45 L 35 20 Z" fill="url(#rightFace3)"/>
+            <text x="0" y="3" text-anchor="middle" fill="#C77DBA" font-size="8" font-family="serif">心</text>
+          </g>
+          <!-- 远左 -->
+          <g transform="translate(120, 80)">
+            <path d="M 0 -22 L 30 0 L 0 22 L -30 0 Z" fill="url(#topFace3)" stroke="#7C5CBF" stroke-width="0.6" opacity="0.9"/>
+            <path d="M -30 0 L 0 22 L 0 40 L -30 18 Z" fill="url(#leftFace3)" opacity="0.9"/>
+            <path d="M 30 0 L 0 22 L 0 40 L 30 18 Z" fill="url(#rightFace3)" opacity="0.9"/>
+            <text x="0" y="3" text-anchor="middle" fill="#7C5CBF" font-size="7" font-family="serif">镜</text>
+          </g>
+          <!-- 远右 -->
+          <g transform="translate(280, 80)">
+            <path d="M 0 -22 L 30 0 L 0 22 L -30 0 Z" fill="url(#topFace3)" stroke="#4A90D9" stroke-width="0.6" opacity="0.9"/>
+            <path d="M -30 0 L 0 22 L 0 40 L -30 18 Z" fill="url(#leftFace3)" opacity="0.9"/>
+            <path d="M 30 0 L 0 22 L 0 40 L 30 18 Z" fill="url(#rightFace3)" opacity="0.9"/>
+            <text x="0" y="3" text-anchor="middle" fill="#4A90D9" font-size="7" font-family="serif">云</text>
+          </g>
+          
+          <!-- 连接路径（实线金色） -->
+          <g stroke="#C9A961" stroke-width="1" fill="none" opacity="0.7">
+            <path d="M 175 235 L 110 175"/>
+            <path d="M 195 230 L 175 140"/>
+            <path d="M 215 230 L 235 140"/>
+            <path d="M 235 235 L 300 175"/>
+          </g>
+          <!-- 远端连接（虚线） -->
+          <g stroke="#C9A961" stroke-width="0.6" fill="none" opacity="0.4" stroke-dasharray="2 2">
+            <path d="M 145 155 L 140 100"/>
+            <path d="M 255 155 L 260 100"/>
+          </g>
+          
+          <!-- 可选路径标识 -->
+          <g>
+            <circle cx="80" cy="160" r="18" fill="none" stroke="#C9A961" stroke-width="0.8" opacity="0.6" stroke-dasharray="2 2"/>
+            <text x="80" y="195" text-anchor="middle" fill="#C9A961" font-size="7" font-family="ui-monospace, monospace">路径 A</text>
+            <circle cx="160" cy="120" r="18" fill="none" stroke="#C9A961" stroke-width="0.8" opacity="0.6" stroke-dasharray="2 2"/>
+            <text x="160" y="155" text-anchor="middle" fill="#C9A961" font-size="7" font-family="ui-monospace, monospace">路径 B</text>
+            <circle cx="240" cy="120" r="18" fill="none" stroke="#C9A961" stroke-width="0.8" opacity="0.6" stroke-dasharray="2 2"/>
+            <text x="240" y="155" text-anchor="middle" fill="#C9A961" font-size="7" font-family="ui-monospace, monospace">路径 C</text>
+            <circle cx="320" cy="160" r="18" fill="none" stroke="#C9A961" stroke-width="0.8" opacity="0.6" stroke-dasharray="2 2"/>
+            <text x="320" y="195" text-anchor="middle" fill="#C9A961" font-size="7" font-family="ui-monospace, monospace">路径 D</text>
+          </g>
+          
+          <text x="200" y="340" text-anchor="middle" fill="#555" font-size="9" font-family="ui-monospace, monospace" letter-spacing="0.15em">六方聚齐 · 四条出路显现</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- 阶段4：选择后，走入路径，前方再次迷雾 -->
+  <div class="stage">
+    <div class="stage-label">PHASE 04 / 选择前行 · 新迷雾生成</div>
+    <div class="svg-wrap">
+      <svg viewBox="0 0 800 320" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="topFace4" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#F5EFE2"/>
+            <stop offset="100%" stop-color="#E8DFCC"/>
+          </linearGradient>
+          <linearGradient id="leftFace4" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#C4B8A0"/>
+            <stop offset="100%" stop-color="#9A8E76"/>
+          </linearGradient>
+          <linearGradient id="rightFace4" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#8A7E66"/>
+            <stop offset="100%" stop-color="#5E5444"/>
+          </linearGradient>
+          <radialGradient id="void4">
+            <stop offset="0%" stop-color="#1A1A26" stop-opacity="0.5"/>
+            <stop offset="100%" stop-color="#0A0A12" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        
+        <rect width="800" height="320" fill="url(#void4)"/>
+        
+        <!-- 已走过的路径（淡色） -->
+        <g opacity="0.4">
+          <g transform="translate(150, 220)">
+            <path d="M 0 -22 L 30 0 L 0 22 L -30 0 Z" fill="url(#topFace4)" stroke="#888" stroke-width="0.4"/>
+            <path d="M -30 0 L 0 22 L 0 40 L -30 18 Z" fill="url(#leftFace4)"/>
+            <path d="M 30 0 L 0 22 L 0 40 L 30 18 Z" fill="url(#rightFace4)"/>
+          </g>
+          <g transform="translate(280, 180)">
+            <path d="M 0 -22 L 30 0 L 0 22 L -30 0 Z" fill="url(#topFace4)" stroke="#888" stroke-width="0.4"/>
+            <path d="M -30 0 L 0 22 L 0 40 L -30 18 Z" fill="url(#leftFace4)"/>
+            <path d="M 30 0 L 0 22 L 0 40 L 30 18 Z" fill="url(#rightFace4)"/>
+          </g>
+          <path d="M 175 220 L 255 185" stroke="#888" stroke-width="0.6" opacity="0.5"/>
+        </g>
+        
+        <!-- 当前位置（角色，新方块） -->
+        <g transform="translate(420, 180)">
+          <path d="M 0 -30 L 45 0 L 0 30 L -45 0 Z" fill="url(#topFace4)" stroke="#C9A961" stroke-width="1"/>
+          <path d="M -45 0 L 0 30 L 0 60 L -45 30 Z" fill="url(#leftFace4)"/>
+          <path d="M 45 0 L 0 30 L 0 60 L 45 30 Z" fill="url(#rightFace4)"/>
+          <circle cx="0" cy="-20" r="7" fill="#C9A961" stroke="#F5EFE2" stroke-width="1.5"/>
+        </g>
+        <text x="420" y="265" text-anchor="middle" fill="#C9A961" font-size="8" font-family="ui-monospace, monospace">当前位置</text>
+        
+        <!-- 新一轮 Agent 发言，新方块升起 -->
+        <g transform="translate(540, 140)" opacity="0.85">
+          <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="url(#topFace4)" stroke="#7C5CBF" stroke-width="0.6"/>
+          <path d="M -35 0 L 0 25 L 0 45 L -35 20 Z" fill="url(#leftFace4)"/>
+          <path d="M 35 0 L 0 25 L 0 45 L 35 20 Z" fill="url(#rightFace4)"/>
+          <text x="0" y="3" text-anchor="middle" fill="#7C5CBF" font-size="8" font-family="serif">镜</text>
+        </g>
+        <g transform="translate(620, 180)" opacity="0.6">
+          <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="url(#topFace4)" stroke="#4A90D9" stroke-width="0.6"/>
+          <path d="M -35 0 L 0 25 L 0 45 L -35 20 Z" fill="url(#leftFace4)"/>
+          <path d="M 35 0 L 0 25 L 0 45 L 35 20 Z" fill="url(#rightFace4)"/>
+          <text x="0" y="3" text-anchor="middle" fill="#4A90D9" font-size="8" font-family="serif">云</text>
+        </g>
+        
+        <!-- 仍在虚空中的方块（虚线轮廓） -->
+        <g transform="translate(580, 80)" opacity="0.25">
+          <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="none" stroke="#888" stroke-width="0.5" stroke-dasharray="2 2"/>
+          <text x="0" y="3" text-anchor="middle" fill="#666" font-size="8" font-family="serif">?</text>
+        </g>
+        <g transform="translate(680, 100)" opacity="0.2">
+          <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="none" stroke="#888" stroke-width="0.5" stroke-dasharray="2 2"/>
+          <text x="0" y="3" text-anchor="middle" fill="#555" font-size="8" font-family="serif">?</text>
+        </g>
+        <g transform="translate(720, 60)" opacity="0.15">
+          <path d="M 0 -25 L 35 0 L 0 25 L -35 0 Z" fill="none" stroke="#888" stroke-width="0.5" stroke-dasharray="2 2"/>
+          <text x="0" y="3" text-anchor="middle" fill="#444" font-size="8" font-family="serif">?</text>
+        </g>
+        
+        <!-- 连接线 -->
+        <g stroke="#C9A961" stroke-width="0.8" fill="none" opacity="0.6">
+          <path d="M 450 165 L 510 145"/>
+          <path d="M 465 180 L 590 180"/>
+        </g>
+        <g stroke="#666" stroke-width="0.4" fill="none" opacity="0.3" stroke-dasharray="1 3">
+          <path d="M 570 130 L 580 95"/>
+          <path d="M 640 165 L 680 115"/>
+          <path d="M 645 175 L 715 75"/>
+        </g>
+        
+        <!-- 分隔线：已知 / 未知 -->
+        <line x1="500" y1="40" x2="780" y2="280" stroke="#C9A961" stroke-width="0.3" stroke-dasharray="3 3" opacity="0.3"/>
+        <text x="730" y="50" fill="#555" font-size="8" font-family="ui-monospace, monospace" opacity="0.6">虚空 →</text>
+        
+        <text x="400" y="305" text-anchor="middle" fill="#555" font-size="9" font-family="ui-monospace, monospace" letter-spacing="0.15em">前行 · 已走过的淡去 · 新迷雾在前方</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 色板 -->
+  <div class="palette">
+    <h3>色板 · 纪念碑谷克制配色</h3>
+    <div class="swatches">
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#F5EFE2"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">米白 / 方块顶</div>
+          <div class="swatch-hex">#F5EFE2</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#C4B8A0"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">暖灰 / 方块左</div>
+          <div class="swatch-hex">#C4B8A0</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#8A7E66"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">沉棕 / 方块右</div>
+          <div class="swatch-hex">#8A7E66</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#0E0E14"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">虚空黑</div>
+          <div class="swatch-hex">#0E0E14</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#C9A961"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">沉金 / 强调</div>
+          <div class="swatch-hex">#C9A961</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#E8A830"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">钱谷 / 财务</div>
+          <div class="swatch-hex">#E8A830</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#00A86B"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">路向 / 职业</div>
+          <div class="swatch-hex">#00A86B</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#D94F4F"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">风眼 / 风险</div>
+          <div class="swatch-hex">#D94F4F</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#C77DBA"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">心禾 / 情感</div>
+          <div class="swatch-hex">#C77DBA</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#7C5CBF"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">镜渊 / 内省</div>
+          <div class="swatch-hex">#7C5CBF</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-chip" style="background:#4A90D9"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">云图 / 宏观</div>
+          <div class="swatch-hex">#4A90D9</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <p><strong>设计要点：</strong></p>
+    <p>1. <strong>等距视角（isometric）</strong>：所有方块用 30° 等距投影，三个面（顶/左/右）形成立体感，纪念碑谷核心视觉语言。</p>
+    <p>2. <strong>虚空升起</strong>：方块从下方虚空（深色径向渐变）中升起，半透明 → 实体，伴随轻微上移 + 淡入。</p>
+    <p>3. <strong>Agent 对应方块</strong>：六位 Agent 各有专属色（钱谷金 / 路向绿 / 风眼红 / 心禾粉紫 / 镜渊紫 / 云图蓝），发言时对应方块升起。</p>
+    <p>4. <strong>路径连接</strong>：方块升起后，金色细线连接成路径，形成 2-4 条可选出路。</p>
+    <p>5. <strong>走过的淡去</strong>：已访问的方块降低不透明度（0.4），前方新一轮 Agent 发言触发新方块升起，循环。</p>
+    <p>6. <strong>克制美学</strong>：底色纯黑虚空，方块米白 + 暖灰 + 沉棕，仅 Agent 色和沉金线作为强调，不花哨。</p>
+  </div>
+</div>
+</body>
+</html>

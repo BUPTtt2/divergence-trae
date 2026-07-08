@@ -1,0 +1,183 @@
+<h2>迷雾揭开机制 · 三种交互节奏</h2>
+<p class="subtitle">决定每个节点的体验：到节点后发生什么、怎么揭开迷雾、Agent 扮演什么角色</p>
+
+<div class="cards">
+  <!-- A: 讨论→揭雾→选择 -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:24px;background:#1A1510">
+      <svg viewBox="0 0 320 200" style="width:100%;height:auto;display:block">
+        <!-- 流程步骤 -->
+        <g font-family="serif" font-size="9" fill="#E8D5B7">
+          <!-- 步骤1 -->
+          <rect x="20" y="80" width="56" height="40" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="48" y="98" text-anchor="middle" fill="#E8A830">到达</text>
+          <text x="48" y="110" text-anchor="middle" fill="#8B7355" font-size="7">当前节点</text>
+          
+          <!-- 箭头 -->
+          <path d="M 76 100 L 96 100" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow)"/>
+          
+          <!-- 步骤2 -->
+          <rect x="96" y="70" width="56" height="60" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="124" y="88" text-anchor="middle" fill="#E8A830">Agent 讨论</text>
+          <text x="124" y="100" text-anchor="middle" fill="#8B7355" font-size="7">六位谋士</text>
+          <text x="124" y="112" text-anchor="middle" fill="#8B7355" font-size="7">各抒己见</text>
+          <text x="124" y="124" text-anchor="middle" fill="#E8D5B7" font-size="6">💰⚖️🔍</text>
+          
+          <!-- 箭头 -->
+          <path d="M 152 100 L 172 100" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow)"/>
+          
+          <!-- 步骤3 -->
+          <rect x="172" y="70" width="56" height="60" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="200" y="88" text-anchor="middle" fill="#E8A830">揭开迷雾</text>
+          <text x="200" y="100" text-anchor="middle" fill="#8B7355" font-size="7">下一层路径</text>
+          <text x="200" y="112" text-anchor="middle" fill="#8B7355" font-size="7">显现可选</text>
+          <text x="200" y="124" text-anchor="middle" fill="#E8D5B7" font-size="7">✨ ◇ ◇</text>
+          
+          <!-- 箭头 -->
+          <path d="M 228 100 L 248 100" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow)"/>
+          
+          <!-- 步骤4 -->
+          <rect x="248" y="80" width="56" height="40" rx="2" fill="#E8A830" opacity="0.15" stroke="#E8A830" stroke-width="1"/>
+          <text x="276" y="98" text-anchor="middle" fill="#E8A830">做出选择</text>
+          <text x="276" y="110" text-anchor="middle" fill="#8B7355" font-size="7">前进下一节点</text>
+        </g>
+        
+        <!-- 层标 -->
+        <text x="48" y="160" text-anchor="middle" fill="#554535" font-size="7" font-family="monospace">第 N 层</text>
+        <text x="276" y="160" text-anchor="middle" fill="#554535" font-size="7" font-family="monospace">第 N+1 层</text>
+        <line x1="10" y1="168" x2="310" y2="168" stroke="#2A2018" stroke-width="0.5"/>
+        
+        <!-- 箭头定义 -->
+        <defs>
+          <marker id="arrow" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+            <polygon points="0,0 6,2 0,4" fill="#E8A830"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <div class="card-body">
+      <h3>A · 讨论 → 揭雾 → 选择</h3>
+      <p>到节点 → Agent 依次发言分析 → 讨论结束自动揭开下一层路径 → 玩家选一条继续。<strong>节奏流畅，玩家主要是听和选</strong>。</p>
+      <p style="color:#E8A830;margin-top:8px"><strong>推荐</strong> · 符合你说的"讨论分析后再揭开迷雾"</p>
+    </div>
+  </div>
+
+  <!-- B: 问答→揭雾→选择 -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:24px;background:#1A1510">
+      <svg viewBox="0 0 320 200" style="width:100%;height:auto;display:block">
+        <g font-family="serif" font-size="9" fill="#E8D5B7">
+          <!-- 步骤1 -->
+          <rect x="20" y="80" width="56" height="40" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="48" y="98" text-anchor="middle" fill="#E8A830">到达</text>
+          <text x="48" y="110" text-anchor="middle" fill="#8B7355" font-size="7">当前节点</text>
+          
+          <path d="M 76 100 L 96 100" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow2)"/>
+          
+          <!-- 步骤2：问答循环 -->
+          <rect x="96" y="60" width="80" height="80" rx="2" fill="none" stroke="#E8A830" stroke-width="1" stroke-dasharray="2 2"/>
+          <text x="136" y="78" text-anchor="middle" fill="#E8A830">玩家 ↔ Agent</text>
+          <text x="136" y="90" text-anchor="middle" fill="#8B7355" font-size="7">Agent 提问</text>
+          <text x="136" y="102" text-anchor="middle" fill="#E8D5B7" font-size="7">💬 玩家回答</text>
+          <text x="136" y="114" text-anchor="middle" fill="#8B7355" font-size="7">下一位追问</text>
+          <text x="136" y="126" text-anchor="middle" fill="#8B7355" font-size="7">循环 3-4 轮</text>
+          
+          <path d="M 176 100 L 196 100" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow2)"/>
+          
+          <!-- 步骤3 -->
+          <rect x="196" y="70" width="56" height="60" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="224" y="88" text-anchor="middle" fill="#E8A830">迷雾消散</text>
+          <text x="224" y="100" text-anchor="middle" fill="#8B7355" font-size="7">路径显露</text>
+          <text x="224" y="112" text-anchor="middle" fill="#E8D5B7" font-size="7">◇ ◇ ◇</text>
+          
+          <path d="M 252 100 L 272 100" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow2)"/>
+          
+          <!-- 步骤4 -->
+          <rect x="272" y="80" width="40" height="40" rx="2" fill="#E8A830" opacity="0.15" stroke="#E8A830" stroke-width="1"/>
+          <text x="292" y="102" text-anchor="middle" fill="#E8A830" font-size="8">选择</text>
+        </g>
+        
+        <text x="48" y="160" text-anchor="middle" fill="#554535" font-size="7" font-family="monospace">第 N 层</text>
+        <text x="292" y="160" text-anchor="middle" fill="#554535" font-size="7" font-family="monospace">第 N+1 层</text>
+        <line x1="10" y1="168" x2="310" y2="168" stroke="#2A2018" stroke-width="0.5"/>
+        
+        <defs>
+          <marker id="arrow2" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+            <polygon points="0,0 6,2 0,4" fill="#E8A830"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <div class="card-body">
+      <h3>B · 问答对话 → 揭雾 → 选择</h3>
+      <p>到节点 → Agent 逐个向玩家提问，玩家回答 → 答完几轮后揭开路径。<strong>玩家参与感强</strong>，但交互成本高，节奏慢。</p>
+      <p style="color:#888;margin-top:8px">适合深度推演，不适合快速 demo</p>
+    </div>
+  </div>
+
+  <!-- C: 观察→手动揭雾→选择 -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:24px;background:#1A1510">
+      <svg viewBox="0 0 320 200" style="width:100%;height:auto;display:block">
+        <g font-family="serif" font-size="9" fill="#E8D5B7">
+          <!-- 步骤1 -->
+          <rect x="20" y="80" width="56" height="40" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="48" y="98" text-anchor="middle" fill="#E8A830">到达</text>
+          <text x="48" y="110" text-anchor="middle" fill="#8B7355" font-size="7">当前节点</text>
+          
+          <path d="M 76 100 L 96 100" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow3)"/>
+          
+          <!-- 步骤2：观察讨论 -->
+          <rect x="96" y="70" width="60" height="60" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="126" y="88" text-anchor="middle" fill="#E8A830">观察讨论</text>
+          <text x="126" y="100" text-anchor="middle" fill="#8B7355" font-size="7">玩家旁观</text>
+          <text x="126" y="112" text-anchor="middle" fill="#8B7355" font-size="7">Agent 分析</text>
+          <text x="126" y="124" text-anchor="middle" fill="#E8D5B7" font-size="6">👀 💬</text>
+          
+          <path d="M 156 100 L 176 100" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow3)"/>
+          
+          <!-- 步骤3：主动揭雾 -->
+          <rect x="176" y="70" width="60" height="60" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="206" y="88" text-anchor="middle" fill="#E8A830">主动揭雾</text>
+          <text x="206" y="100" text-anchor="middle" fill="#8B7355" font-size="7">玩家点击</text>
+          <text x="206" y="112" text-anchor="middle" fill="#E8D5B7" font-size="7">🎴 翻牌</text>
+          <text x="206" y="124" text-anchor="middle" fill="#8B7355" font-size="7">路径显现</text>
+          
+          <path d="M 236 100 L 256 100" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow3)"/>
+          
+          <!-- 步骤4 -->
+          <rect x="256" y="80" width="56" height="40" rx="2" fill="#E8A830" opacity="0.15" stroke="#E8A830" stroke-width="1"/>
+          <text x="284" y="98" text-anchor="middle" fill="#E8A830">选择前行</text>
+          <text x="284" y="110" text-anchor="middle" fill="#8B7355" font-size="7">下一节点</text>
+        </g>
+        
+        <text x="48" y="160" text-anchor="middle" fill="#554535" font-size="7" font-family="monospace">第 N 层</text>
+        <text x="284" y="160" text-anchor="middle" fill="#554535" font-size="7" font-family="monospace">第 N+1 层</text>
+        <line x1="10" y1="168" x2="310" y2="168" stroke="#2A2018" stroke-width="0.5"/>
+        
+        <defs>
+          <marker id="arrow3" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+            <polygon points="0,0 6,2 0,4" fill="#E8A830"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <div class="card-body">
+      <h3>C · 旁观 → 手动揭雾 → 选择</h3>
+      <p>到节点 → 看 Agent 讨论（随时可跳过） → 玩家主动点击"揭开迷雾"按钮 → 路径出现 → 选择。<strong>仪式感强</strong>，玩家掌控节奏。</p>
+      <p style="color:#888;margin-top:8px">揭雾做成翻牌动画会很酷，但多一步操作</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px">
+  <p class="label">关于 Agent 之间是否互相讨论</p>
+  <p style="font-size:13px;line-height:1.7;color:#aaa;margin-top:8px">
+    我建议 <strong style="color:#E8A830">Agent 各自独立发言，不互相对话</strong>。原因：
+  </p>
+  <ul style="font-size:13px;line-height:1.7;color:#aaa;margin-top:4px">
+    <li>六位 Agent 各有立场（钱/路/风/心/镜/云），各自从自己维度分析，信息密度更高</li>
+    <li>互相讨论会增加大量 token 消耗和复杂度，demo 阶段不划算</li>
+    <li>玩家看到六个不同角度的分析，自己整合判断，更符合"推演"的感觉</li>
+  </ul>
+</div>
