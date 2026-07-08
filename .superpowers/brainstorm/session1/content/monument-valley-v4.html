@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>纪念碑谷风格 · 浮空议事厅 V4</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0A0A12;
+    overflow: hidden;
+    font-family: -apple-system, "PingFang SC", sans-serif;
+  }
+  
+  /* 控制栏 */
+  .controls {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .control-btn {
+    padding: 8px 14px;
+    background: rgba(245,240,225,0.08);
+    border: 1px solid rgba(245,240,225,0.15);
+    border-radius: 8px;
+    color: #C7B7A3;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.3s;
+    backdrop-filter: blur(8px);
+  }
+  .control-btn:hover {
+    background: rgba(199,183,163,0.15);
+    border-color: rgba(199,183,163,0.3);
+  }
+  
+  /* 人物选择 */
+  .char-selector {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 100;
+    padding: 12px;
+    background: rgba(10,10,18,0.8);
+    border: 1px solid rgba(199,183,163,0.15);
+    border-radius: 10px;
+    backdrop-filter: blur(10px);
+  }
+  .char-selector h4 {
+    font-size: 11px;
+    color: #9A958D;
+    margin-bottom: 8px;
+    font-weight: 400;
+  }
+  .char-options {
+    display: flex;
+    gap: 8px;
+  }
+  .char-option {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.3s;
+  }
+  .char-option.selected {
+    border-color: #C7B7A3;
+    transform: scale(1.1);
+  }
+  
+  /* 信息面板 */
+  .info-panel {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    z-index: 100;
+    padding: 14px 18px;
+    background: rgba(10,10,18,0.8);
+    border: 1px solid rgba(199,183,163,0.15);
+    border-radius: 10px;
+    backdrop-filter: blur(10px);
+  }
+  .info-panel h3 {
+    font-size: 13px;
+    color: #C7B7A3;
+    margin-bottom: 6px;
+  }
+  .info-panel p {
+    font-size: 11px;
+    color: #7A756D;
+    line-height: 1.5;
+  }
+  
+  /* 对话气泡 */
+  .dialog-bubble {
+    position: fixed;
+    padding: 8px 14px;
+    background: rgba(255,255,255,0.95);
+    border-radius: 10px;
+    font-size: 11px;
+    color: #3A3530;
+    white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    opacity: 0;
+    transition: opacity 0.4s;
+    z-index: 50;
+    pointer-events: none;
+  }
+  .dialog-bubble.show {
+    opacity: 1;
+  }
+  .dialog-arrow {
+    position: absolute;
+    bottom: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid rgba(255,255,255,0.95);
+  }
+  
+  /* 场景容器 */
+  #canvas-container {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+  }
+</style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  
+  <div class="char-selector">
+    <h4>选择角色</h4>
+    <div class="char-options">
+      <div class="char-option selected" style="background:#FFFFFF" onclick="selectChar(0)"></div>
+      <div class="char-option" style="background:#C7B7A3" onclick="selectChar(1)"></div>
+      <div class="char-option" style="background:#8E7D9B" onclick="selectChar(2)"></div>
+      <div class="char-option" style="background:#E8A830" onclick="selectChar(3)"></div>
+    </div>
+  </div>
+  
+  <div class="controls">
+    <button class="control-btn" onclick="rotateScene(-15)">↺ 左转</button>
+    <button class="control-btn" onclick="rotateScene(15)">↻ 右转</button>
+    <button class="control-btn" onclick="resetView()">⟲ 重置</button>
+    <button class="control-btn" onclick="toggleDialogs()">💬 对话</button>
+    <button class="control-btn" onclick="animateTowers()">⬆️ 升起</button>
+  </div>
+  
+  <div class="info-panel">
+    <h3>浮空议事厅</h3>
+    <p>纪念碑谷风格 · 等距视图</p>
+    <p style="margin-top:6px">拖拽旋转视角 | 点击方块查看详情</p>
+  </div>
+  
+  <!-- 对话气泡 -->
+  <div class="dialog-bubble" id="dialog-qian" style="top:30%;left:25%">此路收入更稳<div class="dialog-arrow"></div></div>
+  <div class="dialog-bubble" id="dialog-lu" style="top:25%;left:40%">职业发展更优<div class="dialog-arrow"></div></div>
+  <div class="dialog-bubble" id="dialog-feng" style="top:25%;left:55%">风险可控吗？<div class="dialog-arrow"></div></div>
+  <div class="dialog-bubble" id="dialog-yun" style="top:30%;left:70%">五年格局不利<div class="dialog-arrow"></div></div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    
+    const container = document.getElementById('canvas-container');
+    
+    // 场景
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0A0A12);
+    scene.fog = new THREE.Fog(0x0A0A12, 15, 35);
+    
+    // 相机
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(15, 12, 15);
+    
+    // 渲染器
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+    
+    // 控制器
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.minDistance = 8;
+    controls.maxDistance = 30;
+    controls.maxPolarAngle = Math.PI / 2;
+    
+    // 光源
+    const ambientLight = new THREE.AmbientLight(0xFFFFFF, 0.4);
+    scene.add(ambientLight);
+    
+    const directionalLight = new THREE.DirectionalLight(0xFFFFFF, 0.8);
+    directionalLight.position.set(10, 20, 10);
+    scene.add(directionalLight);
+    
+    const pointLight = new THREE.PointLight(0xC7B7A3, 0.5, 30);
+    pointLight.position.set(0, 10, 0);
+    scene.add(pointLight);
+    
+    // 配色
+    const COLORS = {
+      top: 0xF5F0E1,
+      left: 0xC4B8A0,
+      right: 0x9A8E76,
+      gold: 0xC7B7A3,
+      accent: 0x8E7D9B,
+      bg: 0x0A0A12
+    };
+    
+    // 创建等距方块几何体
+    function createIsometricBox(w, h, d) {
+      const geometry = new THREE.BufferGeometry();
+      
+      const vertices = new Float32Array([
+        // 顶面 (top)
+        0, h, 0,   w, h, d,   w, h, 0,
+        0, h, 0,   0, h, d,   w, h, d,
+        
+        // 左面 (left)
+        0, h, 0,   0, h, d,   0, 0, d,
+        0, h, 0,   0, 0, d,   0, 0, 0,
+        
+        // 右面 (right)
+        w, h, 0,   w, h, d,   w, 0, d,
+        w, h, 0,   w, 0, d,   w, 0, 0
+      ]);
+      
+      const normals = new Float32Array([
+        0, 1, 0,  0, 1, 0,  0, 1, 0,   0, 1, 0,  0, 1, 0,  0, 1, 0,
+        -1, 0, 0, -1, 0, 0, -1, 0, 0,  -1, 0, 0, -1, 0, 0, -1, 0, 0,
+        1, 0, 0,  1, 0, 0,  1, 0, 0,   1, 0, 0,  1, 0, 0,  1, 0, 0
+      ]);
+      
+      geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+      geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geometry.computeBoundingBox();
+      
+      return geometry;
+    }
+    
+    // 方块材质
+    const topMaterial = new THREE.MeshStandardMaterial({ 
+      color: COLORS.top,
+      roughness: 0.8,
+      metalness: 0.1
+    });
+    const leftMaterial = new THREE.MeshStandardMaterial({ 
+      color: COLORS.left,
+      roughness: 0.8,
+      metalness: 0.1
+    });
+    const rightMaterial = new THREE.MeshStandardMaterial({ 
+      color: COLORS.right,
+      roughness: 0.8,
+      metalness: 0.1
+    });
+    const goldMaterial = new THREE.MeshStandardMaterial({ 
+      color: COLORS.gold,
+      roughness: 0.3,
+      metalness: 0.6
+    });
+    
+    // 创建完整方块
+    function createBlock(x, y, z, w, h, d, colorOverride = null) {
+      const group = new THREE.Group();
+      
+      // 顶面
+      const topGeo = new THREE.PlaneGeometry(w, d);
+      const topMat = colorOverride ? 
+        new THREE.MeshStandardMaterial({ color: colorOverride, roughness: 0.8, metalness: 0.1 }) :
+        topMaterial.clone();
+      const top = new THREE.Mesh(topGeo, topMat);
+      top.rotation.x = -Math.PI / 2;
+      top.position.y = h;
+      group.add(top);
+      
+      // 左面
+      const leftGeo = new THREE.PlaneGeometry(d, h);
+      const leftMat = colorOverride ? 
+        new THREE.MeshStandardMaterial({ color: shadeColor(colorOverride, -30), roughness: 0.8, metalness: 0.1 }) :
+        leftMaterial.clone();
+      const left = new THREE.Mesh(leftGeo, leftMat);
+      left.rotation.y = Math.PI / 2;
+      left.position.set(-w/2, h/2, d/2);
+      group.add(left);
+      
+      // 右面
+      const rightGeo = new THREE.PlaneGeometry(w, h);
+      const rightMat = colorOverride ? 
+        new THREE.MeshStandardMaterial({ color: shadeColor(colorOverride, -50), roughness: 0.8, metalness: 0.1 }) :
+        rightMaterial.clone();
+      const right = new THREE.Mesh(rightGeo, rightMat);
+      right.position.set(w/2, h/2, -d/2);
+      group.add(right);
+      
+      group.position.set(x, y, z);
+      group.userData = { type: 'block' };
+      
+      return group;
+    }
+    
+    // 颜色明暗调整
+    function shadeColor(color, amount) {
+      const hex = color.toString(16).padStart(6, '0');
+      const r = Math.max(0, Math.min(255, parseInt(hex.slice(0, 2), 16) + amount));
+      const g = Math.max(0, Math.min(255, parseInt(hex.slice(2, 4), 16) + amount));
+      const b = Math.max(0, Math.min(255, parseInt(hex.slice(4, 6), 16) + amount));
+      return (r << 16) | (g << 8) | b;
+    }
+    
+    // 创建塔楼（多层方块堆叠）
+    function createTower(x, y, z, agentColor, name) {
+      const group = new THREE.Group();
+      
+      // 底座
+      const base = createBlock(0, 0, 0, 2, 0.5, 2);
+      group.add(base);
+      
+      // 塔身第一层
+      const tower1 = createBlock(0, 0.5, 0, 1.5, 1, 1.5, agentColor);
+      group.add(tower1);
+      
+      // 塔身第二层
+      const tower2 = createBlock(0, 1.5, 0, 1, 0.8, 1, agentColor);
+      group.add(tower2);
+      
+      // 尖顶
+      const spireGeo = new THREE.ConeGeometry(0.3, 0.8, 4);
+      const spireMat = new THREE.MeshStandardMaterial({ color: COLORS.gold, roughness: 0.2, metalness: 0.7 });
+      const spire = new THREE.Mesh(spireGeo, spireMat);
+      spire.position.set(0, 2.4, 0);
+      spire.rotation.y = Math.PI / 4;
+      group.add(spire);
+      
+      // 金色装饰球
+      const ballGeo = new THREE.SphereGeometry(0.15, 16, 16);
+      const ball = new THREE.Mesh(ballGeo, goldMaterial);
+      ball.position.set(0, 2.8, 0);
+      group.add(ball);
+      
+      // Agent 标识方块
+      const tag = createBlock(0.8, 2.2, 0.8, 0.4, 0.4, 0.4, COLORS.top);
+      group.add(tag);
+      
+      // 旗帜
+      const flagPole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.03, 0.03, 0.6),
+        goldMaterial
+      );
+      flagPole.position.set(0.6, 2.6, 0.6);
+      group.add(flagPole);
+      
+      const flag = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.4, 0.3),
+        new THREE.MeshStandardMaterial({ color: agentColor, transparent: true, opacity: 0.9 })
+      );
+      flag.position.set(0.8, 2.6, 0.6);
+      flag.rotation.y = Math.PI / 2;
+      group.add(flag);
+      
+      group.position.set(x, y, z);
+      group.userData = { type: 'tower', name: name };
+      
+      return group;
+    }
+    
+    // 创建路径桥
+    function createBridge(startX, startZ, endX, endZ) {
+      const length = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endZ - startZ, 2));
+      const angle = Math.atan2(endZ - startZ, endX - startX);
+      
+      const group = new THREE.Group();
+      
+      // 桥面
+      const bridge = new THREE.Mesh(
+        new THREE.BoxGeometry(length, 0.1, 0.6),
+        new THREE.MeshStandardMaterial({ color: COLORS.gold, roughness: 0.4, metalness: 0.5 })
+      );
+      bridge.rotation.y = angle;
+      bridge.position.set((startX + endX) / 2, 0.55, (startZ + endZ) / 2);
+      group.add(bridge);
+      
+      // 装饰线
+      const lineGeo = new THREE.BufferGeometry();
+      const linePoints = [];
+      for (let i = 0; i <= 20; i++) {
+        const t = i / 20;
+        linePoints.push(new THREE.Vector3(
+          startX + (endX - startX) * t,
+          0.6,
+          startZ + (endZ - startZ) * t
+        ));
+      }
+      lineGeo.setFromPoints(linePoints);
+      const line = new THREE.Line(
+        lineGeo,
+        new THREE.LineBasicMaterial({ color: 0xFFFFFF, opacity: 0.5, transparent: true })
+      );
+      group.add(line);
+      
+      return group;
+    }
+    
+    // 创建人物
+    let character;
+    const charColors = [0xFFFFFF, 0xC7B7A3, 0x8E7D9B, 0xE8A830];
+    
+    function createCharacter(x, y, z) {
+      if (character) scene.remove(character);
+      
+      character = new THREE.Group();
+      
+      // 身体
+      const bodyGeo = new THREE.BoxGeometry(0.25, 0.4, 0.15);
+      const bodyMat = new THREE.MeshStandardMaterial({ 
+        color: charColors[currentChar],
+        roughness: 0.5,
+        metalness: 0.1
+      });
+      const body = new THREE.Mesh(bodyGeo, bodyMat);
+      body.position.set(0, 0.35, 0);
+      character.add(body);
+      
+      // 头部
+      const headGeo = new THREE.SphereGeometry(0.12, 16, 16);
+      const head = new THREE.Mesh(headGeo, bodyMat);
+      head.position.set(0, 0.55, 0);
+      character.add(head);
+      
+      // 阴影
+      const shadowGeo = new THREE.CircleGeometry(0.2, 16);
+      const shadowMat = new THREE.MeshStandardMaterial({ 
+        color: 0x000000, 
+        transparent: true, 
+        opacity: 0.2,
+        side: THREE.DoubleSide
+      });
+      const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+      shadow.rotation.x = -Math.PI / 2;
+      shadow.position.set(0, 0.01, 0);
+      character.add(shadow);
+      
+      character.position.set(x, y, z);
+      scene.add(character);
+    }
+    
+    let currentChar = 0;
+    function selectChar(idx) {
+      currentChar = idx;
+      document.querySelectorAll('.char-option').forEach((el, i) => {
+        el.classList.toggle('selected', i === idx);
+      });
+      createCharacter(character.position.x, character.position.y, character.position.z);
+    }
+    
+    // 创建主平台
+    const mainPlatform = createBlock(0, 0, 0, 3, 0.6, 3);
+    scene.add(mainPlatform);
+    
+    // 添加装饰图案
+    const patternGeo = new THREE.RingGeometry(0.8, 1, 32);
+    const patternMat = new THREE.MeshStandardMaterial({ 
+      color: COLORS.gold, 
+      roughness: 0.3, 
+      metalness: 0.5,
+      side: THREE.DoubleSide
+    });
+    const pattern = new THREE.Mesh(patternGeo, patternMat);
+    pattern.rotation.x = -Math.PI / 2;
+    pattern.position.set(0, 0.61, 0);
+    scene.add(pattern);
+    
+    const centerDot = new THREE.Mesh(
+      new THREE.SphereGeometry(0.15, 16, 16),
+      goldMaterial
+    );
+    centerDot.position.set(0, 0.65, 0);
+    scene.add(centerDot);
+    
+    // 创建塔楼
+    const qianTower = createTower(-4, 0, -2, 0xE8A830, 'qian');
+    const luTower = createTower(-2, 0, -5, 0x00A86B, 'lu');
+    const fengTower = createTower(2, 0, -5, 0xD94F4F, 'feng');
+    const yunTower = createTower(4, 0, -2, 0x4A90D9, 'yun');
+    
+    qianTower.visible = false;
+    luTower.visible = false;
+    fengTower.visible = false;
+    yunTower.visible = false;
+    
+    scene.add(qianTower);
+    scene.add(luTower);
+    scene.add(fengTower);
+    scene.add(yunTower);
+    
+    // 创建路径
+    const bridge1 = createBridge(0, 0, -4, -2);
+    const bridge2 = createBridge(0, 0, -2, -5);
+    const bridge3 = createBridge(0, 0, 2, -5);
+    const bridge4 = createBridge(0, 0, 4, -2);
+    
+    bridge1.visible = false;
+    bridge2.visible = false;
+    bridge3.visible = false;
+    bridge4.visible = false;
+    
+    scene.add(bridge1);
+    scene.add(bridge2);
+    scene.add(bridge3);
+    scene.add(bridge4);
+    
+    // 创建人物
+    createCharacter(0, 0.7, 0);
+    
+    // 虚无粒子背景
+    const particlesGeo = new THREE.BufferGeometry();
+    const particlesCount = 200;
+    const posArray = new Float32Array(particlesCount * 3);
+    
+    for (let i = 0; i < particlesCount * 3; i++) {
+      posArray[i] = (Math.random() - 0.5) * 80;
+    }
+    
+    particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+    const particlesMat = new THREE.PointsMaterial({
+      size: 0.05,
+      color: COLORS.gold,
+      transparent: true,
+      opacity: 0.4
+    });
+    const particles = new THREE.Points(particlesGeo, particlesMat);
+    scene.add(particles);
+    
+    // 动画循环
+    let time = 0;
+    
+    function animate() {
+      requestAnimationFrame(animate);
+      time += 0.005;
+      
+      controls.update();
+      
+      // 粒子浮动
+      particles.rotation.y = time * 0.1;
+      
+      // 旗帜飘动
+      qianTower.children.forEach(child => {
+        if (child.geometry?.type === 'PlaneGeometry') {
+          child.position.y = 2.6 + Math.sin(time * 2) * 0.05;
+          child.rotation.z = Math.sin(time * 3) * 0.1;
+        }
+      });
+      luTower.children.forEach(child => {
+        if (child.geometry?.type === 'PlaneGeometry') {
+          child.position.y = 2.6 + Math.sin(time * 2 + 1) * 0.05;
+          child.rotation.z = Math.sin(time * 3 + 1) * 0.1;
+        }
+      });
+      fengTower.children.forEach(child => {
+        if (child.geometry?.type === 'PlaneGeometry') {
+          child.position.y = 2.6 + Math.sin(time * 2 + 2) * 0.05;
+          child.rotation.z = Math.sin(time * 3 + 2) * 0.1;
+        }
+      });
+      yunTower.children.forEach(child => {
+        if (child.geometry?.type === 'PlaneGeometry') {
+          child.position.y = 2.6 + Math.sin(time * 2 + 3) * 0.05;
+          child.rotation.z = Math.sin(time * 3 + 3) * 0.1;
+        }
+      });
+      
+      renderer.render(scene, camera);
+    }
+    
+    animate();
+    
+    // 窗口调整
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+    
+    // 旋转场景
+    function rotateScene(delta) {
+      controls.rotateLeft(delta * Math.PI / 180);
+    }
+    
+    function resetView() {
+      camera.position.set(15, 12, 15);
+      controls.target.set(0, 1, 0);
+      controls.update();
+    }
+    
+    // 对话开关
+    function toggleDialogs() {
+      document.querySelectorAll('.dialog-bubble').forEach(el => {
+        el.classList.toggle('show');
+      });
+    }
+    
+    // 塔楼升起动画
+    function animateTowers() {
+      const towers = [qianTower, luTower, fengTower, yunTower];
+      const bridges = [bridge1, bridge2, bridge3, bridge4];
+      
+      towers.forEach(t => t.visible = true);
+      bridges.forEach(b => b.visible = true);
+      
+      towers.forEach((tower, i) => {
+        tower.position.y = -5;
+        const startY = -5;
+        const endY = 0;
+        const duration = 1000;
+        const startTime = Date.now();
+        
+        function step() {
+          const elapsed = Date.now() - startTime;
+          const progress = Math.min(elapsed / duration, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          tower.position.y = startY + (endY - startY) * eased;
+          
+          if (progress < 1) {
+            requestAnimationFrame(step);
+          }
+        }
+        
+        setTimeout(() => requestAnimationFrame(step), i * 200);
+      });
+      
+      bridges.forEach((bridge, i) => {
+        bridge.scale.set(0, 0, 0);
+        const startTime = Date.now();
+        
+        function step() {
+          const elapsed = Date.now() - startTime;
+          const progress = Math.min(elapsed / 600, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          bridge.scale.set(eased, eased, eased);
+          
+          if (progress < 1) {
+            requestAnimationFrame(step);
+          }
+        }
+        
+        setTimeout(() => requestAnimationFrame(step), 500 + i * 150);
+      });
+    }
+    
+    // 初始动画
+    setTimeout(animateTowers, 500);
+  </script>
+</body>
+</html>

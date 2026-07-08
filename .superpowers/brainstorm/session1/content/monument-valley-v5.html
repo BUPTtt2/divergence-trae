@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>纪念碑谷复刻 V1 · 基础旋转+寻路</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #F5F0E1; overflow: hidden; font-family: -apple-system, "PingFang SC", sans-serif; }
+  #canvas-container { width: 100vw; height: 100vh; }
+  
+  /* 极简 UI */
+  .ui-overlay {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 100; text-align: center; pointer-events: none;
+  }
+  .level-title {
+    font-size: 14px; color: #8E7D9B; letter-spacing: 0.3em; margin-bottom: 4px;
+  }
+  .level-hint {
+    font-size: 11px; color: #B5A88A; letter-spacing: 0.1em;
+  }
+  
+  .controls {
+    position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+    z-index: 100; display: flex; gap: 10px;
+  }
+  .btn {
+    padding: 10px 20px; background: rgba(245,240,225,0.9);
+    border: 1px solid rgba(142,125,155,0.3); border-radius: 30px;
+    color: #8E7D9B; font-size: 12px; cursor: pointer;
+    transition: all 0.3s; backdrop-filter: blur(10px);
+  }
+  .btn:hover { background: #8E7D9B; color: #F5F0E1; }
+  .btn.active { background: #8E7D9B; color: #F5F0E1; }
+  
+  .toast {
+    position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
+    padding: 10px 20px; background: rgba(245,240,225,0.95);
+    border-radius: 20px; color: #8E7D9B; font-size: 12px;
+    opacity: 0; transition: opacity 0.4s; z-index: 100;
+    pointer-events: none; box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  
+  <div class="ui-overlay">
+    <div class="level-title" id="levelTitle">第 一 章 · 起 点</div>
+    <div class="level-hint" id="levelHint">拖动模块旋转 · 点击路径移动</div>
+  </div>
+  
+  <div class="controls">
+    <button class="btn" onclick="resetLevel()">重置关卡</button>
+    <button class="btn" onclick="toggleHint()">显示路径</button>
+    <button class="btn" onclick="nextLevel()">下一关</button>
+  </div>
+  
+  <div class="toast" id="toast"></div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    
+    /* ============================================================
+       纪念碑谷复刻 V1 - 核心概念注释
+       ============================================================
+       1. 视错觉（Impossible Geometry）：通过固定相机视角，让不同 3D 位置
+          的模块在屏幕上"看起来"重合，从而拼接路径。
+       2. 层级（Layers）：每个模块属于一个层级，旋转时只在层级内旋转，
+          不影响其他模块。
+       3. 寻路（Pathfinding）：基于图论，节点 = 可站立平台，边 = 视觉连通
+          关系。点击目标节点，主角沿最短路径走过去。
+       ============================================================ */
+    
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xF5F0E1);
+    scene.fog = new THREE.Fog(0xF5F0E1, 25, 60);
+    
+    // 等距相机 - 纪念碑谷标志视角
+    // 正面 30° 俯视，造成 2D 平面感
+    const aspect = window.innerWidth / window.innerHeight;
+    const d = 8;
+    const camera = new THREE.OrthographicCamera(-d*aspect, d*aspect, d, -d, 1, 100);
+    camera.position.set(15, 15, 15);
+    camera.lookAt(0, 0, 0);
+    
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+    
+    // 光照 - 柔和无硬阴影
+    const ambient = new THREE.AmbientLight(0xFFFFFF, 0.7);
+    scene.add(ambient);
+    
+    const dirLight = new THREE.DirectionalLight(0xFFFFFF, 0.5);
+    dirLight.position.set(10, 20, 10);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.set(2048, 2048);
+    dirLight.shadow.camera.left = -15;
+    dirLight.shadow.camera.right = 15;
+    dirLight.shadow.camera.top = 15;
+    dirLight.shadow.camera.bottom = -15;
+    scene.add(dirLight);
+    
+    // 纪念碑谷配色（柔和几何色块）
+    const COLORS = {
+      sand:     0xF5E8D4,   // 暖沙
+      sandDark: 0xD4B898,   // 深沙
+      mint:     0xB8D4C8,   // 薄荷
+      mintDark: 0x8CB5A5,   // 深薄荷
+      coral:    0xE8B4B4,   // 粉珊瑚
+      coralDark:0xC98A8A,   // 深珊瑚
+      indigo:   0x9FB4CC,   // 靛蓝
+      indigoDark:0x7A91AC,  // 深靛蓝
+      gold:     0xC7B7A3,   // 金棕
+      white:    0xFFFFFF,   // 纯白（艾达）
+    };
+    
+    /* ============================================================
+       工具：创建纪念碑谷风格方块
+       一个方块只渲染三个面（顶/左/右），制造 2D 卡通感
+       ============================================================ */
+    function createBlock(x, y, z, w, h, d, colorTop, colorSide) {
+      const group = new THREE.Group();
+      
+      // 顶面
+      const top = new THREE.Mesh(
+        new THREE.BoxGeometry(w, 0.1, d),
+        new THREE.MeshStandardMaterial({ color: colorTop, roughness: 0.9, metalness: 0 })
+      );
+      top.position.y = h;
+      top.castShadow = true;
+      top.receiveShadow = true;
+      group.add(top);
+      
+      // 左侧面（深色）
+      const left = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, 0.1),
+        new THREE.MeshStandardMaterial({ color: colorSide, roughness: 0.9, metalness: 0 })
+      );
+      left.position.set(0, h/2, d/2);
+      left.castShadow = true;
+      group.add(left);
+      
+      // 右侧面（更深）
+      const right = new THREE.Mesh(
+        new THREE.BoxGeometry(0.1, h, d),
+        new THREE.MeshStandardMaterial({ color: shadeColor(colorSide, -20), roughness: 0.9, metalness: 0 })
+      );
+      right.position.set(w/2, h/2, 0);
+      right.castShadow = true;
+      group.add(right);
+      
+      // 背面（不渲染但占位）
+      group.position.set(x, y, z);
+      return group;
+    }
+    
+    function shadeColor(color, amount) {
+      const hex = color.toString(16).padStart(6, '0');
+      const r = Math.max(0, Math.min(255, parseInt(hex.slice(0,2), 16) + amount));
+      const g = Math.max(0, Math.min(255, parseInt(hex.slice(2,4), 16) + amount));
+      const b = Math.max(0, Math.min(255, parseInt(hex.slice(4,6), 16) + amount));
+      return (r << 16) | (g << 8) | b;
+    }
+    
+    /* ============================================================
+       模块（Module）类 - 可旋转的建筑单元
+       ============================================================ */
+    class Module {
+      constructor(x, y, z, colorTop, colorSide, pivot = null) {
+        this.group = new THREE.Group();
+        this.pivot = pivot || this.group;  // 旋转支点
+        this.colorTop = colorTop;
+        this.colorSide = colorSide;
+        this.blocks = [];
+        this.rotation = 0;  // 当前旋转角度（0/90/180/270）
+        this.targetRotation = 0;
+        this.isRotating = false;
+        
+        this.group.position.set(x, y, z);
+      }
+      
+      addBlock(localX, localY, localZ, w, h, d) {
+        const block = createBlock(localX, localY, localZ, w, h, d, this.colorTop, this.colorSide);
+        this.group.add(block);
+        this.blocks.push(block);
+        return block;
+      }
+      
+      // 旋转 90 度（带 GSAP 风格的缓动）
+      rotate(direction = 1) {
+        if (this.isRotating) return;
+        this.isRotating = true;
+        this.targetRotation += direction * Math.PI / 2;
+        
+        const startRot = this.group.rotation.y;
+        const endRot = this.targetRotation;
+        const duration = 600;
+        const startTime = performance.now();
+        
+        const animate = (now) => {
+          const elapsed = now - startTime;
+          const t = Math.min(elapsed / duration, 1);
+          // easeOutCubic
+          const eased = 1 - Math.pow(1 - t, 3);
+          this.group.rotation.y = startRot + (endRot - startRot) * eased;
+          
+          if (t < 1) {
+            requestAnimationFrame(animate);
+          } else {
+            this.isRotating = false;
+            this.rotation = (this.rotation + direction + 4) % 4;
+            onRotationComplete();
+          }
+        };
+        requestAnimationFrame(animate);
+      }
+      
+      // 获取所有可站立节点（顶面中心）
+      getStandPoints() {
+        const points = [];
+        this.blocks.forEach((block, i) => {
+          const worldPos = new THREE.Vector3();
+          block.getWorldPosition(worldPos);
+          points.push({
+            x: Math.round(worldPos.x),
+            y: Math.round(worldPos.y + 0.1),  // 顶面高度
+            z: Math.round(worldPos.z),
+            module: this,
+            blockIndex: i
+          });
+        });
+        return points;
+      }
+    }
+    
+    /* ============================================================
+       关卡数据 - 第1关：教学旋转
+       布局：起点 → 旋转模块 → 终点
+       ============================================================ */
+    let modules = [];
+    let character = null;
+    let characterPos = { x: 0, y: 0, z: 0 };
+    let targetPath = [];
+    let pathIndex = 0;
+    let isMoving = false;
+    let currentLevel = 1;
+    
+    function buildLevel1() {
+      // 清空
+      scene.children.filter(c => c.userData.isModule || c.userData.isCharacter).forEach(c => scene.remove(c));
+      modules = [];
+      
+      // 起点平台（固定）
+      const startModule = new Module(0, 0, 0, COLORS.sand, COLORS.sandDark);
+      startModule.group.userData.isModule = true;
+      startModule.addBlock(0, 0, 0, 2, 1, 2);
+      scene.add(startModule.group);
+      modules.push(startModule);
+      
+      // 中间旋转模块
+      const midModule = new Module(0, 0, 4, COLORS.mint, COLORS.mintDark);
+      midModule.group.userData.isModule = true;
+      midModule.addBlock(0, 0, 0, 2, 1, 2);
+      scene.add(midModule.group);
+      modules.push(midModule);
+      
+      // 终点平台
+      const endModule = new Module(4, 0, 4, COLORS.coral, COLORS.coralDark);
+      endModule.group.userData.isModule = true;
+      endModule.addBlock(0, 0, 0, 2, 1, 2);
+      scene.add(endModule.group);
+      modules.push(endModule);
+      
+      // 角色
+      characterPos = { x: 0, y: 1.05, z: 0 };
+      createCharacter();
+      
+      document.getElementById('levelTitle').textContent = '第 一 章 · 起 点';
+      document.getElementById('levelHint').textContent = '拖动中间薄荷色模块旋转 · 点击终点移动';
+    }
+    
+    function buildLevel2() {
+      scene.children.filter(c => c.userData.isModule || c.userData.isCharacter).forEach(c => scene.remove(c));
+      modules = [];
+      
+      // 起点
+      const startModule = new Module(-3, 0, 0, COLORS.sand, COLORS.sandDark);
+      startModule.group.userData.isModule = true;
+      startModule.addBlock(0, 0, 0, 2, 1, 2);
+      scene.add(startModule.group);
+      modules.push(startModule);
+      
+      // 错位平台 1（需要旋转对齐）
+      const offset1 = new Module(-1, 0, 3, COLORS.mint, COLORS.mintDark);
+      offset1.group.userData.isModule = true;
+      offset1.addBlock(0, 0, 0, 2, 1, 2);
+      offset1.group.rotation.y = Math.PI / 2;  // 初始错位
+      offset1.targetRotation = Math.PI / 2;
+      offset1.rotation = 1;
+      scene.add(offset1.group);
+      modules.push(offset1);
+      
+      // 错位平台 2
+      const offset2 = new Module(2, 0, 5, COLORS.indigo, COLORS.indigoDark);
+      offset2.group.userData.isModule = true;
+      offset2.addBlock(0, 0, 0, 2, 1, 2);
+      offset2.group.rotation.y = Math.PI;  // 错位
+      offset2.targetRotation = Math.PI;
+      offset2.rotation = 2;
+      scene.add(offset2.group);
+      modules.push(offset2);
+      
+      // 终点
+      const endModule = new Module(4, 0, 2, COLORS.coral, COLORS.coralDark);
+      endModule.group.userData.isModule = true;
+      endModule.addBlock(0, 0, 0, 2, 1, 2);
+      scene.add(endModule.group);
+      modules.push(endModule);
+      
+      characterPos = { x: -3, y: 1.05, z: 0 };
+      createCharacter();
+      
+      document.getElementById('levelTitle').textContent = '第 二 章 · 错 位';
+      document.getElementById('levelHint').textContent = '旋转模块对齐路径 · 视错觉拼接';
+    }
+    
+    /* ============================================================
+       艾达（Ida）- 主角
+       ============================================================ */
+    function createCharacter() {
+      if (character) scene.remove(character);
+      character = new THREE.Group();
+      character.userData.isCharacter = true;
+      
+      // 身体（白色长方块）
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(0.3, 0.4, 0.2),
+        new THREE.MeshStandardMaterial({ color: COLORS.white, roughness: 0.6 })
+      );
+      body.position.y = 0.25;
+      body.castShadow = true;
+      character.add(body);
+      
+      // 头部（圆球）
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.13, 16, 16),
+        new THREE.MeshStandardMaterial({ color: COLORS.white, roughness: 0.6 })
+      );
+      head.position.y = 0.55;
+      head.castShadow = true;
+      character.add(head);
+      
+      // 帽子（白色圆锥）
+      const hat = new THREE.Mesh(
+        new THREE.ConeGeometry(0.14, 0.2, 8),
+        new THREE.MeshStandardMaterial({ color: COLORS.white, roughness: 0.6 })
+      );
+      hat.position.y = 0.75;
+      hat.castShadow = true;
+      character.add(hat);
+      
+      character.position.set(characterPos.x, characterPos.y, characterPos.z);
+      scene.add(character);
+    }
+    
+    /* ============================================================
+       寻路算法 - 基于视觉连通性
+       两个节点"连通"的条件：屏幕投影距离小于阈值（视错觉）
+       ============================================================ */
+    function findPath(start, end) {
+      const allPoints = [];
+      modules.forEach(m => {
+        allPoints.push(...m.getStandPoints());
+      });
+      
+      // 加入起点和终点
+      const startNode = { x: start.x, y: start.y, z: start.z, module: null, blockIndex: -1 };
+      const endNode = { x: end.x, y: end.y, z: end.z, module: null, blockIndex: -2 };
+      
+      // BFS 寻路
+      const visited = new Set();
+      const queue = [{ node: startNode, path: [startNode] }];
+      visited.add(`${startNode.x},${startNode.y},${startNode.z}`);
+      
+      while (queue.length > 0) {
+        const { node, path } = queue.shift();
+        
+        // 检查是否到达终点
+        if (node.x === endNode.x && node.y === endNode.y && node.z === endNode.z) {
+          return path;
+        }
+        
+        // 找所有视觉连通的邻居
+        for (const next of allPoints) {
+          const key = `${next.x},${next.y},${next.z}`;
+          if (visited.has(key)) continue;
+          
+          // 视错觉判定：屏幕投影距离 + 实际距离
+          if (isVisualConnected(node, next)) {
+            visited.add(key);
+            queue.push({ node: next, path: [...path, next] });
+          }
+        }
+      }
+      
+      return null;
+    }
+    
+    // 视错觉连通判定
+    // 核心思想：两个 3D 点在屏幕上的 2D 投影接近时，视为"视觉连通"
+    function isVisualConnected(a, b) {
+      // 实际距离判定（相邻方块）
+      const realDist = Math.sqrt(
+        Math.pow(a.x - b.x, 2) + 
+        Math.pow(a.y - b.y, 2) + 
+        Math.pow(a.z - b.z, 2)
+      );
+      
+      // 投影到屏幕
+      const projA = projectToScreen(a);
+      const projB = projectToScreen(b);
+      const screenDist = Math.sqrt(
+        Math.pow(projA.x - projB.x, 2) + 
+        Math.pow(projA.y - projB.y, 2)
+      );
+      
+      // 视错觉：屏幕距离小（看起来挨着），实际距离可以较大
+      return screenDist < 1.5 && Math.abs(a.y - b.y) < 0.5;
+    }
+    
+    function projectToScreen(pos) {
+      const v = new THREE.Vector3(pos.x, pos.y, pos.z);
+      v.project(camera);
+      return { x: v.x, y: v.y };
+    }
+    
+    /* ============================================================
+       角色移动 - 沿路径行走
+       ============================================================ */
+    function moveCharacterTo(targetX, targetZ) {
+      if (isMoving) return;
+      
+      const start = { x: characterPos.x, y: characterPos.y, z: characterPos.z };
+      const end = { x: targetX, y: 1.05, z: targetZ };
+      
+      const path = findPath(start, end);
+      
+      if (!path || path.length === 0) {
+        showToast('路径不通 · 旋转模块寻找出路');
+        return;
+      }
+      
+      isMoving = true;
+      targetPath = path;
+      pathIndex = 0;
+      
+      function step() {
+        if (pathIndex >= path.length - 1) {
+          isMoving = false;
+          characterPos = { x: end.x, y: end.y, z: end.z };
+          checkWin();
+          return;
+        }
+        
+        pathIndex++;
+        const next = path[pathIndex];
+        const start = character.position.clone();
+        const targetPos = new THREE.Vector3(next.x, next.y, next.z);
+        
+        // 朝向目标
+        const lookAt = new THREE.Vector3(next.x, character.position.y, next.z);
+        const startRot = character.rotation.y;
+        const dx = next.x - character.position.x;
+        const dz = next.z - character.position.z;
+        const targetRot = Math.atan2(dx, dz);
+        
+        const duration = 400;
+        const startTime = performance.now();
+        
+        const animate = (now) => {
+          const elapsed = now - startTime;
+          const t = Math.min(elapsed / duration, 1);
+          const eased = 1 - Math.pow(1 - t, 2);
+          
+          character.position.lerpVectors(start, targetPos, eased);
+          character.rotation.y = startRot + (targetRot - startRot) * eased;
+          
+          // 行走时的轻微上下浮动
+          character.position.y = next.y + Math.sin(t * Math.PI * 4) * 0.05;
+          
+          if (t < 1) {
+            requestAnimationFrame(animate);
+          } else {
+            character.position.set(next.x, next.y, next.z);
+            characterPos = { x: next.x, y: next.y, z: next.z };
+            step();
+          }
+        };
+        requestAnimationFrame(animate);
+      }
+      
+      step();
+    }
+    
+    /* ============================================================
+       交互：点击移动 + 拖动旋转
+       ============================================================ */
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let mouseDownPos = null;
+    let draggedModule = null;
+    let isDragging = false;
+    
+    renderer.domElement.addEventListener('pointerdown', (e) => {
+      mouseDownPos = { x: e.clientX, y: e.clientY };
+      isDragging = false;
+      
+      // 检测是否点中可旋转模块
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      
+      const moduleGroups = modules.map(m => m.group);
+      const intersects = raycaster.intersectObjects(moduleGroups, true);
+      
+      if (intersects.length > 0) {
+        let obj = intersects[0].object;
+        while (obj.parent && !modules.find(m => m.group === obj)) {
+          obj = obj.parent;
+        }
+        const mod = modules.find(m => m.group === obj);
+        if (mod && mod !== modules[0] && mod !== modules[modules.length - 1]) {
+          draggedModule = mod;
+        }
+      }
+    });
+    
+    renderer.domElement.addEventListener('pointermove', (e) => {
+      if (!mouseDownPos) return;
+      const dx = e.clientX - mouseDownPos.x;
+      const dy = e.clientY - mouseDownPos.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      
+      if (dist > 10 && !isDragging && draggedModule) {
+        // 拖动旋转模块
+        isDragging = true;
+        const direction = dx > 0 ? 1 : -1;
+        draggedModule.rotate(direction);
+        showToast('模块旋转');
+        draggedModule = null;
+      }
+    });
+    
+    renderer.domElement.addEventListener('pointerup', (e) => {
+      if (!isDragging && mouseDownPos) {
+        // 点击移动角色
+        mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        
+        const moduleGroups = modules.map(m => m.group);
+        const intersects = raycaster.intersectObjects(moduleGroups, true);
+        
+        if (intersects.length > 0) {
+          const point = intersects[0].point;
+          moveCharacterTo(Math.round(point.x), Math.round(point.z));
+        }
+      }
+      mouseDownPos = null;
+      isDragging = false;
+      draggedModule = null;
+    });
+    
+    /* ============================================================
+       通关判定
+       ============================================================ */
+    function checkWin() {
+      // 第1关：到达 z=4 的平台
+      // 第2关：到达 x=4 的平台
+      let win = false;
+      if (currentLevel === 1 && characterPos.z === 4 && characterPos.x === 4) {
+        win = true;
+      } else if (currentLevel === 2 && characterPos.x === 4 && characterPos.z === 2) {
+        win = true;
+      }
+      
+      if (win) {
+        showToast('通关 · 进入下一章');
+        setTimeout(() => {
+          if (currentLevel === 1) {
+            currentLevel = 2;
+            buildLevel2();
+          } else {
+            showToast('全部通关 · 感谢游玩');
+          }
+        }, 1500);
+      }
+    }
+    
+    function onRotationComplete() {
+      // 旋转完成后可以重新寻路
+    }
+    
+    /* ============================================================
+       UI
+       ============================================================ */
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2000);
+    }
+    
+    window.resetLevel = () => {
+      if (currentLevel === 1) buildLevel1();
+      else buildLevel2();
+    };
+    
+    window.toggleHint = () => {
+      // 显示所有可站立节点
+      const points = [];
+      modules.forEach(m => points.push(...m.getStandPoints()));
+      console.log('可站立点：', points);
+      showToast('查看控制台可站立点');
+    };
+    
+    window.nextLevel = () => {
+      currentLevel = currentLevel === 1 ? 2 : 1;
+      if (currentLevel === 1) buildLevel1();
+      else buildLevel2();
+    };
+    
+    /* ============================================================
+       主循环
+       ============================================================ */
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    
+    window.addEventListener('resize', () => {
+      const aspect = window.innerWidth / window.innerHeight;
+      camera.left = -d * aspect;
+      camera.right = d * aspect;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+    
+    // 初始化
+    buildLevel1();
+    animate();
+  </script>
+</body>
+</html>

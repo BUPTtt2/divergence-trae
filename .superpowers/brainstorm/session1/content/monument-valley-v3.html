@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>纪念碑谷风格 · 浮空议事厅 V3</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0A0A12;
+    color: #E8E4DA;
+    font-family: -apple-system, "PingFang SC", sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  
+  /* 虚无背景 */
+  .void-bg {
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 80%, #1A1A26 0%, #0A0A12 50%, #050508 100%);
+    overflow: hidden;
+  }
+  .void-particle {
+    position: absolute;
+    width: 2px;
+    height: 2px;
+    background: rgba(201, 169, 97, 0.3);
+    border-radius: 50%;
+    animation: float 8s infinite ease-in-out;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0) translateX(0); opacity: 0.2; }
+    50% { transform: translateY(-30px) translateX(10px); opacity: 0.6; }
+  }
+  .void-streak {
+    position: absolute;
+    width: 80px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(201,169,97,0.15), transparent);
+    animation: streak 12s infinite linear;
+  }
+  @keyframes streak {
+    0% { transform: translateX(-100px); }
+    100% { transform: translateX(1200px); }
+  }
+  
+  /* 云雾层 */
+  .cloud-layer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 300px;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .cloud {
+    position: absolute;
+    background: radial-gradient(ellipse at center, rgba(255,255,255,0.08) 0%, transparent 70%);
+    border-radius: 50%;
+    animation: drift 20s infinite linear;
+  }
+  
+  @keyframes drift {
+    0% { transform: translateX(-200px); }
+    100% { transform: translateX(1400px); }
+  }
+  
+  /* 控制栏 */
+  .controls {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .control-btn {
+    padding: 8px 16px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    color: #C9A961;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.3s;
+    backdrop-filter: blur(8px);
+  }
+  .control-btn:hover {
+    background: rgba(201, 169, 97, 0.15);
+    border-color: rgba(201, 169, 97, 0.3);
+  }
+  .control-btn.active {
+    background: rgba(201, 169, 97, 0.25);
+    border-color: #C9A961;
+  }
+  
+  /* 等距场景 */
+  .scene-container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    perspective: 1500px;
+    z-index: 20;
+  }
+  
+  .isometric-world {
+    position: relative;
+    transform-style: preserve-3d;
+    transform: rotateX(25deg) rotateY(-35deg);
+    transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  
+  /* 3D立方体 */
+  .cube {
+    position: relative;
+    width: 100px;
+    height: 100px;
+    transform-style: preserve-3d;
+  }
+  .cube-face {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border: 1px solid rgba(201,169,97,0.2);
+  }
+  .cube-top {
+    background: linear-gradient(135deg, #F7E8D4 0%, #EAD0B0 100%);
+    transform: rotateX(90deg) translateZ(50px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .cube-left {
+    background: linear-gradient(180deg, #D4B898 0%, #B89A7A 100%);
+    transform: rotateY(-90deg) translateZ(50px);
+  }
+  .cube-right {
+    background: linear-gradient(180deg, #C4A888 0%, #A68B6E 100%);
+    transform: rotateY(90deg) translateZ(50px);
+  }
+  .cube-bottom {
+    background: #8A7E66;
+    transform: rotateX(-90deg) translateZ(50px);
+  }
+  
+  /* 塔楼建筑 */
+  .tower {
+    position: absolute;
+    transform-style: preserve-3d;
+    transition: opacity 0.6s, transform 0.6s;
+  }
+  .tower-base {
+    width: 120px;
+    height: 60px;
+    background: linear-gradient(135deg, #F7E8D4 0%, #EAD0B0 100%);
+    border: 2px solid #C9A961;
+    transform: rotateX(90deg) translateZ(30px);
+  }
+  .tower-side-left {
+    width: 120px;
+    height: 100px;
+    background: linear-gradient(180deg, #D4B898 0%, #B89A7A 100%);
+    transform: rotateY(-90deg) translateZ(60px) translateY(-50px);
+  }
+  .tower-side-right {
+    width: 60px;
+    height: 100px;
+    background: linear-gradient(180deg, #C4A888 0%, #A68B6E 100%);
+    transform: rotateY(90deg) translateZ(60px) translateY(-50px);
+  }
+  
+  /* 装饰拱门 */
+  .arch {
+    position: absolute;
+    width: 40px;
+    height: 60px;
+    border: 3px solid #C9A961;
+    border-bottom: none;
+    border-radius: 20px 20px 0 0;
+    transform: translateZ(30px) translateX(40px) translateY(-70px);
+  }
+  
+  /* 尖顶 */
+  .spire {
+    position: absolute;
+    width: 0;
+    height: 0;
+    border-left: 25px solid transparent;
+    border-right: 25px solid transparent;
+    border-bottom: 50px solid #C9A961;
+    transform: translateZ(60px) translateX(35px) translateY(-100px);
+  }
+  .spire-top {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: #F4D799;
+    border-radius: 50%;
+    transform: translateZ(80px) translateX(50px) translateY(-110px);
+  }
+  
+  /* 旗帜 */
+  .flag {
+    position: absolute;
+    width: 30px;
+    height: 20px;
+    background: #E8A830;
+    transform: translateZ(70px) translateX(75px) translateY(-100px) rotateY(90deg);
+    animation: wave 2s infinite ease-in-out;
+  }
+  @keyframes wave {
+    0%, 100% { transform: translateZ(70px) translateX(75px) translateY(-100px) rotateY(90deg) skewX(0deg); }
+    50% { transform: translateZ(70px) translateX(75px) translateY(-100px) rotateY(90deg) skewX(-15deg); }
+  }
+  
+  /* 人物 */
+  .character {
+    position: absolute;
+    width: 20px;
+    height: 35px;
+    transform-style: preserve-3d;
+    transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 30;
+  }
+  .char-body {
+    width: 100%;
+    height: 20px;
+    background: #FFFFFF;
+    border-radius: 5px;
+    transform: rotateX(90deg) translateZ(17px);
+  }
+  .char-head {
+    width: 14px;
+    height: 14px;
+    background: #FFFFFF;
+    border-radius: 50%;
+    transform: translateZ(35px) translateX(3px);
+  }
+  .char-shadow {
+    position: absolute;
+    width: 24px;
+    height: 8px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 50%;
+    transform: rotateX(90deg) translateZ(5px);
+  }
+  
+  /* 路径桥 */
+  .bridge {
+    position: absolute;
+    height: 8px;
+    background: linear-gradient(90deg, #C9A961 0%, #F4D799 50%, #C9A961 100%);
+    transform: rotateX(90deg) translateZ(4px);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(201,169,97,0.3);
+  }
+  
+  /* Agent 标识 */
+  .agent-tag {
+    position: absolute;
+    padding: 4px 8px;
+    background: rgba(255,255,255,0.95);
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: bold;
+    transform: translateZ(85px);
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  }
+  
+  /* 对话框 */
+  .dialog-bubble {
+    position: absolute;
+    padding: 8px 14px;
+    background: rgba(255,255,255,0.95);
+    border-radius: 12px;
+    font-size: 11px;
+    color: #4A453D;
+    transform: translateZ(90px);
+    white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .dialog-bubble.show {
+    opacity: 1;
+  }
+  .dialog-arrow {
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 6px solid rgba(255,255,255,0.95);
+  }
+  
+  /* 浮动光点 */
+  .float-light {
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    background: #C9A961;
+    border-radius: 50%;
+    box-shadow: 0 0 8px #C9A961;
+    animation: pulse 2s infinite ease-in-out;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.2); }
+  }
+  
+  /* 文字说明 */
+  .info-panel {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    z-index: 100;
+    padding: 16px 20px;
+    background: rgba(10,10,18,0.8);
+    border: 1px solid rgba(201,169,97,0.2);
+    border-radius: 12px;
+    backdrop-filter: blur(12px);
+    max-width: 320px;
+  }
+  .info-panel h3 {
+    font-size: 14px;
+    color: #C9A961;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .info-panel p {
+    font-size: 12px;
+    color: #9A958D;
+    line-height: 1.6;
+  }
+  
+  /* 人物选择面板 */
+  .char-selector {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 100;
+    padding: 14px;
+    background: rgba(10,10,18,0.8);
+    border: 1px solid rgba(201,169,97,0.2);
+    border-radius: 12px;
+    backdrop-filter: blur(12px);
+  }
+  .char-selector h4 {
+    font-size: 11px;
+    color: #9A958D;
+    margin-bottom: 10px;
+    font-weight: 400;
+    letter-spacing: 0.1em;
+  }
+  .char-options {
+    display: flex;
+    gap: 10px;
+  }
+  .char-option {
+    width: 40px;
+    height: 50px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+  }
+  .char-option:hover, .char-option.selected {
+    background: rgba(201,169,97,0.15);
+    border-color: #C9A961;
+  }
+  .char-icon {
+    width: 16px;
+    height: 28px;
+    border-radius: 4px;
+  }
+  
+  /* 旋转提示 */
+  .rotate-hint {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 100;
+    padding: 10px 16px;
+    background: rgba(10,10,18,0.8);
+    border: 1px solid rgba(201,169,97,0.2);
+    border-radius: 8px;
+    font-size: 11px;
+    color: #9A958D;
+    backdrop-filter: blur(8px);
+  }
+</style>
+</head>
+<body>
+  <!-- 虚无背景 -->
+  <div class="void-bg" id="voidBg"></div>
+  
+  <!-- 云雾层 -->
+  <div class="cloud-layer" id="cloudLayer"></div>
+  
+  <!-- 控制栏 -->
+  <div class="controls">
+    <button class="control-btn" onclick="rotateWorld(-15)">↺ 左转</button>
+    <button class="control-btn" onclick="rotateWorld(15)">↻ 右转</button>
+    <button class="control-btn" onclick="resetView()">⟲ 重置</button>
+    <button class="control-btn" onclick="toggleDialogs()">💬 对话</button>
+    <button class="control-btn" onclick="animateTowers()">⬆️ 升起动画</button>
+  </div>
+  
+  <!-- 人物选择 -->
+  <div class="char-selector">
+    <h4>选择角色</h4>
+    <div class="char-options">
+      <div class="char-option selected" onclick="selectChar('white')">
+        <div class="char-icon" style="background:#FFFFFF"></div>
+      </div>
+      <div class="char-option" onclick="selectChar('gold')">
+        <div class="char-icon" style="background:#C9A961"></div>
+      </div>
+      <div class="char-option" onclick="selectChar('blue')">
+        <div class="char-icon" style="background:#4A90D9"></div>
+      </div>
+      <div class="char-option" onclick="selectChar('purple')">
+        <div class="char-icon" style="background:#7C5CBF"></div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 等距场景 -->
+  <div class="scene-container">
+    <div class="isometric-world" id="world">
+      <!-- 主平台 -->
+      <div class="cube" style="transform: translateZ(0) translateX(-200px) translateY(100px)">
+        <div class="cube-face cube-top">
+          <div style="width:80px;height:80px;border:2px solid #C9A961;border-radius:4px;display:flex;align-items:center;justify-content:center">
+            <div style="width:30px;height:30px;border:2px solid #C9A961;border-radius:50%;display:flex;align-items:center;justify-content:center">
+              <div style="width:10px;height:10px;background:#C9A961;border-radius:50%"></div>
+            </div>
+          </div>
+        </div>
+        <div class="cube-face cube-left"></div>
+        <div class="cube-face cube-right"></div>
+        <div class="cube-face cube-bottom"></div>
+        <!-- 人物 -->
+        <div class="character" id="character">
+          <div class="char-shadow"></div>
+          <div class="char-body"></div>
+          <div class="char-head"></div>
+        </div>
+      </div>
+      
+      <!-- 左塔楼（钱谷） -->
+      <div class="tower" style="transform: translateX(-350px) translateY(-50px); opacity:0" id="tower-qian">
+        <div class="tower-base"></div>
+        <div class="tower-side-left"></div>
+        <div class="tower-side-right"></div>
+        <div class="arch"></div>
+        <div class="spire"></div>
+        <div class="spire-top"></div>
+        <div class="flag"></div>
+        <div class="agent-tag" style="color:#E8A830">钱</div>
+        <div class="dialog-bubble" style="top:-120px;left:-60px">
+          此路收入更稳
+          <div class="dialog-arrow"></div>
+        </div>
+      </div>
+      
+      <!-- 左上塔楼（路向） -->
+      <div class="tower" style="transform: translateX(-100px) translateY(-200px); opacity:0" id="tower-lu">
+        <div class="tower-base"></div>
+        <div class="tower-side-left"></div>
+        <div class="tower-side-right"></div>
+        <div class="arch"></div>
+        <div class="spire"></div>
+        <div class="spire-top"></div>
+        <div class="flag"></div>
+        <div class="agent-tag" style="color:#00A86B">路</div>
+        <div class="dialog-bubble" style="top:-120px;left:-60px">
+          职业发展更优
+          <div class="dialog-arrow"></div>
+        </div>
+      </div>
+      
+      <!-- 右上塔楼（风眼） -->
+      <div class="tower" style="transform: translateX(200px) translateY(-180px); opacity:0" id="tower-feng">
+        <div class="tower-base"></div>
+        <div class="tower-side-left"></div>
+        <div class="tower-side-right"></div>
+        <div class="arch"></div>
+        <div class="spire"></div>
+        <div class="spire-top"></div>
+        <div class="flag"></div>
+        <div class="agent-tag" style="color:#D94F4F">风</div>
+        <div class="dialog-bubble" style="top:-120px;left:-60px">
+          风险可控吗？
+          <div class="dialog-arrow"></div>
+        </div>
+      </div>
+      
+      <!-- 右塔楼（云图） -->
+      <div class="tower" style="transform: translateX(350px) translateY(-50px); opacity:0" id="tower-yun">
+        <div class="tower-base"></div>
+        <div class="tower-side-left"></div>
+        <div class="tower-side-right"></div>
+        <div class="arch"></div>
+        <div class="spire"></div>
+        <div class="spire-top"></div>
+        <div class="flag"></div>
+        <div class="agent-tag" style="color:#4A90D9">云</div>
+        <div class="dialog-bubble" style="top:-120px;left:-60px">
+          五年格局不利
+          <div class="dialog-arrow"></div>
+        </div>
+      </div>
+      
+      <!-- 路径桥 -->
+      <div class="bridge" style="width:150px;transform: rotateX(90deg) translateZ(50px) translateX(-275px) translateY(75px)"></div>
+      <div class="bridge" style="width:180px;transform: rotateX(90deg) translateZ(50px) translateX(-100px) translateY(-50px)"></div>
+      <div class="bridge" style="width:180px;transform: rotateX(90deg) translateZ(50px) translateX(100px) translateY(-30px)"></div>
+      <div class="bridge" style="width:150px;transform: rotateX(90deg) translateZ(50px) translateX(275px) translateY(75px)"></div>
+      
+      <!-- 浮动光点 -->
+      <div class="float-light" style="transform: translateX(-200px) translateY(50px) translateZ(60px)"></div>
+      <div class="float-light" style="transform: translateX(-100px) translateY(-100px) translateZ(60px); animation-delay:0.5s"></div>
+      <div class="float-light" style="transform: translateX(100px) translateY(-80px) translateZ(60px); animation-delay:1s"></div>
+      <div class="float-light" style="transform: translateX(200px) translateY(50px) translateZ(60px); animation-delay:1.5s"></div>
+    </div>
+  </div>
+  
+  <!-- 信息面板 -->
+  <div class="info-panel">
+    <h3>浮空议事厅</h3>
+    <p>纪念碑谷风格 · 等距视角 · 六方推演</p>
+    <p style="margin-top:8px;font-size:11px;color:#7A756D">
+      点击右上角按钮旋转视角，选择角色外观，观看塔楼升起动画。
+    </p>
+  </div>
+  
+  <!-- 旋转提示 -->
+  <div class="rotate-hint">拖拽鼠标旋转视角</div>
+
+  <script>
+    // 生成虚无背景粒子
+    const voidBg = document.getElementById('voidBg');
+    for (let i = 0; i < 80; i++) {
+      const p = document.createElement('div');
+      p.className = 'void-particle';
+      p.style.left = Math.random() * 100 + '%';
+      p.style.top = Math.random() * 100 + '%';
+      p.style.animationDelay = Math.random() * 8 + 's';
+      voidBg.appendChild(p);
+    }
+    for (let i = 0; i < 10; i++) {
+      const s = document.createElement('div');
+      s.className = 'void-streak';
+      s.style.top = Math.random() * 100 + '%';
+      s.style.animationDelay = Math.random() * 12 + 's';
+      voidBg.appendChild(s);
+    }
+    
+    // 生成云雾
+    const cloudLayer = document.getElementById('cloudLayer');
+    for (let i = 0; i < 6; i++) {
+      const c = document.createElement('div');
+      c.className = 'cloud';
+      c.style.width = (150 + Math.random() * 200) + 'px';
+      c.style.height = (40 + Math.random() * 60) + 'px';
+      c.style.bottom = Math.random() * 100 + 'px';
+      c.style.left = Math.random() * 100 + '%';
+      c.style.animationDelay = Math.random() * 20 + 's';
+      c.style.animationDuration = (15 + Math.random() * 15) + 's';
+      cloudLayer.appendChild(c);
+    }
+    
+    // 视角控制
+    const world = document.getElementById('world');
+    let rotX = 25;
+    let rotY = -35;
+    
+    function rotateWorld(delta) {
+      rotY += delta;
+      updateRotation();
+    }
+    
+    function resetView() {
+      rotX = 25;
+      rotY = -35;
+      updateRotation();
+    }
+    
+    function updateRotation() {
+      world.style.transform = `rotateX(${rotX}deg) rotateY(${rotY}deg)`;
+    }
+    
+    // 鼠标拖拽旋转
+    let isDragging = false;
+    let lastX = 0;
+    
+    document.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      lastX = e.clientX;
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const delta = e.clientX - lastX;
+      rotY += delta * 0.3;
+      updateRotation();
+      lastX = e.clientX;
+    });
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+    
+    // 人物选择
+    function selectChar(color) {
+      document.querySelectorAll('.char-option').forEach(el => el.classList.remove('selected'));
+      event.currentTarget.classList.add('selected');
+      
+      const charBody = document.querySelector('.char-body');
+      const charHead = document.querySelector('.char-head');
+      
+      const colors = {
+        white: '#FFFFFF',
+        gold: '#C9A961',
+        blue: '#4A90D9',
+        purple: '#7C5CBF'
+      };
+      charBody.style.background = colors[color];
+      charHead.style.background = colors[color];
+    }
+    
+    // 对话开关
+    function toggleDialogs() {
+      document.querySelectorAll('.dialog-bubble').forEach(el => {
+        el.classList.toggle('show');
+      });
+    }
+    
+    // 塔楼升起动画
+    function animateTowers() {
+      const towers = ['tower-qian', 'tower-lu', 'tower-feng', 'tower-yun'];
+      towers.forEach((id, i) => {
+        const tower = document.getElementById(id);
+        tower.style.transition = 'opacity 0.8s, transform 1s';
+        tower.style.opacity = '0';
+        tower.style.transform = tower.style.transform.replace(/translateY\([^)]+\)/, 'translateY(50px)');
+        
+        setTimeout(() => {
+          tower.style.opacity = '1';
+          tower.style.transform = tower.style.transform.replace(/translateY\([^)]+\)/, 'translateY(0)');
+        }, i * 200);
+      });
+    }
+    
+    // 初始升起
+    setTimeout(animateTowers, 500);
+  </script>
+</body>
+</html>

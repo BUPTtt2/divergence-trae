@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>纪念碑谷风格 V2 · 浮空议事厅</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #E8E2D9;
+    color: #3A3530;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+  }
+  .hero {
+    text-align: center;
+    padding: 60px 24px 36px;
+  }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.2rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+    color: #4A453D;
+  }
+  .hero p {
+    font-size: 15px;
+    color: #7A756D;
+    max-width: 560px;
+    margin: 0 auto;
+    line-height: 1.7;
+  }
+  .section {
+    padding: 32px 24px 64px;
+  }
+  .section-title {
+    text-align: center;
+    font-size: 13px;
+    color: #9A958D;
+    margin-bottom: 24px;
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0.15em;
+  }
+  .svg-wrap {
+    display: flex;
+    justify-content: center;
+    padding: 0 16px;
+  }
+  .svg-wrap svg {
+    width: 100%;
+    max-width: 1100px;
+    height: auto;
+    display: block;
+    filter: drop-shadow(0 24px 48px rgba(74, 69, 61, 0.12));
+  }
+  .palette-bar {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 24px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: rgba(255,255,255,0.6);
+    border-radius: 100px;
+    font-size: 12px;
+    color: #5A554D;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .chip-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+  }
+  .notes {
+    max-width: 760px;
+    margin: 40px auto 0;
+    padding: 28px 32px;
+    background: rgba(255,255,255,0.55);
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.9;
+    color: #5A554D;
+    box-shadow: 0 4px 24px rgba(74, 69, 61, 0.06);
+  }
+  .notes strong { color: #C17C5F; }
+  .notes h4 { margin: 20px 0 8px; color: #4A453D; font-size: 14px; }
+  .notes ul { margin-left: 18px; }
+  .notes li { margin: 6px 0; }
+  .divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(74,69,61,0.12), transparent);
+    margin: 48px 0;
+  }
+</style>
+</head>
+<body>
+  <div class="hero">
+    <h1>浮空议事厅</h1>
+    <p>纪念碑谷风格 · 等距浮空建筑 · Agent 发言触发塔楼升起 · 多路径 Bridges 连接</p>
+  </div>
+
+  <div class="section">
+    <div class="section-title">MAIN STAGE / 推演台</div>
+    <div class="svg-wrap">
+      <svg viewBox="0 0 1100 720" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <!-- 天空渐变 -->
+          <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#F5F0E8"/>
+            <stop offset="50%" stop-color="#EBE4DA"/>
+            <stop offset="100%" stop-color="#DDD4C8"/>
+          </linearGradient>
+          
+          <!-- 云层 -->
+          <radialGradient id="cloud1" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.9"/>
+            <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="cloud2" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#F7F2EA" stop-opacity="0.85"/>
+            <stop offset="100%" stop-color="#F7F2EA" stop-opacity="0"/>
+          </radialGradient>
+          
+          <!-- 平台顶面（暖沙） -->
+          <linearGradient id="topSand" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#F7E8D4"/>
+            <stop offset="100%" stop-color="#EAD0B0"/>
+          </linearGradient>
+          <linearGradient id="leftSand" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#D4B898"/>
+            <stop offset="100%" stop-color="#B89A7A"/>
+          </linearGradient>
+          <linearGradient id="rightSand" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#C4A888"/>
+            <stop offset="100%" stop-color="#A68B6E"/>
+          </linearGradient>
+          
+          <!-- 薄荷绿塔楼 -->
+          <linearGradient id="topMint" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#B8D4C8"/>
+            <stop offset="100%" stop-color="#A0C4B6"/>
+          </linearGradient>
+          <linearGradient id="leftMint" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#8CB5A5"/>
+            <stop offset="100%" stop-color="#6B9485"/>
+          </linearGradient>
+          <linearGradient id="rightMint" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#7CA898"/>
+            <stop offset="100%" stop-color="#5C8577"/>
+          </linearGradient>
+          
+          <!-- 粉珊瑚塔楼 -->
+          <linearGradient id="topCoral" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#E8B4B4"/>
+            <stop offset="100%" stop-color="#D99A9A"/>
+          </linearGradient>
+          <linearGradient id="leftCoral" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#C98A8A"/>
+            <stop offset="100%" stop-color="#A86A6A"/>
+          </linearGradient>
+          <linearGradient id="rightCoral" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#B97A7A"/>
+            <stop offset="100%" stop-color="#965A5A"/>
+          </linearGradient>
+          
+          <!-- 靛蓝塔楼 -->
+          <linearGradient id="topIndigo" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#9FB4CC"/>
+            <stop offset="100%" stop-color="#8AA0BA"/>
+          </linearGradient>
+          <linearGradient id="leftIndigo" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#7A91AC"/>
+            <stop offset="100%" stop-color="#5C728C"/>
+          </linearGradient>
+          <linearGradient id="rightIndigo" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#6B819C"/>
+            <stop offset="100%" stop-color="#4D627A"/>
+          </linearGradient>
+          
+          <!-- 金色点缀 -->
+          <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#F4D799"/>
+            <stop offset="100%" stop-color="#E0BB6E"/>
+          </linearGradient>
+          
+          <!-- 阴影 -->
+          <filter id="softShadow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+            <feOffset dx="0" dy="8" result="offsetblur"/>
+            <feComponentTransfer>
+              <feFuncA type="linear" slope="0.25"/>
+            </feComponentTransfer>
+            <feMerge>
+              <feMergeNode/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+        </defs>
+        
+        <!-- 背景天空 -->
+        <rect width="1100" height="720" fill="url(#sky)"/>
+        
+        <!-- 远山云雾（极简三角） -->
+        <g opacity="0.25">
+          <path d="M -50 520 L 120 380 L 280 520 Z" fill="#CFC7BC"/>
+          <path d="M 200 520 L 360 350 L 520 520 Z" fill="#C8C0B5"/>
+          <path d="M 450 520 L 620 360 L 780 520 Z" fill="#CFC7BC"/>
+          <path d="M 720 520 L 900 340 L 1150 520 Z" fill="#C8C0B5"/>
+        </g>
+        
+        <!-- 云雾层 -->
+        <ellipse cx="200" cy="580" rx="280" ry="70" fill="url(#cloud1)" opacity="0.7"/>
+        <ellipse cx="550" cy="620" rx="360" ry="90" fill="url(#cloud2)" opacity="0.75"/>
+        <ellipse cx="920" cy="580" rx="260" ry="65" fill="url(#cloud1)" opacity="0.65"/>
+        <ellipse cx="700" cy="300" rx="180" ry="45" fill="url(#cloud2)" opacity="0.4"/>
+        <ellipse cx="300" cy="250" rx="150" ry="35" fill="url(#cloud1)" opacity="0.35"/>
+        
+        <!-- ============== 主平台（当前位置） ============== -->
+        <g transform="translate(550, 480)" filter="url(#softShadow)">
+          <!-- 顶面 -->
+          <path d="M 0 -80 L 120 0 L 0 80 L -120 0 Z" fill="url(#topSand)" stroke="#C9A961" stroke-width="1"/>
+          <!-- 左面 -->
+          <path d="M -120 0 L 0 80 L 0 120 L -120 40 Z" fill="url(#leftSand)"/>
+          <!-- 右面 -->
+          <path d="M 120 0 L 0 80 L 0 120 L 120 40 Z" fill="url(#rightSand)"/>
+          <!-- 装饰纹样 -->
+          <path d="M 0 -80 L 0 80 M -120 0 L 120 0" stroke="#C9A961" stroke-width="0.5" opacity="0.4"/>
+          <circle cx="0" cy="0" r="30" fill="none" stroke="#C9A961" stroke-width="0.6" opacity="0.5"/>
+          <path d="M -80 0 L 0 -40 L 80 0 L 0 40 Z" fill="none" stroke="#C9A961" stroke-width="0.5" opacity="0.3"/>
+          <!-- 金色中心 -->
+          <circle cx="0" cy="0" r="12" fill="url(#gold)" opacity="0.9"/>
+        </g>
+        
+        <!-- 角色（小剪影） -->
+        <g transform="translate(550, 392)">
+          <ellipse cx="0" cy="0" rx="9" ry="4" fill="#4A453D" opacity="0.2"/>
+          <circle cx="0" cy="-16" r="5" fill="#FFFFFF"/>
+          <path d="M -6 -10 L -4 0 L 0 4 L 4 0 L 6 -10 Z" fill="#FFFFFF"/>
+          <path d="M -4 0 L -5 10 M 4 0 L 5 10" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+        </g>
+        
+        <!-- ============== 左侧薄荷塔楼（路向） ============== -->
+        <g transform="translate(220, 420)" filter="url(#softShadow)">
+          <!-- 塔楼主体 -->
+          <path d="M 0 -60 L 70 -20 L 70 60 L 0 100 L -70 60 L -70 -20 Z" fill="url(#leftMint)" stroke="#5C8577" stroke-width="0.6"/>
+          <!-- 顶面 -->
+          <path d="M 0 -60 L 70 -20 L 0 20 L -70 -20 Z" fill="url(#topMint)" stroke="#5C8577" stroke-width="0.6"/>
+          <!-- 右面 -->
+          <path d="M 70 -20 L 0 20 L 0 100 L 70 60 Z" fill="url(#rightMint)"/>
+          <!-- 拱门 -->
+          <path d="M -25 40 L -25 10 A 25 25 0 0 1 25 10 L 25 40 Z" fill="#4A6B5F" opacity="0.6"/>
+          <!-- 尖顶 -->
+          <path d="M 0 -60 L 0 -110" stroke="#5C8577" stroke-width="3" stroke-linecap="round"/>
+          <circle cx="0" cy="-110" r="5" fill="url(#gold)"/>
+          <!-- 旗子 -->
+          <path d="M 0 -110 L 40 -100 L 0 -90 Z" fill="#7CA898" opacity="0.9"/>
+          <!-- Agent 标识 -->
+          <circle cx="0" cy="-45" r="16" fill="#FFFFFF" opacity="0.95"/>
+          <text x="0" y="-40" text-anchor="middle" fill="#5C8577" font-size="14" font-family="serif" font-weight="bold">路</text>
+        </g>
+        
+        <!-- ============== 左上粉珊瑚塔楼（心禾） ============== -->
+        <g transform="translate(360, 260)" filter="url(#softShadow)">
+          <path d="M 0 -50 L 60 -15 L 60 55 L 0 90 L -60 55 L -60 -15 Z" fill="url(#leftCoral)" stroke="#A86A6A" stroke-width="0.6"/>
+          <path d="M 0 -50 L 60 -15 L 0 25 L -60 -15 Z" fill="url(#topCoral)" stroke="#A86A6A" stroke-width="0.6"/>
+          <path d="M 60 -15 L 0 25 L 0 90 L 60 55 Z" fill="url(#rightCoral)"/>
+          <path d="M -20 35 L -20 10 A 20 20 0 0 1 20 10 L 20 35 Z" fill="#8A5050" opacity="0.5"/>
+          <path d="M 0 -50 L 0 -95" stroke="#A86A6A" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="0" cy="-95" r="4" fill="url(#gold)"/>
+          <path d="M 0 -95 L 32 -87 L 0 -79 Z" fill="#C98A8A" opacity="0.9"/>
+          <circle cx="0" cy="-35" r="14" fill="#FFFFFF" opacity="0.95"/>
+          <text x="0" y="-30" text-anchor="middle" fill="#A86A6A" font-size="12" font-family="serif" font-weight="bold">心</text>
+        </g>
+        
+        <!-- ============== 右侧靛蓝塔楼（云图） ============== -->
+        <g transform="translate(860, 400)" filter="url(#softShadow)">
+          <path d="M 0 -65 L 75 -25 L 75 65 L 0 105 L -75 65 L -75 -25 Z" fill="url(#leftIndigo)" stroke="#4D627A" stroke-width="0.6"/>
+          <path d="M 0 -65 L 75 -25 L 0 15 L -75 -25 Z" fill="url(#topIndigo)" stroke="#4D627A" stroke-width="0.6"/>
+          <path d="M 75 -25 L 0 15 L 0 105 L 75 65 Z" fill="url(#rightIndigo)"/>
+          <path d="M -28 45 L -28 12 A 28 28 0 0 1 28 12 L 28 45 Z" fill="#3D5269" opacity="0.5"/>
+          <path d="M 0 -65 L 0 -118" stroke="#4D627A" stroke-width="3" stroke-linecap="round"/>
+          <circle cx="0" cy="-118" r="5" fill="url(#gold)"/>
+          <path d="M 0 -118 L 42 -107 L 0 -96 Z" fill="#7A91AC" opacity="0.9"/>
+          <circle cx="0" cy="-50" r="16" fill="#FFFFFF" opacity="0.95"/>
+          <text x="0" y="-45" text-anchor="middle" fill="#4D627A" font-size="14" font-family="serif" font-weight="bold">云</text>
+        </g>
+        
+        <!-- ============== 右下金棕塔楼（钱谷） ============== -->
+        <g transform="translate(760, 560)" filter="url(#softShadow)">
+          <!-- 方形底座 -->
+          <path d="M 0 -40 L 90 0 L 0 40 L -90 0 Z" fill="url(#topSand)" stroke="#B89A7A" stroke-width="0.6"/>
+          <path d="M -90 0 L 0 40 L 0 75 L -90 35 Z" fill="url(#leftSand)"/>
+          <path d="M 90 0 L 0 40 L 0 75 L 90 35 Z" fill="url(#rightSand)"/>
+          <!-- 小塔 -->
+          <path d="M 0 -40 L 0 -90" stroke="#C9A961" stroke-width="3"/>
+          <circle cx="0" cy="-90" r="6" fill="url(#gold)"/>
+          <path d="M 0 -90 L 35 -82 L 0 -74 Z" fill="#E8A830" opacity="0.85"/>
+          <circle cx="0" cy="-25" r="15" fill="#FFFFFF" opacity="0.95"/>
+          <text x="0" y="-20" text-anchor="middle" fill="#C9A961" font-size="13" font-family="serif" font-weight="bold">钱</text>
+        </g>
+        
+        <!-- ============== 左上远处风眼塔楼（较小，远景） ============== -->
+        <g transform="translate(140, 300)" opacity="0.8" filter="url(#softShadow)">
+          <path d="M 0 -35 L 45 -10 L 45 40 L 0 65 L -45 40 L -45 -10 Z" fill="#B97A7A" stroke="#8A5050" stroke-width="0.5"/>
+          <path d="M 0 -35 L 45 -10 L 0 15 L -45 -10 Z" fill="#D99A9A" stroke="#8A5050" stroke-width="0.5"/>
+          <path d="M 45 -10 L 0 15 L 0 65 L 45 40 Z" fill="#965A5A"/>
+          <path d="M 0 -35 L 0 -70" stroke="#8A5050" stroke-width="2"/>
+          <circle cx="0" cy="-70" r="3" fill="url(#gold)"/>
+          <circle cx="0" cy="-20" r="11" fill="#FFFFFF" opacity="0.9"/>
+          <text x="0" y="-16" text-anchor="middle" fill="#8A5050" font-size="10" font-family="serif" font-weight="bold">风</text>
+        </g>
+        
+        <!-- ============== 右上远处镜渊塔楼（远景） ============== -->
+        <g transform="translate(1000, 280)" opacity="0.75" filter="url(#softShadow)">
+          <path d="M 0 -30 L 40 -8 L 40 38 L 0 60 L -40 38 L -40 -8 Z" fill="#7C5CBF" stroke="#5A3F8A" stroke-width="0.5"/>
+          <path d="M 0 -30 L 40 -8 L 0 14 L -40 -8 Z" fill="#9B7FD4" stroke="#5A3F8A" stroke-width="0.5"/>
+          <path d="M 40 -8 L 0 14 L 0 60 L 40 38 Z" fill="#5A3F8A"/>
+          <path d="M 0 -30 L 0 -62" stroke="#5A3F8A" stroke-width="2"/>
+          <circle cx="0" cy="-62" r="3" fill="url(#gold)"/>
+          <circle cx="0" cy="-15" r="10" fill="#FFFFFF" opacity="0.9"/>
+          <text x="0" y="-11" text-anchor="middle" fill="#5A3F8A" font-size="9" font-family="serif" font-weight="bold">镜</text>
+        </g>
+        
+        <!-- ============== Bridges / 路径连接 ============== -->
+        <!-- 主平台 → 左薄荷塔楼 -->
+        <g>
+          <path d="M 430 480 L 290 420" stroke="#C9A961" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.7"/>
+          <path d="M 430 480 L 290 420" stroke="#FFFFFF" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-dasharray="4 4" opacity="0.4"/>
+        </g>
+        <!-- 主平台 → 右金棕塔楼 -->
+        <g>
+          <path d="M 670 480 L 670 560" stroke="#C9A961" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.7"/>
+          <path d="M 670 480 L 670 560" stroke="#FFFFFF" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-dasharray="4 4" opacity="0.4"/>
+        </g>
+        <!-- 主平台 → 右上靛蓝塔楼 -->
+        <g>
+          <path d="M 650 470 L 785 400" stroke="#C9A961" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.7"/>
+          <path d="M 650 470 L 785 400" stroke="#FFFFFF" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-dasharray="4 4" opacity="0.4"/>
+        </g>
+        <!-- 薄荷塔楼 → 粉珊瑚塔楼（阶梯） -->
+        <g opacity="0.6">
+          <path d="M 260 360 L 300 300" stroke="#B89A7A" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <line x1="270" y1="345" x2="280" y2="330" stroke="#B89A7A" stroke-width="2"/>
+          <line x1="280" y1="345" x2="292" y2="320" stroke="#B89A7A" stroke-width="2"/>
+        </g>
+        
+        <!-- 上升粒子 / 光点 -->
+        <g fill="#C9A961" opacity="0.5">
+          <circle cx="350" cy="520" r="2"/>
+          <circle cx="380" cy="480" r="1.5"/>
+          <circle cx="750" cy="500" r="2"/>
+          <circle cx="800" cy="460" r="1.5"/>
+          <circle cx="500" cy="350" r="1.5"/>
+          <circle cx="920" cy="340" r="2"/>
+        </g>
+        
+        <!-- 悬浮对话气泡（Agent 发言示意） -->
+        <g transform="translate(220, 280)" opacity="0.9">
+          <rect x="-55" y="-45" width="110" height="28" rx="14" fill="#FFFFFF" opacity="0.95" filter="url(#softShadow)"/>
+          <text x="0" y="-25" text-anchor="middle" fill="#5C8577" font-size="10" font-family="serif">此路收入更稳</text>
+          <path d="M -5 -17 L 0 -10 L 5 -17" fill="#FFFFFF"/>
+        </g>
+        <g transform="translate(860, 310)" opacity="0.85">
+          <rect x="-55" y="-45" width="110" height="28" rx="14" fill="#FFFFFF" opacity="0.95" filter="url(#softShadow)"/>
+          <text x="0" y="-25" text-anchor="middle" fill="#4D627A" font-size="10" font-family="serif">五年格局不利</text>
+          <path d="M -5 -17 L 0 -10 L 5 -17" fill="#FFFFFF"/>
+        </g>
+      </svg>
+    </div>
+    
+    <div class="palette-bar">
+      <div class="chip"><div class="chip-dot" style="background:#F5F0E8"></div>云雾白 #F5F0E8</div>
+      <div class="chip"><div class="chip-dot" style="background:#F7E8D4"></div>暖沙 #F7E8D4</div>
+      <div class="chip"><div class="chip-dot" style="background:#B8D4C8"></div>薄荷 #B8D4C8</div>
+      <div class="chip"><div class="chip-dot" style="background:#E8B4B4"></div>粉珊 #E8B4B4</div>
+      <div class="chip"><div class="chip-dot" style="background:#9FB4CC"></div>靛蓝 #9FB4CC</div>
+      <div class="chip"><div class="chip-dot" style="background:#C9A961"></div>沉金 #C9A961</div>
+      <div class="chip"><div class="chip-dot" style="background:#4A453D"></div>墨棕 #4A453D</div>
+    </div>
+  </div>
+  
+  <div class="divider"></div>
+  
+  <div class="section">
+    <div class="section-title">INTERACTION FLOW / 推演流程</div>
+    <div class="svg-wrap">
+      <svg viewBox="0 0 1000 420" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="flowBg" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#F5F0E8"/>
+            <stop offset="100%" stop-color="#EBE4DA"/>
+          </linearGradient>
+        </defs>
+        <rect width="1000" height="420" fill="url(#flowBg)" rx="20"/>
+        
+        <!-- 步骤 1：立卦 -->
+        <g transform="translate(120, 210)">
+          <circle cx="0" cy="0" r="45" fill="#F7E8D4" stroke="#C9A961" stroke-width="2"/>
+          <text x="0" y="6" text-anchor="middle" fill="#4A453D" font-size="16" font-family="serif" font-weight="bold">立卦</text>
+          <text x="0" y="75" text-anchor="middle" fill="#7A756D" font-size="11" font-family="serif">输入决策问题</text>
+        </g>
+        <path d="M 170 210 L 250 210" stroke="#C9A961" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        
+        <!-- 步骤 2：选 Agent -->
+        <g transform="translate(320, 210)">
+          <circle cx="0" cy="0" r="45" fill="#B8D4C8" stroke="#5C8577" stroke-width="2"/>
+          <text x="0" y="6" text-anchor="middle" fill="#4A453D" font-size="16" font-family="serif" font-weight="bold">选贤</text>
+          <text x="0" y="75" text-anchor="middle" fill="#7A756D" font-size="11" font-family="serif">演选 2-6 位 Agent</text>
+        </g>
+        <path d="M 370 210 L 450 210" stroke="#C9A961" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        
+        <!-- 步骤 3：问答 -->
+        <g transform="translate(520, 210)">
+          <circle cx="0" cy="0" r="45" fill="#E8B4B4" stroke="#A86A6A" stroke-width="2"/>
+          <text x="0" y="6" text-anchor="middle" fill="#4A453D" font-size="16" font-family="serif" font-weight="bold">问答</text>
+          <text x="0" y="75" text-anchor="middle" fill="#7A756D" font-size="11" font-family="serif">Agent 追问玩家</text>
+        </g>
+        <path d="M 570 210 L 650 210" stroke="#C9A961" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        
+        <!-- 步骤 4：聚议 -->
+        <g transform="translate(720, 210)">
+          <circle cx="0" cy="0" r="45" fill="#9FB4CC" stroke="#4D627A" stroke-width="2"/>
+          <text x="0" y="6" text-anchor="middle" fill="#4A453D" font-size="16" font-family="serif" font-weight="bold">聚议</text>
+          <text x="0" y="75" text-anchor="middle" fill="#7A756D" font-size="11" font-family="serif">六方分析塔楼升起</text>
+        </g>
+        <path d="M 770 210 L 850 210" stroke="#C9A961" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        
+        <!-- 步骤 5：定夺 -->
+        <g transform="translate(900, 210)">
+          <circle cx="0" cy="0" r="45" fill="#F7E8D4" stroke="#C9A961" stroke-width="2"/>
+          <text x="0" y="6" text-anchor="middle" fill="#4A453D" font-size="16" font-family="serif" font-weight="bold">定夺</text>
+          <text x="0" y="75" text-anchor="middle" fill="#7A756D" font-size="11" font-family="serif">选择 2-4 条出路</text>
+        </g>
+        
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M 0 0 L 8 3 L 0 6" fill="none" stroke="#C9A961" stroke-width="1.5"/>
+          </marker>
+        </defs>
+        
+        <text x="500" y="360" text-anchor="middle" fill="#9A958D" font-size="12" font-family="ui-monospace, monospace" letter-spacing="0.1em">循环往复，直至终点</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="notes">
+    <h4>视觉升级点（相对上一版）</h4>
+    <ul>
+      <li><strong>柔和色板：</strong>从黑金虚空改为纪念碑谷标志性的暖沙、薄荷、粉珊、靛蓝，整体明亮克制。</li>
+      <li><strong>塔楼建筑：</strong>每个 Agent 对应一座等距塔楼，带尖顶、拱门、小旗，不再是孤立方块。</li>
+      <li><strong>云雾背景：</strong>多层柔和云雾 + 远山剪影，增强浮空感与空间深度。</li>
+      <li><strong>小人物剪影：</strong>白袍小人在主平台行走，参考艾达的标志性造型。</li>
+      <li><strong>Bridges 连接：</strong>金色实线 + 虚线叠加，表示已揭示的路径；远处仍有淡色阶梯。</li>
+      <li><strong>对话气泡：</strong>Agent 发言时塔楼旁浮现圆角气泡，文字为具体建议。</li>
+      <li><strong>装饰纹样：</strong>主平台中心有几何花纹，塔楼有拱门和尖顶细节，克制不花哨。</li>
+    </ul>
+    <h4>推演流程</h4>
+    <ul>
+      <li><strong>立卦：</strong>玩家输入决策问题</li>
+      <li><strong>选贤：</strong>演 Agent 根据问题标签选择 2-6 位 Agent 参与</li>
+      <li><strong>问答：</strong>Agent 轮流追问玩家，玩家回答</li>
+      <li><strong>聚议：</strong>所有 Agent 发言完毕，对应塔楼从云雾中升起</li>
+      <li><strong>定夺：</strong>演汇总生成 2-4 条路径 Bridge，玩家选择其一</li>
+      <li>角色移动到选中塔楼，新的云雾升起，循环</li>
+    </ul>
+  </div>
+</body>
+</html>

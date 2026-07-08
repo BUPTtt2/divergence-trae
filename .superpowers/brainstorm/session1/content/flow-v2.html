@@ -1,0 +1,143 @@
+<h2>交互流程 · 问答-分析-汇-揭雾</h2>
+<p class="subtitle">基于你的反馈重新设计：先问后析，全局 Agent 动态决定路径数</p>
+
+<div class="mockup">
+  <div class="mockup-header">每一层节点的完整流程</div>
+  <div class="mockup-body" style="background:#1A1510;padding:24px">
+    <svg viewBox="0 0 520 260" style="width:100%;height:auto;display:block">
+      <defs>
+        <marker id="arrow" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+          <polygon points="0,0 6,2 0,4" fill="#E8A830"/>
+        </marker>
+      </defs>
+      
+      <!-- 5个阶段 -->
+      <g font-family="serif" font-size="10" fill="#E8D5B7">
+        <!-- 阶段1：到达 -->
+        <g>
+          <rect x="10" y="110" width="52" height="40" rx="2" fill="none" stroke="#8B7355" stroke-width="0.8"/>
+          <text x="36" y="128" text-anchor="middle" fill="#8B7355">到达</text>
+          <text x="36" y="140" text-anchor="middle" fill="#554535" font-size="7">第 N 层</text>
+        </g>
+        
+        <path d="M 62 130 L 82 130" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow)"/>
+        
+        <!-- 阶段2：问答 -->
+        <g>
+          <rect x="82" y="85" width="80" height="90" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="122" y="103" text-anchor="middle" fill="#E8A830" font-weight="bold">问答阶段</text>
+          <line x1="90" y1="110" x2="154" y2="110" stroke="#2A2018" stroke-width="0.5"/>
+          <text x="122" y="122" text-anchor="middle" fill="#8B7355" font-size="7">Agent 提问</text>
+          <text x="122" y="132" text-anchor="middle" fill="#E8D5B7" font-size="7">💬 玩家回答</text>
+          <text x="122" y="142" text-anchor="middle" fill="#8B7355" font-size="7">继续追问？</text>
+          <text x="122" y="152" text-anchor="middle" fill="#554535" font-size="6">约 2-3 轮</text>
+        </g>
+        
+        <path d="M 162 130 L 182 130" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow)"/>
+        
+        <!-- 阶段3：六方分析 -->
+        <g>
+          <rect x="182" y="70" width="110" height="120" rx="2" fill="none" stroke="#E8A830" stroke-width="1"/>
+          <text x="237" y="88" text-anchor="middle" fill="#E8A830" font-weight="bold">六方推演</text>
+          <line x1="190" y1="95" x2="284" y2="95" stroke="#2A2018" stroke-width="0.5"/>
+          
+          <!-- 6个 agent 小图标 -->
+          <g font-size="6">
+            <circle cx="200" cy="110" r="8" fill="none" stroke="#E8A830" stroke-width="0.5"/>
+            <text x="200" y="112" text-anchor="middle" fill="#E8A830">钱</text>
+            <text x="215" y="112" fill="#8B7355">财务视角</text>
+            
+            <circle cx="200" cy="128" r="8" fill="none" stroke="#00A86B" stroke-width="0.5"/>
+            <text x="200" y="130" text-anchor="middle" fill="#00A86B">路</text>
+            <text x="215" y="130" fill="#8B7355">职业路径</text>
+            
+            <circle cx="200" cy="146" r="8" fill="none" stroke="#D94F4F" stroke-width="0.5"/>
+            <text x="200" y="148" text-anchor="middle" fill="#D94F4F">风</text>
+            <text x="215" y="148" fill="#8B7355">风险评估</text>
+            
+            <circle cx="275" cy="110" r="8" fill="none" stroke="#C77DBA" stroke-width="0.5"/>
+            <text x="275" y="112" text-anchor="middle" fill="#C77DBA">心</text>
+            <text x="250" y="112" fill="#8B7355" text-anchor="end">情感</text>
+            
+            <circle cx="275" cy="128" r="8" fill="none" stroke="#7C5CBF" stroke-width="0.5"/>
+            <text x="275" y="130" text-anchor="middle" fill="#7C5CBF">镜</text>
+            <text x="250" y="130" fill="#8B7355" text-anchor="end">内省</text>
+            
+            <circle cx="275" cy="146" r="8" fill="none" stroke="#4A90D9" stroke-width="0.5"/>
+            <text x="275" y="148" text-anchor="middle" fill="#4A90D9">云</text>
+            <text x="250" y="148" fill="#8B7355" text-anchor="end">宏观</text>
+          </g>
+          <text x="237" y="170" text-anchor="middle" fill="#554535" font-size="6">六位谋士各自独立分析</text>
+        </g>
+        
+        <path d="M 292 130 L 312 130" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow)"/>
+        
+        <!-- 阶段4：全局汇总 -->
+        <g>
+          <rect x="312" y="90" width="76" height="80" rx="2" fill="#E8A830" opacity="0.1" stroke="#E8A830" stroke-width="1"/>
+          <text x="350" y="108" text-anchor="middle" fill="#E8A830" font-weight="bold">全局汇总</text>
+          <line x1="320" y1="115" x2="380" y2="115" stroke="#2A2018" stroke-width="0.5"/>
+          <text x="350" y="128" text-anchor="middle" fill="#8B7355" font-size="7">汇总六方意见</text>
+          <text x="350" y="138" text-anchor="middle" fill="#E8D5B7" font-size="7">动态生成路径</text>
+          <text x="350" y="148" text-anchor="middle" fill="#E8A830" font-size="7">2-4 条出路</text>
+          <text x="350" y="162" text-anchor="middle" fill="#554535" font-size="6">由 " 演 " 主持</text>
+        </g>
+        
+        <path d="M 388 130 L 408 130" stroke="#E8A830" stroke-width="0.8" marker-end="url(#arrow)"/>
+        
+        <!-- 阶段5：选择 -->
+        <g>
+          <rect x="408" y="100" width="92" height="60" rx="2" fill="#E8A830" opacity="0.15" stroke="#E8A830" stroke-width="1"/>
+          <text x="454" y="118" text-anchor="middle" fill="#E8A830" font-weight="bold">选择前行</text>
+          <line x1="416" y1="125" x2="492" y2="125" stroke="#2A2018" stroke-width="0.5"/>
+          <text x="454" y="138" text-anchor="middle" fill="#8B7355" font-size="7">玩家选一条路</text>
+          <text x="454" y="148" text-anchor="middle" fill="#E8D5B7" font-size="7">◇ → ◇</text>
+        </g>
+      </g>
+      
+      <!-- 层分隔 -->
+      <line x1="10" y1="200" x2="510" y2="200" stroke="#2A2018" stroke-width="0.5"/>
+      <text x="36" y="215" text-anchor="middle" fill="#554535" font-size="7" font-family="monospace">第 N 层节点</text>
+      <text x="454" y="215" text-anchor="middle" fill="#554535" font-size="7" font-family="monospace">第 N+1 层节点</text>
+      
+      <!-- 底注 -->
+      <text x="260" y="245" text-anchor="middle" fill="#554535" font-size="7">
+        关键变化：路径数量不固定，由全局 Agent 根据六方分析动态生成
+      </text>
+    </svg>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px">
+  <p class="label">需要确认的几个细节</p>
+  <div class="options" data-multiselect style="margin-top:12px">
+    <div class="option" data-choice="q1" onclick="toggleSelect(this)">
+      <div class="letter">Q1</div>
+      <div class="content">
+        <h3>全局 Agent 是哪一位？</h3>
+        <p>是单独的"演"（主持者角色），还是六位中的一位（比如云图/宏观视角）兼任？</p>
+      </div>
+    </div>
+    <div class="option" data-choice="q2" onclick="toggleSelect(this)">
+      <div class="letter">Q2</div>
+      <div class="content">
+        <h3>每节点问答几轮？</h3>
+        <p>是固定 2-3 轮，还是玩家可以随时说"够了，开始分析"？</p>
+      </div>
+    </div>
+    <div class="option" data-choice="q3" onclick="toggleSelect(this)">
+      <div class="letter">Q3</div>
+      <div class="content">
+        <h3>路径数量范围？</h3>
+        <p>最少 2 条最多 4 条？还是更极端（1-5 条）？太少没选择感，太多 overwhelm。</p>
+      </div>
+    </div>
+    <div class="option" data-choice="q4" onclick="toggleSelect(this)">
+      <div class="letter">Q4</div>
+      <div class="content">
+        <h3>揭雾的视觉仪式？</h3>
+        <p>路径出现时做什么动效——墨滴扩散？翻牌？光束扫描？</p>
+      </div>
+    </div>
+  </div>
+</div>
