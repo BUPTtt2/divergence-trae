@@ -87,6 +87,11 @@ export function optionalAuth(req, res, next) {
   next();
 }
 
+export function publicAuth(req, res, next) {
+  req.userId = null;
+  next();
+}
+
 export function requireOwner(paramName) {
   return (req, res, next) => {
     const userId = extractUserId(req);

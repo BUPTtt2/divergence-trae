@@ -6,7 +6,7 @@ import { chatWithYan, streamChatWithYan, getDailyGua } from '../services/yanChat
 import { getRecentMessages, retrieveMemories, getUserProfile } from '../services/memoryService.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { llmRateLimit } from '../middleware/rateLimit.js';
-import { requireUser, optionalAuth } from '../middleware/auth.js';
+import { requireUser, optionalAuth, publicAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -17,7 +17,7 @@ const router = Router();
  */
 router.post(
   '/chat',
-  optionalAuth,
+  publicAuth,
   llmRateLimit,
   asyncHandler(async (req, res) => {
     const { message, conversationId, history } = req.body;
@@ -49,7 +49,7 @@ router.post(
  */
 router.post(
   '/chat/stream',
-  optionalAuth,
+  publicAuth,
   llmRateLimit,
   asyncHandler(async (req, res) => {
     const { message, conversationId, history } = req.body;
@@ -124,7 +124,7 @@ router.get(
  */
 router.get(
   '/memories',
-  optionalAuth,
+  publicAuth,
   asyncHandler(async (req, res) => {
     if (!req.userId) {
       return res.json({ memories: [], profile: {} });
