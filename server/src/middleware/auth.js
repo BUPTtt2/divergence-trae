@@ -70,7 +70,17 @@ export function requireUser(req, res, next) {
 export function optionalAuth(req, res, next) {
   const userId = extractUserId(req);
   if (userId && typeof userId === 'string' && userId.length <= 100) {
-    req.userId = userId;
+    if (process.env.NODE_ENV === 'production') {
+      const sigResult = validateSignature(req);
+      if (!sigResult.valid) {
+        console.warn('[auth] 签名验证失败，但允许匿名访问:', sigResult.reason);
+        req.userId = null;
+      } else {
+        req.userId = userId;
+      }
+    } else {
+      req.userId = userId;
+    }
   } else {
     req.userId = null;
   }
