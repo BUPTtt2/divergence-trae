@@ -1,8 +1,9 @@
 import { motion, useReducedMotion } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { SCENARIOS } from '../data/scripts';
 import Bagua from '../components/fx/Bagua';
 import SpotlightCard from '../components/fx/Spotlight';
+import AppNav from '../components/AppNav';
 
 const T = {
   paper: '#F2EDE0',
@@ -24,38 +25,17 @@ export default function Scenarios() {
 
   return (
     <div className="min-h-screen overflow-x-hidden" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}>
+      <AppNav variant="light" />
       {/* 顶部条 */}
-      <div className="text-center py-2 px-4" style={{ backgroundColor: T.ink }}>
+      <div className="pt-14 text-center py-2 px-4" style={{ backgroundColor: T.ink }}>
         <span className="text-[10px] font-mono tracking-wide">
-          <button onClick={() => navigate('/')} className="hover:underline" style={{ color: T.muted }}>← 返回首页</button>
-          <span className="mx-3" style={{ color: '#444' }}>|</span>
           <span style={{ color: '#999' }}>选局 / SELECT SCENARIO</span>
           <span className="mx-3" style={{ color: '#444' }}>|</span>
           <span style={{ color: T.accent }}>1 / 4 已启</span>
         </span>
       </div>
 
-      {/* 导航 */}
-      <nav className="sticky top-0 z-50 border-b" style={{ backgroundColor: `${T.paper}E6`, backdropFilter: 'blur(14px)', borderColor: T.border }}>
-        <div className="max-w-[1200px] mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 flex items-center justify-center text-[13px] font-serif font-bold" style={{ color: T.accent, border: `1.5px solid ${T.ink}`, borderRadius: 3, backgroundColor: T.paperLight }}>演</div>
-            <div className="flex flex-col leading-none">
-              <span className="text-sm font-serif font-semibold">演策</span>
-              <span className="text-[8px] font-mono tracking-[0.2em] mt-0.5" style={{ color: T.muted }}>YAN CE / BAGUA ENGINE</span>
-            </div>
-          </div>
-          <motion.button
-            whileHover={{ y: -1 }}
-            whileTap={{ scale: 0.97 }}
-            onClick={() => navigate('/sandbox')}
-            className="px-4 py-2 text-[11px] font-medium text-white"
-            style={{ backgroundColor: T.ink, borderRadius: 3 }}
-          >
-            立卦开演 →
-          </motion.button>
-        </div>
-      </nav>
+      <Navbar activeIndex={2} />
 
       {/* Hero */}
       <section className="relative overflow-hidden px-6 pt-20 pb-12">
@@ -167,8 +147,15 @@ export default function Scenarios() {
 
       {/* Footer */}
       <footer className="border-t py-8 px-6" style={{ borderColor: T.border }}>
-        <div className="max-w-[1200px] mx-auto flex items-center justify-between">
+        <div className="max-w-[1200px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <span className="text-[11px] font-mono" style={{ color: T.muted }}>演策 / BAGUA ENGINE</span>
+          <div className="flex items-center gap-3">
+            <Link to="/legal" className="text-[10px] hover:underline" style={{ color: T.muted }}>用户协议</Link>
+            <span style={{ color: T.border }}>|</span>
+            <Link to="/privacy" className="text-[10px] hover:underline" style={{ color: T.muted }}>隐私政策</Link>
+            <span style={{ color: T.border }}>|</span>
+            <span className="text-[10px]" style={{ color: T.muted, opacity: 0.6 }}>京ICP备XXXXXXXX号</span>
+          </div>
           <span className="text-[10px] font-mono" style={{ color: T.muted }}>MIT License / Open Source</span>
         </div>
       </footer>

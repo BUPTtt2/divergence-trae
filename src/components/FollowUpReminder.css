@@ -1,0 +1,20 @@
+.follow-up-reminder {
+  font-family: "Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif;
+}
+
+.follow-up-reminder ::-webkit-scrollbar {
+  width: 6px;
+}
+
+.follow-up-reminder ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.follow-up-reminder ::-webkit-scrollbar-thumb {
+  background: rgba(200, 168, 80, 0.3);
+  border-radius: 3px;
+}
+
+.follow-up-reminder ::-webkit-scrollbar-thumb:hover {
+  background: rgba(200, 168, 80, 0.5);
+}

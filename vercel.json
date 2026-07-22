@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "services": {
+    "web": {
+      "root": ".",
+      "buildCommand": "npm run build",
+      "outputDirectory": "dist",
+      "framework": "vite"
+    },
+    "api": {
+      "root": "server",
+      "buildCommand": "npm install",
+      "devCommand": "node index.js",
+      "entrypoint": "index.js"
+    }
+  },
+  "routes": [
+    { "src": "/api/(.*)", "dest": "api" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/" }
+  ]
+}

@@ -14,6 +14,7 @@ export default function GameBoard({
   userInput,
   showQuestion,
   inference,
+  yanOptions,
 }) {
   return (
     <div className="relative w-full h-full" style={{ background: '#1A1410' }}>
@@ -54,6 +55,7 @@ export default function GameBoard({
           userInput={userInput}
           showQuestion={showQuestion}
           inference={inference}
+          yanOptions={yanOptions}
         />
       </Canvas>
     </div>

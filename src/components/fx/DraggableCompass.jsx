@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import UserAvatar from '../UserAvatar';
 
 /* =================================================================
    可拖拽八卦罗盘 (悬浮在所有页面上)
@@ -42,13 +43,13 @@ const KEYWORD_TO_GUA = [
   { kws: ['愤怒', '冲动', '爆发', '立刻', '马上'], gua: '震' },
 ];
 
-/* 4 个核心工具 + 返回按钮 */
+/* 4 个核心工具 + 返回按钮 + 我 */
 const TOOLS = [
   { id: 'back',   label: '返回', desc: '返回上一页',        rune: '☶', color: '#7A7468' },
   { id: 'cast',   label: '投卦', desc: '三枚铜钱立一卦',    rune: '☰', color: '#A8472E' },
-  { id: 'unpack', label: '解卦', desc: '输入问题,智能配卦',  rune: '☵', color: '#A8472E' },
-  { id: 'daily',  label: '日签', desc: '今日一卦,日日换新',  rune: '☲', color: '#A8472E' },
+  { id: 'yan',    label: '问演', desc: '与演对话,问疑解惑',  rune: '演', color: '#A8472E' },
   { id: 'note',   label: '落笔', desc: '此刻所感,落于灵台',  rune: '☱', color: '#7A7468' },
+  { id: 'profile',label: '我',   desc: '个人资料与设置',     rune: '☯', color: '#A8472E' },
   { id: 'lock',   label: '镇纸', desc: '再点解除,固定位置',  rune: '☳', color: '#7A7468' },
   { id: 'hide',   label: '隐',   desc: '再点召回,Shift+H',   rune: '☴', color: '#7A7468' },
 ];
@@ -87,6 +88,7 @@ export default function DraggableCompass() {
   const [locked, setLocked] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [unpackOpen, setUnpackOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [unpackQ, setUnpackQ] = useState('');
   const [noteText, setNoteText] = useState('');
   const [noteCount, setNoteCount] = useState(0);
@@ -332,15 +334,16 @@ export default function DraggableCompass() {
     } else if (toolId === 'cast') {
       setMenuOpen(false);
       handleCast();
-    } else if (toolId === 'unpack') {
+    } else if (toolId === 'yan') {
+      // 问演: 打开全局"演"对话浮窗(功能从固定按钮迁移至此)
       setMenuOpen(false);
-      setUnpackOpen(true);
-    } else if (toolId === 'daily') {
-      setMenuOpen(false);
-      handleDaily();
+      window.dispatchEvent(new CustomEvent('yance:open-yanchat', { bubbles: true }));
     } else if (toolId === 'note') {
       setMenuOpen(false);
       setNoteOpen(true);
+    } else if (toolId === 'profile') {
+      setMenuOpen(false);
+      setProfileOpen(true);
     } else if (toolId === 'lock') {
       const willLock = !locked;
       setLocked(willLock);
@@ -430,7 +433,7 @@ export default function DraggableCompass() {
       );
     }
     if (mode === 'shu') {
-      return <span style={{ fontFamily: '"Ma Shan Zheng", serif', fontSize: 24, color: '#1A1410' }}>演</span>;
+      return <span style={{ fontFamily: '"Ma Shan Zheng", serif', fontSize: 24, color: '#1A1410' }}>书</span>;
     }
     if (mode === 'brush') {
       return <span style={{ fontFamily: '"Ma Shan Zheng", serif', fontSize: 24, color: '#1A1410' }}>笔</span>;
@@ -864,19 +867,32 @@ export default function DraggableCompass() {
                 }}
               >收</button>
             </div>
-            {noteCount > 0 && (
-              <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px dashed rgba(168,71,46,0.2)' }}>
-                <div style={{ fontSize: 9, color: '#7A7468', marginBottom: 3 }}>近 记</div>
-                {JSON.parse(localStorage.getItem(NOTES_KEY) || '[]').slice(0, 2).map((n, i) => (
-                  <div key={i} style={{ fontSize: 10, color: '#3A2E1E', fontFamily: '"Ma Shan Zheng", serif', lineHeight: 1.5, marginBottom: 2 }}>
-                    · {n.text}
-                  </div>
-                ))}
-              </div>
-            )}
+            {noteCount > 0 && (() => {
+              let recentNotes = [];
+              try {
+                recentNotes = JSON.parse(localStorage.getItem(NOTES_KEY) || '[]').slice(0, 2);
+              } catch { recentNotes = []; }
+              return (
+                <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px dashed rgba(168,71,46,0.2)' }}>
+                  <div style={{ fontSize: 9, color: '#7A7468', marginBottom: 3 }}>近 记</div>
+                  {recentNotes.map((n, i) => (
+                    <div key={i} style={{ fontSize: 10, color: '#3A2E1E', fontFamily: '"Ma Shan Zheng", serif', lineHeight: 1.5, marginBottom: 2 }}>
+                      · {n.text}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </motion.div>
         )}
       </AnimatePresence>
+
+      {profileOpen && (
+        <UserAvatar
+          showModal={profileOpen}
+          onModalClose={() => setProfileOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { COLORS } from './layoutConfig';
+import { getCustomAgents, saveCustomAgent, generateCustomAgent, validateAgentName, validateAgentDesc } from '../../utils/customAgent';
 
 /**
  * Agent / 演 对话浮层
@@ -8,7 +9,287 @@ import { COLORS } from './layoutConfig';
  * - summary / path_reveal 阶段显示演 的总结
  * - 无框、居中、字距宽松，带打字机效果
  */
-export default function AgentDialogueOverlay({ phase, activeAgentIdx, activeAgents, agentDialogues }) {
+export default function AgentDialogueOverlay({ phase, activeAgentIdx, activeAgents, agentDialogues, selectedAgentIds, onAgentToggle, onConfirmAgents }) {
+  const [customAgents, setCustomAgents] = useState([]);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newAgentName, setNewAgentName] = useState('');
+  const [newAgentDesc, setNewAgentDesc] = useState('');
+  const [createError, setCreateError] = useState('');
+
+  useEffect(() => {
+    if (phase === 'agent_select') {
+      setCustomAgents(getCustomAgents());
+    }
+  }, [phase]);
+
+  const handleCreateAgent = () => {
+    const nameValidation = validateAgentName(newAgentName, [...customAgents, ...(activeAgents || [])]);
+    if (!nameValidation.valid) {
+      setCreateError(nameValidation.message);
+      return;
+    }
+    const descValidation = validateAgentDesc(newAgentDesc);
+    if (!descValidation.valid) {
+      setCreateError(descValidation.message);
+      return;
+    }
+
+    const newAgent = generateCustomAgent(newAgentName, newAgentDesc);
+    const saved = saveCustomAgent(newAgent);
+    if (saved) {
+      setCustomAgents([saved, ...customAgents]);
+      setNewAgentName('');
+      setNewAgentDesc('');
+      setCreateError('');
+      setShowCreateForm(false);
+    } else {
+      setCreateError('创建失败，请重试');
+    }
+  };
+
+  const handleCancelCreate = () => {
+    setShowCreateForm(false);
+    setNewAgentName('');
+    setNewAgentDesc('');
+    setCreateError('');
+  };
+
+  if (phase === 'agent_select') {
+    if (!activeAgents || activeAgents.length === 0) return null;
+    const presetAgents = activeAgents.filter((a) => a.role !== 'master');
+    const allAgents = [...presetAgents, ...customAgents];
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, x: 100 }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={{ opacity: 0, x: 100 }}
+        transition={{ duration: 0.5 }}
+        style={{
+          position: 'absolute',
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: '320px',
+          background: 'rgba(10, 10, 15, 0.9)',
+          backdropFilter: 'blur(10px)',
+          borderLeft: '1px solid #C8A85030',
+          padding: '24px',
+          zIndex: 30,
+          overflowY: 'auto',
+        }}
+      >
+        <div style={{ marginBottom: '20px', textAlign: 'center' }}>
+          <div style={{ fontSize: '18px', color: '#F0D890', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.2em' }}>择智</div>
+          <div style={{ fontSize: '12px', color: '#888', marginTop: '8px' }}>请选择智囊参与辩论</div>
+        </div>
+
+        {showCreateForm ? (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            style={{
+              background: 'rgba(40, 35, 30, 0.8)',
+              border: '1px solid #C8A85030',
+              borderRadius: '8px',
+              padding: '16px',
+              marginBottom: '16px',
+            }}
+          >
+            <div style={{ fontSize: '14px', color: '#F0D890', fontWeight: '600', marginBottom: '12px', textAlign: 'center' }}>创建自定义智囊</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <input
+                type="text"
+                placeholder="智囊名称"
+                value={newAgentName}
+                onChange={(e) => { setNewAgentName(e.target.value); setCreateError(''); }}
+                style={{
+                  padding: '8px 12px',
+                  background: 'rgba(20, 15, 10, 0.8)',
+                  border: '1px solid #3A3530',
+                  borderRadius: '4px',
+                  color: '#F0EDE5',
+                  fontSize: '13px',
+                  outline: 'none',
+                }}
+              />
+              <textarea
+                placeholder="描述（可选）"
+                value={newAgentDesc}
+                onChange={(e) => { setNewAgentDesc(e.target.value); setCreateError(''); }}
+                rows={3}
+                style={{
+                  padding: '8px 12px',
+                  background: 'rgba(20, 15, 10, 0.8)',
+                  border: '1px solid #3A3530',
+                  borderRadius: '4px',
+                  color: '#F0EDE5',
+                  fontSize: '13px',
+                  outline: 'none',
+                  resize: 'none',
+                }}
+              />
+              {createError && (
+                <div style={{ color: '#E88080', fontSize: '11px', textAlign: 'center' }}>{createError}</div>
+              )}
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                <button
+                  onClick={handleCancelCreate}
+                  style={{
+                    flex: 1,
+                    padding: '8px',
+                    background: 'rgba(60, 55, 50, 0.5)',
+                    border: '1px solid #3A3530',
+                    borderRadius: '4px',
+                    color: '#888',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleCreateAgent}
+                  style={{
+                    flex: 1,
+                    padding: '8px',
+                    background: '#C8A850',
+                    border: 'none',
+                    borderRadius: '4px',
+                    color: '#1a1a1a',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                  }}
+                >
+                  创建
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        ) : (
+          <motion.button
+            onClick={() => setShowCreateForm(true)}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            style={{
+              width: '100%',
+              padding: '10px',
+              background: 'rgba(60, 55, 50, 0.3)',
+              border: '1px dashed #C8A85050',
+              borderRadius: '4px',
+              color: '#C8A850',
+              fontSize: '13px',
+              cursor: 'pointer',
+              marginBottom: '16px',
+            }}
+          >
+            + 自定义智囊
+          </motion.button>
+        )}
+
+        {presetAgents.length > 0 && (
+          <div>
+            <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px', letterSpacing: '0.1em' }}>预设智囊</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {presetAgents.map((agent) => {
+                const isSelected = selectedAgentIds?.has(agent.id);
+                const color = COLORS.agent[agent.id] || { main: agent.color || '#C8A850', glow: agent.glow || '#F0D890' };
+                return (
+                  <motion.button
+                    key={agent.id}
+                    onClick={() => onAgentToggle?.(agent.id)}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    style={{
+                      padding: '10px 14px',
+                      textAlign: 'left',
+                      background: isSelected ? `${color.glow}20` : 'rgba(60, 55, 50, 0.5)',
+                      border: `1px solid ${isSelected ? color.main : '#3A3530'}`,
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                    }}
+                  >
+                    <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: isSelected ? color.main : '#555' }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ color: color.main, fontSize: '13px', fontWeight: '600' }}>{agent.name}</div>
+                      <div style={{ color: '#888', fontSize: '11px' }}>{agent.stance}</div>
+                    </div>
+                    <div style={{ color: isSelected ? color.main : '#555', fontSize: '14px' }}>{isSelected ? '✓' : ''}</div>
+                  </motion.button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {customAgents.length > 0 && (
+          <div style={{ marginTop: '16px' }}>
+            <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px', letterSpacing: '0.1em' }}>我的智囊</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {customAgents.map((agent) => {
+                const isSelected = selectedAgentIds?.has(agent.id);
+                const color = { main: agent.color || '#C8A850', glow: agent.glow || '#F0D890' };
+                return (
+                  <motion.button
+                    key={agent.id}
+                    onClick={() => onAgentToggle?.(agent.id)}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    style={{
+                      padding: '10px 14px',
+                      textAlign: 'left',
+                      background: isSelected ? `${color.glow}20` : 'rgba(60, 55, 50, 0.5)',
+                      border: `1px solid ${isSelected ? color.main : '#3A3530'}`,
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                    }}
+                  >
+                    <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: isSelected ? color.main : '#555' }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ color: color.main, fontSize: '13px', fontWeight: '600' }}>{agent.name}</div>
+                      <div style={{ color: '#888', fontSize: '11px' }}>{agent.stance}</div>
+                    </div>
+                    <div style={{ color: isSelected ? color.main : '#555', fontSize: '14px' }}>{isSelected ? '✓' : ''}</div>
+                  </motion.button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <motion.button
+          onClick={() => onConfirmAgents?.()}
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          style={{
+            marginTop: '24px',
+            width: '100%',
+            padding: '12px',
+            background: '#C8A850',
+            border: 'none',
+            borderRadius: '4px',
+            color: '#1a1a1a',
+            fontSize: '14px',
+            fontWeight: '600',
+            cursor: 'pointer',
+            fontFamily: '"Ma Shan Zheng", serif',
+            letterSpacing: '0.1em',
+          }}
+        >
+          确认选择，开始辩论
+        </motion.button>
+      </motion.div>
+    );
+  }
+
   // agent_debate 阶段 - 当前发言 Agent
   if (phase === 'agent_debate') {
     if (activeAgentIdx < 0) return null;
@@ -26,13 +307,19 @@ export default function AgentDialogueOverlay({ phase, activeAgentIdx, activeAgen
     );
   }
 
-  // summary / path_reveal 阶段 - 演 的总结
-  if (phase === 'summary' || phase === 'path_reveal') {
+  // yan_analyze / reflecting / summary / path_reveal 阶段 - 演 的发言
+  if (phase === 'yan_analyze' || phase === 'reflecting' || phase === 'summary' || phase === 'path_reveal') {
     const dialogue = agentDialogues?.yan;
     if (!dialogue) return null;
     const color = COLORS.agent.yan;
+    const stances = {
+      yan_analyze: '析问定策',
+      reflecting: '反思汇聚',
+      summary: '梳理总结',
+      path_reveal: '总揽全局',
+    };
     return (
-      <DialogueFrame key={phase} color={color} name="演" stance="总揽全局" progress="">
+      <DialogueFrame key={phase} color={color} name="演" stance={stances[phase]} progress="">
         <TypewriterText text={dialogue} agentColor={color} />
       </DialogueFrame>
     );

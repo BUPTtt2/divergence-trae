@@ -6,15 +6,16 @@ const GLOW_COLOR = '#F0D890';
 
 /**
  * 完整推演流程节点
- * input → analyzing → summoning → agent_debate → summary → branch_select → path_reveal → final
+ * input → casting → summoning → yan_analyze → agent_debate → summary → branch_select → path_reveal → final
  */
 const FLOW_STEPS = [
   { key: 'analyzing',    label: '立卦',  short: '一' },
   { key: 'summoning',    label: '召唤',  short: '二' },
-  { key: 'agent_debate', label: '诸智',  short: '三' },
-  { key: 'summary',      label: '梳理',  short: '四' },
-  { key: 'branch_select',label: '抉择',  short: '五' },
-  { key: 'final',        label: '定论',  short: '六' },
+  { key: 'yan_analyze',  label: '析问',  short: '三' },
+  { key: 'agent_debate', label: '诸智',  short: '四' },
+  { key: 'summary',      label: '梳理',  short: '五' },
+  { key: 'branch_select',label: '抉择',  short: '六' },
+  { key: 'final',        label: '定论',  short: '七' },
 ];
 
 // 各阶段在流程中的索引（用于判定 active / done）
@@ -27,11 +28,13 @@ function getCurrentIndex(phase) {
   if (phase === 'input') return -1;
   // casting 与 analyzing 共属「立卦」节点
   if (phase === 'casting' || phase === 'analyzing') return STEP_INDEX.analyzing;
+  // agent_select 选智囊属于「析问」节点
+  if (phase === 'agent_select') return STEP_INDEX.yan_analyze;
   // reflecting 属于「梳理」节点
   if (phase === 'reflecting') return STEP_INDEX.summary;
   // committing 属于「抉择」节点
   if (phase === 'committing' || phase === 'oracle_prompt' || phase === 'oracle') return STEP_INDEX.branch_select;
-  if (phase === 'path_reveal') return STEP_INDEX.branch_select; // 与 branch_select 同一节点（已选）
+  if (phase === 'path_reveal') return STEP_INDEX.branch_select;
   return STEP_INDEX[phase] ?? 0;
 }
 

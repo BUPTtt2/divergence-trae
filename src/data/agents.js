@@ -124,6 +124,10 @@ export const AGENTS = [
   },
 ];
 
+export function getAgents() {
+  return AGENTS;
+}
+
 export const AGENT_MAP = Object.fromEntries(AGENTS.map(a => [a.id, a]));
 export const AGENT_ORDER = ['qiangu', 'luxiang', 'fengyan', 'xinhe', 'jingyuan', 'yuntu', 'zhenxing', 'duiyan'];
 

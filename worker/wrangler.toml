@@ -1,0 +1,44 @@
+# Cloudflare Workers 配置
+# 部署前需要：
+# 1. wrangler login
+# 2. wrangler d1 create yance-bagua  → 把生成的 database_id 填到下方
+# 3. wrangler d1 create yance-bagua-session  → 可选，会话存储用 KV 更佳
+# 4. wrangler kv:namespace create SESSIONS  → 把生成的 id 填到下方
+# 5. wrangler d1 execute yance --remote --file=./migrations/0001_init.sql
+# 6. wrangler deploy
+# 7. 把生成的 workers.dev 域名更新到前端 .env.production 的 VITE_API_BASE
+
+name = "yance-bagua-engine"
+main = "src/index.js"
+compatibility_date = "2026-07-14"
+compatibility_flags = ["nodejs_compat"]
+
+# 生产环境变量（敏感值用 wrangler secret put 设置，不要写在这里）
+[vars]
+ENV = "production"
+CORS_ORIGIN = "https://yance-bagua.surge.sh,https://yance-bagua.pages.dev,https://windy-chin.surge.sh,http://localhost:5173,http://localhost:4173,http://localhost:4176"
+LLM_PROVIDER = "openai"
+LLM_MODEL = "glm-4-flash"
+LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
+
+# D1 数据库绑定
+[[d1_databases]]
+binding = "DB"
+database_name = "yance-bagua"
+database_id = "29546dde-3240-4531-9509-66ca1676b928"
+
+# KV 命名空间 — 用于 rate limit / session cache
+[[kv_namespaces]]
+binding = "KV"
+id = "14efa6378de242748b735801c9638d27"
+
+# Workers 配置（免费计划不支持自定义 cpu_ms，默认 10ms）
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# 部署路由（可选，绑定自定义域名时使用）
+# routes = [
+#   { pattern = "api.yance-bagua.com/*", zone_name = "yance-bagua.com" }
+# ]

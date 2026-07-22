@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useGame } from '../../context/GameContext';
 import { useSound } from '../../hooks/useSound';
@@ -8,6 +8,13 @@ export default function FateCard() {
   const { state, resetGame, getProgress } = useGame();
   const { fateCard, diceResult, choices, pathHistory, userInput, agentOpinions } = state;
   const { sfxFateReveal, sfxAchievement } = useSound();
+
+  // 编辑模式状态
+  const [isEditing, setIsEditing] = useState(false);
+  // 编辑中的字段（标题 / 个人感悟 / 承诺文字）
+  const [editTitle, setEditTitle] = useState('');
+  const [editSummary, setEditSummary] = useState('');
+  const [editEpilogue, setEditEpilogue] = useState('');
 
   const isAccept = fateCard?.id === 'fate_accept';
   const optimisticPath = pathHistory.includes('crossroad_opt');
@@ -27,7 +34,49 @@ export default function FateCard() {
     if (showBonus) setTimeout(sfxAchievement, 2000);
   }, [fateCard, showBonus]);
 
+  // 进入编辑模式：把当前字段拷贝到编辑态
+  const handleStartEdit = () => {
+    if (!fateCard) return;
+    setEditTitle(fateCard.title || '');
+    setEditSummary(Array.isArray(fateCard.summary) ? fateCard.summary.join('\n') : (fateCard.summary || ''));
+    setEditEpilogue(fateCard.epilogue || '');
+    setIsEditing(true);
+  };
+
+  // 取消编辑
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+  };
+
+  // 保存编辑：写入 localStorage 作为个人编辑副本（不改 Game.jsx）
+  const handleSaveEdit = () => {
+    if (!fateCard) return;
+    try {
+      const editKey = `yance_fate_edit_${fateCard.id}`;
+      localStorage.setItem(editKey, JSON.stringify({
+        title: editTitle,
+        summary: editSummary.split('\n'),
+        epilogue: editEpilogue,
+        updatedAt: Date.now(),
+      }));
+    } catch (e) { /* ignore */ }
+    setIsEditing(false);
+  };
+
   if (!fateCard) return null;
+
+  // 渲染时优先使用编辑后的内容（若已保存过）
+  let displayTitle = fateCard.title;
+  let displaySummary = fateCard.summary;
+  let displayEpilogue = fateCard.epilogue;
+  try {
+    const saved = JSON.parse(localStorage.getItem(`yance_fate_edit_${fateCard.id}`) || 'null');
+    if (saved) {
+      displayTitle = saved.title;
+      displaySummary = saved.summary;
+      displayEpilogue = saved.epilogue;
+    }
+  } catch (e) { /* ignore */ }
 
   return (
     <motion.div
@@ -58,17 +107,47 @@ export default function FateCard() {
             推演完成
           </motion.div>
 
+          {/* 编辑模式切换按钮 */}
+          <motion.button
+            className="absolute top-6 left-6 text-[10px] font-bold text-[#444] border border-[#aaa] px-2 py-0.5"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 1 }}
+            onClick={() => (isEditing ? handleCancelEdit() : handleStartEdit())}
+            style={{ cursor: 'pointer', background: 'transparent' }}
+          >
+            {isEditing ? '✕ 取消' : '✎ 编辑'}
+          </motion.button>
+
           {/* Title */}
-          <h2 className="text-sm font-bold text-terminal mb-1">{fateCard.title}</h2>
+          {isEditing ? (
+            <input
+              className="text-sm font-bold text-terminal mb-1 w-full border border-[#D4A017] px-2 py-1 bg-white"
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              style={{ outline: 'none' }}
+            />
+          ) : (
+            <h2 className="text-sm font-bold text-terminal mb-1 mt-6">{displayTitle}</h2>
+          )}
           <div className="text-[8px] text-[#888] mb-3">决策：{userInput}</div>
 
           {/* Divider */}
           <div className="border-t border-dashed border-[#ccc] my-3" />
 
           {/* Summary */}
-          <div className="text-[11px] text-[#444] leading-relaxed mb-3 whitespace-pre-line">
-            {fateCard.summary.join('\n')}
-          </div>
+          {isEditing ? (
+            <textarea
+              className="text-[11px] text-[#444] leading-relaxed mb-3 w-full border border-[#D4A017] px-2 py-1 bg-white"
+              style={{ outline: 'none', minHeight: '100px', resize: 'vertical' }}
+              value={editSummary}
+              onChange={(e) => setEditSummary(e.target.value)}
+            />
+          ) : (
+            <div className="text-[11px] text-[#444] leading-relaxed mb-3 whitespace-pre-line">
+              {Array.isArray(displaySummary) ? displaySummary.join('\n') : displaySummary}
+            </div>
+          )}
 
           {/* Stats */}
           <div className="space-y-2 mb-3">
@@ -91,9 +170,18 @@ export default function FateCard() {
           {/* Decision style */}
           <div className="text-[9px] text-[#666] mb-2">你的决策风格：{decisionStyle}</div>
 
-          {/* Epilogue */}
+          {/* Epilogue - 承诺文字 */}
           <div className="border-t border-dashed border-[#ccc] pt-2 mb-3">
-            <div className="text-[10px] text-[#888] italic">{fateCard.epilogue}</div>
+            {isEditing ? (
+              <textarea
+                className="text-[10px] text-[#888] w-full border border-[#D4A017] px-2 py-1 bg-white italic"
+                style={{ outline: 'none', minHeight: '60px', resize: 'vertical' }}
+                value={editEpilogue}
+                onChange={(e) => setEditEpilogue(e.target.value)}
+              />
+            ) : (
+              <div className="text-[10px] text-[#888] italic">{displayEpilogue}</div>
+            )}
           </div>
 
           {/* Achievement */}
@@ -111,7 +199,14 @@ export default function FateCard() {
 
           {/* Buttons */}
           <div className="flex gap-2 mt-4">
-            <Button variant="primary" onClick={resetGame}>重新推演</Button>
+            {isEditing ? (
+              <>
+                <Button variant="primary" onClick={handleSaveEdit}>保存</Button>
+                <Button variant="outline" onClick={handleCancelEdit}>取消</Button>
+              </>
+            ) : (
+              <Button variant="primary" onClick={resetGame}>重新推演</Button>
+            )}
           </div>
         </div>
       </motion.div>

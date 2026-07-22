@@ -1,8 +1,12 @@
 import { motion } from 'framer-motion';
-import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useMemo, useEffect } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
+import AppNav from '../components/AppNav';
 import { AGENT_MAP } from '../data/agents';
+import { getCustomAgents, deleteCustomAgent, publishAgent, getMarketAgents, isPublished, subscribeAgent } from '../utils/customAgent';
+import { getUserProfile, updateUserProfile, getAvatarOptions, getColorOptions, regenerateNickname } from '../utils/userProfile';
+import { useAuth } from '../context/AuthContext.jsx';
 
 const T = {
   paper: '#F2EDE0',
@@ -20,7 +24,6 @@ const T = {
 
 const EASE = [0.16, 1, 0.3, 1];
 
-/* 真实化的数据 - 不"John Doe" */
 const TOPICS = [
   { id: 't1', title: '30 岁转行还来得及吗？', tag: '职业', heat: 2341, replies: 128, time: '12 分钟前', trigram: '☴' },
   { id: 't2', title: '该不该为了薪资放弃兴趣？', tag: '财务', heat: 1820, replies: 95, time: '38 分钟前', trigram: '☰' },
@@ -93,10 +96,18 @@ const SAGES = [
 
 const TABS = [
   { id: 'discover', label: '发现' },
+  { id: 'market', label: '智囊市集' },
   { id: 'shares', label: '命签' },
   { id: 'discuss', label: '讨论' },
+  { id: 'my_agents', label: '我的智囊' },
   { id: 'sages', label: '高人' },
 ];
+
+function formatDate(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
+}
 
 function SectionTitle({ kicker, title, accent }) {
   return (
@@ -128,7 +139,6 @@ function TopicRow({ topic, index }) {
       className="flex items-center gap-4 py-3.5 px-4 cursor-pointer group transition-colors"
       style={{ borderBottom: `1px solid ${T.border}` }}
     >
-      {/* 卦象 */}
       <div
         className="w-10 h-10 flex items-center justify-center text-lg font-serif shrink-0"
         style={{
@@ -141,7 +151,6 @@ function TopicRow({ topic, index }) {
         {topic.trigram}
       </div>
 
-      {/* 主体 */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <h3
@@ -197,7 +206,6 @@ function ShareCard({ share, index }) {
         boxShadow: `0 4px 24px ${share.color}20`,
       }}
     >
-      {/* 卡顶: 用户 + 卦象 */}
       <div
         className="relative px-5 py-4"
         style={{ background: `linear-gradient(180deg, ${share.color}15 0%, transparent 100%)` }}
@@ -244,7 +252,6 @@ function ShareCard({ share, index }) {
         </div>
       </div>
 
-      {/* 卡中: 卦辞 + 决策 */}
       <div
         className="px-5 py-3"
         style={{
@@ -270,7 +277,6 @@ function ShareCard({ share, index }) {
         </div>
       </div>
 
-      {/* 卡底: 互动 */}
       <div
         className="px-5 py-2.5 flex items-center justify-between"
         style={{ backgroundColor: `${share.color}10` }}
@@ -339,49 +345,104 @@ function SageCard({ sage, index }) {
 
 export default function Community() {
   const navigate = useNavigate();
+  const { status, offline, user } = useAuth();
   const [activeTab, setActiveTab] = useState('discover');
+  const [customAgents, setCustomAgents] = useState([]);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [marketAgents, setMarketAgents] = useState([]);
+  const [publishedIds, setPublishedIds] = useState(new Set());
+  const [subscribedTip, setSubscribedTip] = useState('');
+  const [profile, setProfile] = useState(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [editNickname, setEditNickname] = useState('');
+  const [editBio, setEditBio] = useState('');
+  const [editAvatar, setEditAvatar] = useState('');
+  const [editColor, setEditColor] = useState('');
 
   const agents = useMemo(() => Object.values(AGENT_MAP).filter(a => a.role !== 'master'), []);
+
+  useEffect(() => {
+    setCustomAgents(getCustomAgents());
+    setMarketAgents(getMarketAgents());
+    setPublishedIds(new Set(getCustomAgents().filter(a => a.originMarketId).map(a => a.originMarketId)));
+    const p = getUserProfile();
+    setProfile(p);
+    setEditNickname(p.nickname);
+    setEditBio(p.bio || '');
+    setEditAvatar(p.avatar);
+    setEditColor(p.color);
+  }, []);
+
+  const handleDeleteAgent = (agentId) => {
+    deleteCustomAgent(agentId);
+    setCustomAgents(getCustomAgents());
+    setDeleteConfirm(null);
+  };
+
+  // 整体14: 发布智囊到市集
+  const handlePublish = (agent) => {
+    const res = publishAgent(agent);
+    if (res.ok) {
+      setMarketAgents(getMarketAgents());
+      setSubscribedTip(`「${agent.name}」已发布到市集`);
+      setTimeout(() => setSubscribedTip(''), 2500);
+    } else {
+      setSubscribedTip('已发布过,或发布失败');
+      setTimeout(() => setSubscribedTip(''), 2500);
+    }
+  };
+
+  // 整体14: 从市集订阅智囊
+  const handleSubscribe = (agent) => {
+    const newAgent = subscribeAgent(agent);
+    if (newAgent) {
+      setCustomAgents(getCustomAgents());
+      setPublishedIds(prev => new Set([...prev, agent.marketId || agent.id]));
+      setSubscribedTip(`已订阅「${agent.name}」,可在推演台使用`);
+      setTimeout(() => setSubscribedTip(''), 2500);
+    }
+  };
+
+  const handleSaveProfile = () => {
+    const updated = updateUserProfile({
+      nickname: editNickname.trim() || profile?.nickname,
+      bio: editBio.trim(),
+      avatar: editAvatar,
+      color: editColor,
+    });
+    setProfile(updated);
+    setShowProfileModal(false);
+  };
+
+  const handleRegenerateNick = () => {
+    setEditNickname(regenerateNickname());
+  };
 
   return (
     <div
       className="min-h-screen overflow-x-hidden"
       style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}
     >
-      {/* 顶部细条 */}
-      <div className="text-center py-2 px-4" style={{ backgroundColor: T.ink }}>
+      <AppNav variant="light" />
+
+      <div className="text-center py-2 px-4 pt-16" style={{ backgroundColor: T.ink }}>
         <span className="text-[10px] font-mono tracking-wide">
-          <button onClick={() => navigate('/')} className="hover:underline" style={{ color: T.muted }}>← 返回首页</button>
-          <span className="mx-3" style={{ color: '#444' }}>|</span>
           <span style={{ color: '#999' }}>社区 / COMMUNITY</span>
           <span className="mx-3" style={{ color: '#444' }}>|</span>
-          <span style={{ color: T.accent }}>12,507 位同道人</span>
+          {offline ? (
+            <span style={{ color: '#E8B880' }}>本地模式 · 数据仅本机可见</span>
+          ) : status === 'anonymous' ? (
+            <span style={{ color: '#50A070' }}>匿名访问 · 数据已同步</span>
+          ) : status === 'registered' ? (
+            <span style={{ color: '#50A070' }}>{user?.nickname} · 已登录</span>
+          ) : (
+            <span style={{ color: '#999' }}>未登录</span>
+          )}
+          <span className="mx-3" style={{ color: '#444' }}>|</span>
+          <span style={{ color: T.accent }}>{marketAgents.length} 个共享智囊 · {customAgents.length} 个自建智囊</span>
         </span>
       </div>
 
-      {/* 导航 */}
-      <nav className="sticky top-0 z-50 border-b" style={{ backgroundColor: `${T.paper}E6`, backdropFilter: 'blur(14px)', borderColor: T.border }}>
-        <div className="max-w-[1200px] mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 flex items-center justify-center text-[13px] font-serif font-bold" style={{ color: T.accent, border: `1.5px solid ${T.ink}`, borderRadius: 3, backgroundColor: T.paperLight }}>演</div>
-            <div className="flex flex-col leading-none">
-              <span className="text-sm font-serif font-semibold">演策</span>
-              <span className="text-[8px] font-mono tracking-[0.2em] mt-0.5" style={{ color: T.muted }}>YAN CE / BAGUA ENGINE</span>
-            </div>
-          </div>
-          <motion.button
-            whileHover={{ y: -1 }}
-            whileTap={{ scale: 0.97 }}
-            onClick={() => navigate('/sandbox')}
-            className="px-4 py-2 text-[11px] font-medium text-white"
-            style={{ backgroundColor: T.ink, borderRadius: 3 }}
-          >
-            立卦开演 →
-          </motion.button>
-        </div>
-      </nav>
-
-      {/* Hero */}
       <section className="relative overflow-hidden px-6 pt-16 pb-10">
         <div className="absolute -left-40 -top-32 pointer-events-none opacity-[0.05]">
           <Bagua size={600} spin={100} ink={T.ink} accent={T.ink} showLabels={false} />
@@ -404,7 +465,6 @@ export default function Community() {
             </p>
           </motion.div>
 
-          {/* Tab 切换 */}
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -430,7 +490,6 @@ export default function Community() {
         </div>
       </section>
 
-      {/* Tab 内容 */}
       <div className="px-6 pb-20">
         <div className="max-w-[1200px] mx-auto">
           {activeTab === 'discover' && (
@@ -484,6 +543,166 @@ export default function Community() {
                 </div>
               </section>
             </>
+          )}
+
+          {activeTab === 'my_agents' && (
+            <section>
+              <SectionTitle kicker="MY COUNCIL / 我的智囊" title="自定义智囊" accent="随心而造" />
+              
+              {customAgents.length === 0 ? (
+                <div className="text-center py-16" style={{ backgroundColor: T.paperLight, border: '1px dashed ' + T.border, borderRadius: 6 }}>
+                  <div style={{ fontSize: 40, color: T.muted, marginBottom: 16, opacity: 0.5 }}>☯</div>
+                  <p className="text-[13px] mb-2" style={{ color: T.ink }}>还没有自定义智囊</p>
+                  <p className="text-[11px] mb-6" style={{ color: T.muted }}>在推演台创建你的专属视角</p>
+                  <button
+                    onClick={() => navigate('/sandbox')}
+                    className="px-5 py-2 text-[11px] font-medium"
+                    style={{ color: T.paperLight, backgroundColor: T.ink, borderRadius: 3 }}
+                  >
+                    去推演 →
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {customAgents.map((agent, i) => (
+                    <motion.div
+                      key={agent.id}
+                      initial={{ opacity: 0, y: 12 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true, amount: 0.2 }}
+                      transition={{ delay: i * 0.05, duration: 0.5 }}
+                      whileHover={{ y: -2 }}
+                      className="relative"
+                      style={{
+                        borderRadius: 5,
+                        backgroundColor: T.paperLight,
+                        border: '1px solid ' + T.border,
+                      }}
+                    >
+                      <div className="p-4">
+                        <div className="flex items-center gap-3 mb-3">
+                          <div
+                            className="w-12 h-12 flex items-center justify-center text-xl font-serif font-bold relative"
+                            style={{
+                              color: agent.glow,
+                              backgroundColor: agent.color + '20',
+                              border: '1px solid ' + agent.color + '60',
+                              borderRadius: 3,
+                              boxShadow: '0 0 12px ' + agent.color + '30',
+                            }}
+                          >
+                            {agent.icon}
+                            <span
+                              className="absolute -top-1 -right-1 text-[8px] px-1 font-mono"
+                              style={{
+                                backgroundColor: T.accent,
+                                color: T.paperLight,
+                                borderRadius: 2,
+                              }}
+                            >
+                              自定义
+                            </span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[14px] font-semibold" style={{ color: T.ink }}>{agent.name}</div>
+                            <div className="text-[10px] font-mono" style={{ color: agent.color }}>{agent.stance}</div>
+                          </div>
+                        </div>
+                        <p className="text-[11px] leading-relaxed mb-3" style={{ color: T.muted, minHeight: 32 }}>{agent.desc}</p>
+                        <div className="text-[9px] font-mono mb-3" style={{ color: T.muted }}>创建于 {formatDate(agent.createdAt)}</div>
+                        <div className="flex items-center gap-2 pt-3" style={{ borderTop: '1px dashed ' + T.border }}>
+                          <button
+                            onClick={() => navigate('/sandbox')}
+                            className="flex-1 py-1.5 text-[10px] font-medium"
+                            style={{ color: T.paperLight, backgroundColor: T.ink, borderRadius: 2 }}
+                          >
+                            推演时使用
+                          </button>
+                          <button
+                            onClick={() => handlePublish(agent)}
+                            className="px-3 py-1.5 text-[10px]"
+                            style={{ color: T.gold, border: '1px solid ' + T.gold + '40', borderRadius: 2, backgroundColor: 'transparent' }}
+                          >
+                            发布
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirm(agent.id)}
+                            className="px-3 py-1.5 text-[10px]"
+                            style={{ color: T.accent, border: '1px solid ' + T.accent + '40', borderRadius: 2, backgroundColor: 'transparent' }}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {activeTab === 'market' && (
+            <section>
+              <SectionTitle kicker="AGENT MARKET / 智囊市集" title="众人之智" accent="可取可用" />
+              <p className="text-[11px] mb-5" style={{ color: T.muted }}>此处陈列众人发布的智囊,订阅后可在推演台召唤。</p>
+              {marketAgents.length === 0 ? (
+                <div className="text-center py-16" style={{ backgroundColor: T.paperLight, border: '1px dashed ' + T.border, borderRadius: 6 }}>
+                  <div style={{ fontSize: 40, color: T.muted, marginBottom: 16, opacity: 0.5 }}>☱</div>
+                  <p className="text-[13px]" style={{ color: T.muted }}>市集尚空,去发布你的第一个智囊</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {marketAgents.map((agent, i) => {
+                    const alreadySubscribed = subscribedTip && customAgents.some(a => a.originMarketId === (agent.marketId || agent.id));
+                    const subscribed = customAgents.some(a => a.originMarketId === (agent.marketId || agent.id));
+                    return (
+                      <motion.div
+                        key={agent.marketId || agent.id}
+                        initial={{ opacity: 0, y: 12 }}
+                        whileInView={{ opacity: 1, y: 0 }}
+                        viewport={{ once: true, amount: 0.2 }}
+                        transition={{ delay: i * 0.05, duration: 0.5 }}
+                        whileHover={{ y: -2 }}
+                        className="relative"
+                        style={{ borderRadius: 5, backgroundColor: T.paperLight, border: '1px solid ' + T.border }}
+                      >
+                        <div className="p-4">
+                          <div className="flex items-center gap-3 mb-3">
+                            <div
+                              className="w-12 h-12 flex items-center justify-center text-xl font-serif font-bold"
+                              style={{ color: agent.glow, backgroundColor: (agent.color || T.gold) + '20', border: '1px solid ' + (agent.color || T.gold) + '60', borderRadius: 3 }}
+                            >
+                              {agent.icon || '☯'}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[14px] font-semibold" style={{ color: T.ink }}>{agent.name}</div>
+                              <div className="text-[10px] font-mono" style={{ color: agent.color || T.gold }}>{agent.stance}</div>
+                            </div>
+                            <span className="text-[9px] font-mono px-1.5 py-0.5" style={{ color: T.gold, border: '1px solid ' + T.gold + '40', borderRadius: 2 }}>
+                              {(agent.subs || 0)} 订阅
+                            </span>
+                          </div>
+                          <p className="text-[11px] leading-relaxed mb-3" style={{ color: T.muted, minHeight: 32 }}>{agent.desc || '匿名智囊,视角独到'}</p>
+                          <button
+                            onClick={() => handleSubscribe(agent)}
+                            disabled={subscribed}
+                            className="w-full py-1.5 text-[10px] font-medium"
+                            style={{
+                              color: subscribed ? T.muted : T.paperLight,
+                              backgroundColor: subscribed ? T.border : T.ink,
+                              borderRadius: 2,
+                              cursor: subscribed ? 'default' : 'pointer',
+                            }}
+                          >
+                            {subscribed ? '已订阅' : '+ 订阅此智囊'}
+                          </button>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           )}
 
           {activeTab === 'shares' && (
@@ -600,10 +819,188 @@ export default function Community() {
         </div>
       </div>
 
-      {/* Footer */}
+      {subscribedTip && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 20 }}
+          className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5"
+          style={{ backgroundColor: T.ink, color: T.paperLight, borderRadius: 4, fontSize: 12, fontFamily: '"Noto Serif SC", serif', boxShadow: '0 4px 20px rgba(0,0,0,0.3)' }}
+        >
+          {subscribedTip}
+        </motion.div>
+      )}
+
+      {deleteConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setDeleteConfirm(null)}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="p-6 max-w-sm mx-4"
+            style={{ backgroundColor: T.paperLight, borderRadius: 5, border: '1px solid ' + T.border }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-[15px] font-serif font-semibold mb-2" style={{ color: T.ink }}>确认删除</h3>
+            <p className="text-[12px] mb-5" style={{ color: T.muted }}>删除后无法恢复，确定要删除这个智囊吗？</p>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="flex-1 py-2 text-[11px]"
+                style={{ color: T.ink, border: '1px solid ' + T.border, borderRadius: 3, backgroundColor: 'transparent' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => handleDeleteAgent(deleteConfirm)}
+                className="flex-1 py-2 text-[11px]"
+                style={{ color: T.paperLight, backgroundColor: T.accent, borderRadius: 3 }}
+              >
+                确认删除
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {showProfileModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setShowProfileModal(false)}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="p-6 w-[360px] max-w-[90vw] mx-4 max-h-[85vh] overflow-y-auto"
+            style={{ backgroundColor: T.paperLight, borderRadius: 5, border: '1px solid ' + T.border }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-[16px] font-serif font-semibold mb-1" style={{ color: T.ink }}>个人资料</h3>
+            <p className="text-[11px] mb-5" style={{ color: T.muted }}>设置你的社区身份，数据仅保存在本地</p>
+
+            <div className="flex justify-center mb-5">
+              <div
+                className="w-16 h-16 flex items-center justify-center text-2xl font-serif font-bold"
+                style={{
+                  color: T.paperLight,
+                  backgroundColor: editColor,
+                  borderRadius: 4,
+                  boxShadow: `0 0 20px ${editColor}60`,
+                  border: `1.5px solid ${editColor}`,
+                }}
+              >
+                {editAvatar}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="text-[11px] font-medium mb-1.5 block" style={{ color: T.ink }}>昵称</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={editNickname}
+                  onChange={(e) => setEditNickname(e.target.value)}
+                  maxLength={8}
+                  className="flex-1 px-3 py-2 text-[13px] outline-none"
+                  style={{ backgroundColor: T.paper, border: `1px solid ${T.border}`, borderRadius: 3, color: T.ink }}
+                />
+                <button
+                  onClick={handleRegenerateNick}
+                  className="px-3 py-2 text-[11px]"
+                  style={{ color: T.accent, border: `1px solid ${T.accent}40`, borderRadius: 3, backgroundColor: 'transparent' }}
+                >
+                  换一个
+                </button>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="text-[11px] font-medium mb-1.5 block" style={{ color: T.ink }}>头像</label>
+              <div className="flex flex-wrap gap-2">
+                {getAvatarOptions().map((av) => (
+                  <button
+                    key={av}
+                    onClick={() => setEditAvatar(av)}
+                    className="w-9 h-9 flex items-center justify-center text-base font-serif transition-all"
+                    style={{
+                      backgroundColor: editAvatar === av ? editColor : T.paper,
+                      color: editAvatar === av ? T.paperLight : T.ink,
+                      border: `1px solid ${editAvatar === av ? editColor : T.border}`,
+                      borderRadius: 3,
+                    }}
+                  >
+                    {av}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="text-[11px] font-medium mb-1.5 block" style={{ color: T.ink }}>主色</label>
+              <div className="flex flex-wrap gap-2">
+                {getColorOptions().map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setEditColor(c)}
+                    className="w-7 h-7 transition-transform hover:scale-110"
+                    style={{
+                      backgroundColor: c,
+                      borderRadius: 3,
+                      border: editColor === c ? `2px solid ${T.ink}` : `1px solid ${T.border}`,
+                      boxShadow: editColor === c ? `0 0 10px ${c}80` : 'none',
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-5">
+              <label className="text-[11px] font-medium mb-1.5 block" style={{ color: T.ink }}>签名</label>
+              <textarea
+                value={editBio}
+                onChange={(e) => setEditBio(e.target.value)}
+                maxLength={30}
+                rows={2}
+                className="w-full px-3 py-2 text-[12px] outline-none resize-none"
+                style={{ backgroundColor: T.paper, border: `1px solid ${T.border}`, borderRadius: 3, color: T.ink }}
+                placeholder="一句话介绍自己..."
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowProfileModal(false)}
+                className="flex-1 py-2 text-[11px]"
+                style={{ color: T.ink, border: '1px solid ' + T.border, borderRadius: 3, backgroundColor: 'transparent' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSaveProfile}
+                className="flex-1 py-2 text-[11px] font-medium"
+                style={{ color: T.paperLight, backgroundColor: T.ink, borderRadius: 3 }}
+              >
+                保存
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
       <footer className="border-t py-8 px-6" style={{ borderColor: T.border }}>
-        <div className="max-w-[1200px] mx-auto flex items-center justify-between">
+        <div className="max-w-[1200px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <span className="text-[11px] font-mono" style={{ color: T.muted }}>演策 / BAGUA ENGINE</span>
+          <div className="flex items-center gap-3">
+            <Link to="/legal" className="text-[10px] hover:underline" style={{ color: T.muted }}>用户协议</Link>
+            <span style={{ color: T.border }}>|</span>
+            <Link to="/privacy" className="text-[10px] hover:underline" style={{ color: T.muted }}>隐私政策</Link>
+            <span style={{ color: T.border }}>|</span>
+            <span className="text-[10px]" style={{ color: T.muted, opacity: 0.6 }}>京ICP备XXXXXXXX号</span>
+          </div>
           <span className="text-[10px] font-mono" style={{ color: T.muted }}>MIT License / Open Source</span>
         </div>
       </footer>

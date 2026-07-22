@@ -1,0 +1,198 @@
+.achievement-toast-container {
+  position: fixed;
+  top: 80px;
+  right: 20px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.achievement-toast {
+  position: relative;
+  width: 320px;
+  background: linear-gradient(145deg, #2A241E 0%, #1A1410 100%);
+  border: 1px solid #C8A850;
+  border-radius: 4px;
+  overflow: hidden;
+  pointer-events: auto;
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 0 40px rgba(200, 168, 80, 0.15),
+    inset 0 1px 0 rgba(255, 215, 130, 0.15);
+}
+
+.achievement-toast-glow {
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(240, 216, 144, 0.15) 0%,
+    transparent 60%
+  );
+  pointer-events: none;
+  animation: achievementPulse 2s ease-in-out infinite;
+}
+
+@keyframes achievementPulse {
+  0%, 100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+.achievement-toast-content {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+}
+
+.achievement-toast-icon {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(
+    circle at center,
+    rgba(240, 216, 144, 0.2) 0%,
+    rgba(200, 168, 80, 0.05) 70%,
+    transparent 100%
+  );
+  border: 2px solid #C8A850;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.achievement-icon-text {
+  font-size: 32px;
+  color: #F0D890;
+  line-height: 1;
+  text-shadow: 0 0 20px rgba(240, 216, 144, 0.6);
+  font-family: serif;
+}
+
+.achievement-icon-shine {
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.2),
+    transparent
+  );
+  animation: achievementShine 3s ease-in-out infinite;
+}
+
+@keyframes achievementShine {
+  0% {
+    left: -100%;
+  }
+  50%, 100% {
+    left: 150%;
+  }
+}
+
+.achievement-toast-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.achievement-toast-label {
+  font-family: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 10px;
+  color: #C8A850;
+  letter-spacing: 0.3em;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.achievement-toast-name {
+  font-family: "Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 18px;
+  color: #FAF6EC;
+  margin-bottom: 4px;
+  letter-spacing: 0.1em;
+  text-shadow: 0 0 10px rgba(240, 216, 144, 0.3);
+}
+
+.achievement-toast-desc {
+  font-family: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 12px;
+  color: #A09A8A;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.achievement-toast-reward {
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(200, 168, 80, 0.15);
+  border: 1px solid rgba(200, 168, 80, 0.3);
+  border-radius: 2px;
+  font-family: "Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 11px;
+  color: #F0D890;
+  letter-spacing: 0.1em;
+}
+
+.achievement-toast-corner {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1px solid #F0D890;
+  opacity: 0.6;
+}
+
+.achievement-toast-corner.top-left {
+  top: 6px;
+  left: 6px;
+  border-right: none;
+  border-bottom: none;
+}
+
+.achievement-toast-corner.top-right {
+  top: 6px;
+  right: 6px;
+  border-left: none;
+  border-bottom: none;
+}
+
+.achievement-toast-corner.bottom-left {
+  bottom: 6px;
+  left: 6px;
+  border-right: none;
+  border-top: none;
+}
+
+.achievement-toast-corner.bottom-right {
+  bottom: 6px;
+  right: 6px;
+  border-left: none;
+  border-top: none;
+}
+
+@media (max-width: 640px) {
+  .achievement-toast-container {
+    top: 70px;
+    right: 10px;
+    left: 10px;
+  }
+  
+  .achievement-toast {
+    width: 100%;
+  }
+}

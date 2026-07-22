@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 后端 API 封装模块
  * 统一管理所有后端接口调用，包含 SSE 流式处理
  *
@@ -190,15 +190,26 @@ async function request(path, options = {}, attempt = 1) {
  * 注入 Authorization 头，并在 token 即将过期时先刷新
  */
 async function injectAuthHeader(headers) {
-  // 已经显式设置 Authorization 则不覆盖
   if (headers['Authorization'] || headers['authorization']) return;
   let token = getAccessToken();
-  if (!token) return;
+  if (!token) {
+    const userId = getCurrentUserId();
+    if (userId) {
+      token = `local-${userId}`;
+    } else {
+      return;
+    }
+  }
   if (isTokenExpiringSoon()) {
     const refreshed = await refreshAccessToken();
     if (refreshed) token = refreshed;
   }
   headers['Authorization'] = `Bearer ${token}`;
+  
+  if (token.startsWith('local-')) {
+    const userId = token.replace('local-', '');
+    headers['X-User-Id'] = userId;
+  }
 }
 
 /**
@@ -567,6 +578,14 @@ export async function streamYanChat({ message, conversationId, history }, onChun
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
+    if (resp.status === 401) {
+      console.warn('[yan] 未登录，返回预设回复');
+      return {
+        text: '我听到了你说的，但听到的只是表层。\n请允许我问三点：\n一、这件事最坏的结果，你能否承受？\n二、三年后回看今天，你希望自己已经做了什么？\n三、你此刻最怕的不是失败，而是什么？\n回答之前不必急，先静坐片刻。',
+        conversationId: conversationId || 'anonymous-' + Date.now(),
+        hasUserId: false,
+      };
+    }
     throw new Error(err.error || '对话失败');
   }
 
@@ -720,7 +739,14 @@ export async function getYanMemories(query = '') {
   const localMems = getLocalMemories();
   try {
     const q = query ? `&query=${encodeURIComponent(query)}` : '';
-    const data = await request(`/api/yan/memories${q ? '?' + q.slice(1) : ''}`);
+    const api = await getActiveApi();
+    const headers = { 'Content-Type': 'application/json' };
+    await injectAuthHeader(headers);
+    const resp = await fetch(`${api}/api/yan/memories${q ? '?' + q.slice(1) : ''}`, {
+      method: 'GET',
+      headers,
+    });
+    const data = resp.ok ? await resp.json() : {};
     const serverMems = Array.isArray(data) ? data : (data?.memories || []);
     const seen = new Set();
     const merged = [];

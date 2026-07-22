@@ -28,6 +28,7 @@ function ChoiceBeam({ choice, index, total, onClick, isSelected }) {
   const gua = choice.gua || meta.gua;
   const verse = choice.verse || meta.verse;
   const icon = choice.icon || meta.icon;
+  const keyPoints = choice.keyPoints || [];
 
   return (
     <motion.button
@@ -159,6 +160,37 @@ function ChoiceBeam({ choice, index, total, onClick, isSelected }) {
       >
         {verse}
       </div>
+
+      {/* 关键点摘要 */}
+      {keyPoints.length > 0 && (
+        <div
+          style={{
+            position: 'relative',
+            marginTop: '10px',
+            padding: '0 8px',
+            maxWidth: '180px',
+          }}
+        >
+          {keyPoints.slice(0, 3).map((point, idx) => (
+            <div
+              key={idx}
+              style={{
+                fontSize: '9px',
+                color: isSelected ? '#C8B8A0' : '#807868',
+                fontFamily: '"Noto Serif SC", serif',
+                lineHeight: 1.6,
+                textAlign: 'center',
+                opacity: isSelected ? 1 : 0.7,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              <span style={{ color: color, marginRight: '4px' }}>•</span>{point}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 选项名（主标题） */}
       <div

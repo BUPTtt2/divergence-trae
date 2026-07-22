@@ -1,12 +1,13 @@
 /**
  * 推理引擎 - 内容生成服务
- * - 智能路由：有 LLM endpoint 用真 LLM,没有用更聪明的本地预设
- * - 真实 LLM 调用支持(OpenAI 兼容 API)
+ * - 优先调用后端 API（动态 Agent + 真实卜卦）
+ * - 后端不可用时降级到本地智能预设
  */
 import { COLORS } from '../components/board/layoutConfig';
-import { detectQuestionType, getAgentsForQuestion } from '../data/agents';
+import { detectQuestionType, getAgentsForQuestion, AGENT_MAP } from '../data/agents';
+import * as apiClient from './apiClient';
 
-const DEFAULT_CHOICES = [
+export const DEFAULT_CHOICES = [
   { id: 'opportunity', label: '抓住机会', color: COLORS.choice.opportunity, glowColor: '#E8B880', icon: '☰' },
   { id: 'risk', label: '规避风险', color: COLORS.choice.risk, glowColor: '#E88080', icon: '☵' },
   { id: 'stable', label: '稳守当前', color: COLORS.choice.stable, glowColor: '#80C8A8', icon: '☶' },
@@ -14,8 +15,7 @@ const DEFAULT_CHOICES = [
 ];
 
 /* ============================================================
-   Agent 角色卡 - 给 LLM 看的 system prompt 模板
-   每个 Agent 有真实人设,不是泛泛而谈
+   Agent 角色卡 - 本地降级用的人设数据
 ============================================================ */
 const AGENT_PERSONAS = {
   qiangu: {
@@ -139,123 +139,239 @@ const SMART_PRESETS = {
   },
 };
 
-function selectSmartDialogue(agentId, question, questionType) {
-  const presetGroup = SMART_PRESETS[questionType] || SMART_PRESETS.general;
-  if (presetGroup[agentId]) {
-    return presetGroup[agentId](question);
+/**
+ * 从用户问题中提取关键上下文(数字/关键词),让发言切题而非套话
+ */
+function extractQuestionContext(question) {
+  if (!question) return { numbers: [], keywords: [] };
+  const numbers = (question.match(/\d+(?:万|k|K|w|W|岁|年|个月|块)?/g) || []).slice(0, 3);
+  const stopWords = ['要不要', '该不该', '是不是', '怎么样', '怎么办', '的话', '如果', '现在', '觉得', '感觉', '应该', '可以', '可能', '还是', '或者', '但是', '因为', '所以'];
+  const keywords = (question.match(/[\u4e00-\u9fa5]{2,6}/g) || [])
+    .filter(w => !stopWords.includes(w))
+    .slice(0, 4);
+  return { numbers, keywords };
+}
+
+/**
+ * 自定义智囊专属发言: 基于 stance + persona + 问题上下文 + 辩论
+ * 解决"自定义智囊不发言/套话"问题
+ */
+function generateCustomAgentDialogue(agent, question, questionType, previousDialogues) {
+  const ctx = extractQuestionContext(question);
+  const stance = agent.stance || agent.perspective || '其道';
+  const name = agent.name || '智囊';
+  const persona = agent.persona || '';
+  const prev = previousDialogues[previousDialogues.length - 1];
+
+  let opener = '';
+  if (ctx.numbers.length > 0) {
+    opener = `你提到「${ctx.numbers.join('、')}」——`;
+  } else if (ctx.keywords.length > 0) {
+    opener = `围绕「${ctx.keywords[0]}」这件事——`;
+  } else {
+    opener = `从${stance}的角度看这件事——`;
   }
-  // 兜底: 找一个最相关的 agent
-  const fallbackMap = {
-    qiangu: SMART_PRESETS.general.qiangu,
-    luxiang: SMART_PRESETS.general.jingyuan,
-    fengyan: SMART_PRESETS.general.fengyan,
-    xinhe: SMART_PRESETS.general.jingyuan,
-    yuntu: SMART_PRESETS.general.fengyan,
-    jingyuan: SMART_PRESETS.general.jingyuan,
-    zhenxing: SMART_PRESETS.general.fengyan,
-    duiyan: SMART_PRESETS.general.jingyuan,
+
+  let debate = '';
+  if (prev && prev.text) {
+    const prevName = prev.name || '前位';
+    const snippet = prev.text.slice(0, 14);
+    debate = `${prevName}说"${snippet}…"我有不同看法。`;
+  }
+
+  const angleMap = {
+    '财务': [
+      '数字背后藏着什么没算的隐性成本？把这笔账折算成三年累计,还划算吗?',
+      '别急着算表面数字。base、bonus、期权、社保基数、调薪周期——这些拆开算过吗？三年累计下来的真实差值，才是你要的答案。',
+      '钱的事要拆开看：显性收益和隐性成本各占多少？机会成本算进去了吗？这不是一个简单的"涨了多少"的问题。',
+    ],
+    '风险': [
+      '最坏情况是什么?如果这事崩了,你能承受吗?不能承受的话,你现在缺的是更多信息。',
+      '先泼盆冷水：你看到的都是最好的情况，但如果一切都走向反面呢？你有备用方案吗？风险不是"可能发生"，而是"一定会发生"。',
+      '我见过太多看起来光鲜的选择，背后是一个正在填坑的烂摊子。信息不对称永远存在，你确定你看到了全部真相吗？',
+    ],
+    '情感': [
+      '你描述这件事时,身体是放松还是紧绷?最近一次让你真正开心是什么时候?',
+      '别忙着分析道理。身体的反应不会说谎——想到这个选择时，你是兴奋还是焦虑？早上醒来的第一秒，你的直觉告诉你什么？',
+      '理性会欺骗你，但感受不会。把那些被忽略的情绪说出来，它们才是真正的答案。',
+    ],
+    '反思': [
+      '你问"该不该",这个"该"是谁的标准?如果没人看着,你会怎么选?',
+      '把问题翻转过来：你真正害怕的是什么？如果失败了，你会后悔没做，还是后悔做了？这个"该"字背后，是谁在定义你的价值？',
+      '很多时候，我们做选择不是因为"应该"，而是因为害怕被评判。如果抛开所有外界的眼光，你的本心是什么？',
+    ],
+    '职业': [
+      '三年后回看,这个选择是向上还是向下?你的能力护城河够不够宽?',
+      '薪资只是入场券，关键是看赛道。新机会能给你带来什么稀缺性？三年后，哪个选择能让你简历上多一个有分量的章节？',
+      '别只看眼前的涨幅。这个选择能帮你搭建什么样的能力护城河？五年后，你想成为什么样的人？',
+    ],
+    '宏观': [
+      '这件事放进大周期看,现在是涨潮还是退潮?你是吃红利还是做 alpha?',
+      '把个人选择放进大时代里看。这个行业的Beta是向上还是向下？你是在吃时代的红利，还是在逆势而为？',
+      '大气候决定了小树苗能长多高。先看清楚周期，再看自己的选择。顺势而为，事半功倍。',
+    ],
+    '行动': [
+      '分析够了,第一刀切在哪里?今晚能做什么?再等一周,处境会变好还是变差?',
+      '想太多就是不做。窗口期还有多久？第一刀切在哪里？今晚就能做的最小行动是什么？',
+      '完美分析不如即刻行动。别等"想清楚"，先迈出第一步。很多答案，只有做了才会浮现。',
+    ],
+    '沟通': [
+      '你和对方真的谈过你的纠结吗?很多人是"以为对方知道",其实一无所知。',
+      '很多"两难"其实只是没谈清楚。你真的和对方表达过你的核心诉求吗？还是你只是在脑子里模拟对话？',
+      '把外部选择转化为内部对话。与其纠结"选哪个"，不如先搞清楚"对方真正想要什么"。',
+    ],
   };
-  return (fallbackMap[agentId] || SMART_PRESETS.general.jingyuan)(question);
-}
 
-/* ============================================================
-   LLM 调用 - 支持 OpenAI 兼容 API(DeepSeek / Moonshot / OpenAI)
-============================================================ */
-async function callOpenAICompatible({ endpoint, apiKey, model, messages, maxTokens = 400, temperature = 0.85 }) {
-  const resp = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      max_tokens: maxTokens,
-      temperature,
-    }),
-  });
-
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`LLM 调用失败 ${resp.status}: ${errText.slice(0, 200)}`);
+  let angle = '';
+  let matchedKey = '';
+  for (const [key, val] of Object.entries(angleMap)) {
+    if (stance.includes(key)) { 
+      matchedKey = key;
+      angle = val[hashStr(question) % val.length]; 
+      break; 
+    }
+  }
+  
+  if (!angle) {
+    const defaultAngles = [
+      `从${stance}看,你最在意的是什么?把它具体化,答案藏在细节里。`,
+      `${stance}这个角度,最让你不安的是什么?把它说出来,问题就解决了一半。`,
+      `别忙着做决定。从${stance}出发,如果把时间拉长三年,这个选择还重要吗?`,
+    ];
+    angle = defaultAngles[hashStr(question) % defaultAngles.length];
   }
 
-  const data = await resp.json();
-  return data.choices?.[0]?.message?.content?.trim() || '';
+  if (persona && persona.length > 10) {
+    const personaSnippet = persona.slice(0, 30);
+    return `${opener}${debate}${angle} ${personaSnippet}……`;
+  }
+
+  return `${opener}${debate}${angle}`;
 }
 
-async function generateSingleAgentDialogue(agentId, question, config) {
-  const persona = AGENT_PERSONAS[agentId];
-  if (!persona) return '';
-
-  const systemPrompt = `你是 ${persona.name},你的视角是「${persona.stance}」。
-${persona.persona}
-
-【回答要求】
-- 1-3 句话,不超过 80 字
-- 用中文口语,不要书面体
-- 必须抓住用户问题里的具体词(数字、对象、场景),不要泛泛而谈
-- 不要给"祝你顺利"之类的客套结尾
-- 可以质疑用户、可以反问、可以泼冷水,但要说人话`;
-
-  const userPrompt = `用户问:「${question}」
-
-请以 ${persona.name}(${persona.stance}) 的身份,说 1-3 句话回应。不要复述用户问题。`;
-
-  return await callOpenAICompatible({
-    endpoint: config.endpoint,
-    apiKey: config.apiKey,
-    model: config.model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    maxTokens: 200,
-    temperature: 0.9,
-  });
+/**
+ * 辩论碰撞: 后发言者引用前一位观点并表态
+ */
+function generateDebatePrefix(agentId, prevName, prevSnippet) {
+  const prefixes = {
+    qiangu: `${prevName}说"${prevSnippet}…"——但我看账的话,`,
+    fengyan: `${prevName}的角度有道理,但我得泼盆冷水:`,
+    xinhe: `${prevName}说得对,但我想从感受层面补一句——`,
+    jingyuan: `${prevName}所言我听到了,不过我想把问题翻转一下。`,
+    luxiang: `${prevName}看的是一面,我从长期视角补一刀:`,
+    yuntu: `${prevName}说的有理,但我得放大到宏观看:`,
+    zhenxing: `${prevName}分析够了,但我得说:`,
+    duiyan: `${prevName}的意思我懂,但你们真的谈过吗?`,
+  };
+  return prefixes[agentId] || `${prevName}说过,我接一句:`;
 }
 
-async function generateSummaryFromLlm(question, agentDialogues, config) {
-  const systemPrompt = `你是「演」,这场推演的主持人。你要综合几位智囊的发言,给用户 1-2 句真诚的总结。
+// 多候选变体: 降低同一问题反复推演的重复感
+const ENTRY_VARIANTS = [
+  '', '我直说了——', '换个角度看：', '先别急，听我说：', '我的看法可能不太一样——',
+  '这个问题，我认为——', '说句实在话：', '从我的经验出发：',
+];
+const CLOSING_VARIANTS = [
+  '', '你想想看？', '这个问题值得你静下来想想。', '答案可能就在你心里。',
+  '别急着回答，先消化一下。', '这不是我说了算，是你自己的题。',
+];
 
-【要求】
-- 不超过 60 字
-- 不重复智囊已经说过的话
-- 要有"演"自己的洞察,不是把智囊的话拼起来
-- 可以承认"我也没标准答案",这是真话
-- 口语,不要书面体`;
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
 
-  const dialogueText = Object.entries(agentDialogues)
-    .map(([id, text]) => `${AGENT_PERSONAS[id]?.name || id}: ${text}`)
-    .join('\n');
+export function selectSmartDialogue(agentId, question, questionType, agent, previousDialogues = []) {
+  // 自定义智囊: 走专属发言逻辑,不再套用内置预设
+  if (agent && (agent.isCustom || !AGENT_PERSONAS[agentId])) {
+    return generateCustomAgentDialogue(agent, question, questionType, previousDialogues);
+  }
 
-  const userPrompt = `用户的问题:「${question}」
+  const presetGroup = SMART_PRESETS[questionType] || SMART_PRESETS.general;
+  let baseLine;
+  if (presetGroup[agentId]) {
+    baseLine = presetGroup[agentId](question);
+  } else {
+    const fallbackMap = {
+      qiangu: SMART_PRESETS.general.qiangu,
+      luxiang: SMART_PRESETS.general.jingyuan,
+      fengyan: SMART_PRESETS.general.fengyan,
+      xinhe: SMART_PRESETS.general.jingyuan,
+      yuntu: SMART_PRESETS.general.fengyan,
+      jingyuan: SMART_PRESETS.general.jingyuan,
+      zhenxing: SMART_PRESETS.general.fengyan,
+      duiyan: SMART_PRESETS.general.jingyuan,
+    };
+    baseLine = (fallbackMap[agentId] || SMART_PRESETS.general.jingyuan)(question);
+  }
 
-智囊们的发言:
-${dialogueText}
+  // 智囊调校迭代 - 据历史反馈微调发言
+  let feedbackPrefix = '';
+  try {
+    const raw = localStorage.getItem('yance_agent_feedback');
+    if (raw) {
+      const data = JSON.parse(raw);
+      const fb = data[agentId];
+      if (fb && fb.misses > fb.hits) {
+        feedbackPrefix = '此前所言未中,这回换个角度看——';
+      } else if (fb && fb.hits >= 2 && fb.misses === 0) {
+        feedbackPrefix = '循前次所中之脉,再深一层——';
+      }
+    }
+  } catch (e) { /* ignore */ }
 
-请作为「演」给一句总结。`;
+  // 多候选变体: 基于问题+agentId哈希选择开场和收尾,降低重复感
+  const seed = hashStr(question + agentId);
+  const entry = ENTRY_VARIANTS[seed % ENTRY_VARIANTS.length];
+  const closing = CLOSING_VARIANTS[(seed >> 3) % CLOSING_VARIANTS.length];
 
-  return await callOpenAICompatible({
-    endpoint: config.endpoint,
-    apiKey: config.apiKey,
-    model: config.model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    maxTokens: 150,
-    temperature: 0.85,
-  });
+  // 辩论碰撞: 后发言者引用前一位并表态
+  if (previousDialogues && previousDialogues.length > 0) {
+    const prev = previousDialogues[previousDialogues.length - 1];
+    const prevName = prev.name || '前位';
+    const prevSnippet = prev.text.slice(0, 12);
+    return feedbackPrefix + entry + generateDebatePrefix(agentId, prevName, prevSnippet) + baseLine + closing;
+  }
+  return feedbackPrefix + entry + baseLine + closing;
 }
 
 /* ============================================================
-   主入口
+   后端连接状态
 ============================================================ */
+// null=未知, true=在线, false=离线
+let _backendOnline = null;
+
+/**
+ * 检查后端是否可连接（同步返回缓存状态）
+ * 默认乐观返回 true，除非明确知道后端不可用
+ */
 export function isLlmAvailable() {
-  return Boolean(import.meta.env?.VITE_LLM_ENDPOINT && import.meta.env?.VITE_LLM_API_KEY);
+  return _backendOnline !== false;
 }
+
+/**
+ * 异步健康检查后端（可选调用，用于预热缓存）
+ */
+export async function checkBackendHealth() {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    const resp = await fetch(`${apiClient.API_BASE_URL}/api/health`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    _backendOnline = resp.ok;
+  } catch {
+    _backendOnline = true;
+  }
+  return _backendOnline;
+}
+
+/* ============================================================
+   反问 / 框架 / 签 - 本地兜底数据
+============================================================ */
 
 /* 反问库 - 真正能击中盲点的问题(本地生成) */
 const POWERFUL_QUESTIONS = {
@@ -328,149 +444,618 @@ function getGuo(questionType) {
   return guaMap[questionType] || guaMap.general;
 }
 
-/* 反问 + 框架 + 可带走的签 */
-async function generateArtifacts(question, questionType, agentDialogues, config) {
-  if (isLlmAvailable()) {
-    try {
-      const dialogueText = Object.entries(agentDialogues)
-        .map(([id, text]) => `${AGENT_PERSONAS[id]?.name || id}: ${text}`)
-        .join('\n');
+/* ============================================================
+   后端 Agent → 前端格式转换
+============================================================ */
 
-      const systemPrompt = `你是「演」,这场推演的主持人。基于智囊发言,为用户生成 3 件实用品:
+// 新增 Agent 的配色池（按 id 哈希取色，保证稳定）
+const COLOR_PALETTE = ['#C88848', '#508870', '#A87898', '#5078A8', '#C86848', '#48A898', '#A84848', '#685888'];
 
-【1. 一句反问】(不超过 30 字)
-- 击中用户问题里没说出口的盲点
-- 不要"你应该..."这种说教
-- 要让用户愣住、放下手机想一会儿
+function hashCode(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (h << 5) - h + str.charCodeAt(i);
+    h |= 0;
+  }
+  return h;
+}
 
-【2. 一个决策框架】(不超过 25 字)
-- 可操作、可记忆的句式
-- 不是抽象鸡汤,是具体方法
+/**
+ * 把后端返回的 Agent 规范化为前端渲染所需格式
+ * 兼容已知 Agent（补全 color/glow/form/icon 等渲染字段）
+ * 和后端新增 Agent（用默认值补全）
+ */
+function normalizeAgent(raw) {
+  if (!raw) return null;
+  const id = raw.id || raw.name || 'unknown';
+  const known = AGENT_MAP[id];
 
-【3. 一句可带走的签】(不超过 20 字)
-- 印在命运卡上,用户会截图分享
-- 意境感,像传统签文
-
-【输出格式 - 严格用 JSON】
-{"question": "反问", "framework": "框架", "verse": "签"}`;
-
-      const userPrompt = `用户问题:「${question}」
-
-智囊发言:
-${dialogueText}
-
-请生成 3 件实用品,严格 JSON 输出。`;
-
-      const text = await callOpenAICompatible({
-        endpoint: config.endpoint,
-        apiKey: config.apiKey,
-        model: config.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        maxTokens: 200,
-        temperature: 0.95,
-      });
-
-      // 解析 JSON
-      const match = text.match(/\{[\s\S]*\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
-        return {
-          powerfulQuestion: parsed.question || getPowerfulQuestion(questionType),
-          framework: parsed.framework || getFramework(questionType),
-          verse: parsed.verse || getVerse(questionType),
-        };
-      }
-    } catch (e) {
-      console.warn('[LLM] 反问/框架/签生成失败,降级', e);
-    }
+  if (known) {
+    // 已知 Agent：保留前端渲染必需字段，合并后端业务字段
+    return {
+      ...known,
+      ...raw,
+      color: raw.color || known.color,
+      glow: raw.glow || known.glow,
+      form: raw.form || known.form,
+      icon: raw.icon || known.icon,
+      role: raw.role || known.role,
+      pauseDuration: raw.pauseDuration || known.pauseDuration,
+    };
   }
 
-  // 本地兜底
+  // 新增 Agent：用默认值补全渲染字段
+  const idx = Math.abs(hashCode(id)) % COLOR_PALETTE.length;
+  const color = COLOR_PALETTE[idx];
   return {
-    powerfulQuestion: getPowerfulQuestion(questionType),
-    framework: getFramework(questionType),
-    verse: getVerse(questionType),
+    id,
+    name: raw.name || id,
+    stance: raw.stance || raw.role || '智囊',
+    color,
+    glow: color,
+    form: raw.form || 'orb',
+    icon: raw.icon || '☯',
+    role: 'dynamic',
+    desc: raw.desc || raw.persona || '',
+    pauseDuration: raw.pauseDuration || 600,
   };
 }
 
-export async function generateInferenceContent(question) {
-  const agents = getAgentsForQuestion(question).filter((a) => a.role !== 'master');
-  const questionType = detectQuestionType(question);
-  const gua = getGuo(questionType);
-
-  // 尝试真 LLM
-  if (isLlmAvailable()) {
-    const config = {
-      endpoint: import.meta.env.VITE_LLM_ENDPOINT,
-      apiKey: import.meta.env.VITE_LLM_API_KEY,
-      model: import.meta.env.VITE_LLM_MODEL || 'gpt-4o-mini',
-    };
-
-    try {
-      // 并发请求所有 agent
-      const dialoguePromises = agents.map(async (a) => {
-        try {
-          const text = await generateSingleAgentDialogue(a.id, question, config);
-          return [a.id, text || selectSmartDialogue(a.id, question, questionType)];
-        } catch (e) {
-          console.warn(`[LLM] ${a.id} 失败,降级到本地预设`, e);
-          return [a.id, selectSmartDialogue(a.id, question, questionType)];
-        }
-      });
-      const dialogueResults = await Promise.all(dialoguePromises);
-      const agentDialogues = Object.fromEntries(dialogueResults);
-
-      // 总结
-      let summary = '';
-      try {
-        summary = await generateSummaryFromLlm(question, agentDialogues, config);
-      } catch (e) {
-        console.warn('[LLM] 总结失败,使用本地总结', e);
-        summary = generateLocalSummary(question, agentDialogues);
-      }
-
-      // 反问 + 框架 + 签
-      const artifacts = await generateArtifacts(question, questionType, agentDialogues, config);
-
-      return {
-        agents,
-        agentDialogues,
-        choices: DEFAULT_CHOICES,
-        summary,
-        gua,
-        ...artifacts,
-        questionType,
-        source: 'llm',
-      };
-    } catch (e) {
-      console.warn('[inferenceEngine] LLM 流水线异常,降级到本地智能预设', e);
-    }
-  }
-
-  // 本地智能预设
-  const agentDialogues = {};
-  agents.forEach((a) => {
-    agentDialogues[a.id] = selectSmartDialogue(a.id, question, questionType);
+/**
+ * 收集流式对话的完整文本（非流式用法）
+ * 调用 apiClient.streamAgentDialogue，通过 onChunk 累积文本，返回完整结果
+ */
+async function getFullAgentDialogue(agent, question, previousDialogues) {
+  let full = '';
+  await apiClient.streamAgentDialogue(agent, question, previousDialogues, (chunk) => {
+    full += chunk;
   });
+  return full.trim();
+}
 
+/**
+ * 带超时的单个 Agent 对话请求（10秒）
+ */
+async function getAgentDialogueWithTimeout(agent, question, previousDialogues) {
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('单个 Agent 对话超时')), 20000)
+  );
+  const dialoguePromise = getFullAgentDialogue(agent, question, previousDialogues);
+  return Promise.race([dialoguePromise, timeoutPromise]);
+}
+
+/**
+ * 规范化后端卦象数据，保证 gua/trigram/element 字段存在
+ */
+function normalizeGua(hexagram, fallback) {
+  if (!hexagram) return fallback;
   return {
-    agents,
-    agentDialogues,
-    choices: DEFAULT_CHOICES,
-    summary: generateLocalSummary(question, agentDialogues),
-    gua,
-    powerfulQuestion: getPowerfulQuestion(questionType),
-    framework: getFramework(questionType),
-    verse: getVerse(questionType),
-    questionType,
-    source: 'preset-smart',
+    ...hexagram,
+    gua: hexagram.gua || hexagram.name || fallback.gua,
+    trigram: hexagram.trigram || hexagram.symbol || fallback.trigram,
+    element: hexagram.element || fallback.element,
   };
 }
 
 function generateLocalSummary(question, agentDialogues) {
   const parts = Object.values(agentDialogues).slice(0, 3);
   return `「${question}」,诸位已各抒己见。${parts.join(' ').slice(0, 60)}... 此局无定论,关键在你自己。`;
+}
+
+/**
+ * 为指定智囊列表生成发言（含自定义智囊）
+ * 优先并行调用，每个 Agent 独立超时，完成一个就回调一个，让用户实时看到效果
+ * @param {string} question - 用户问题
+ * @param {Array} agents - 智囊列表
+ * @param {string} questionType - 问题类型
+ * @param {Function} onAgentComplete - 每个 Agent 完成后的回调 (agentId, text, success, error) => void
+ * @param {Function} onError - 整体错误回调
+ * @returns {Object} { dialogues, results: { agentId: { text, success, error, source } } }
+ */
+export async function generateDialoguesForAgents(question, agents, questionType, onAgentComplete, onError) {
+  if (!agents || agents.length === 0) return { dialogues: {}, results: {}, errors: {} };
+
+  const nonMasterAgents = agents.filter(a => a.role !== 'master');
+  const dialogues = {};
+  const results = {};
+  const errors = {};
+
+  const promises = nonMasterAgents.map(async (agent) => {
+    let text = '';
+    let apiSuccess = false;
+    let errorInfo = null;
+    let source = 'preset';
+
+    if (isLlmAvailable()) {
+      let attempt = 0;
+      const maxAttempts = 2;
+
+      while (attempt < maxAttempts) {
+        attempt++;
+        try {
+          text = await getAgentDialogueWithTimeout(agent, question, []);
+          if (text && text.length > 5) {
+            dialogues[agent.id] = text;
+            apiSuccess = true;
+            source = 'llm';
+            results[agent.id] = { text, success: true, error: null, source };
+            if (onAgentComplete) onAgentComplete(agent.id, text, true, null, source);
+            return;
+          }
+        } catch (e) {
+          errorInfo = e.message;
+          console.warn(`[发言] Agent ${agent.id} 第${attempt}次尝试失败`, e);
+        }
+      }
+    }
+
+    const localText = selectSmartDialogue(agent.id, question, questionType, agent, []);
+    text = localText;
+    dialogues[agent.id] = localText;
+    source = 'preset';
+    
+    if (!apiSuccess) {
+      errors[agent.id] = {
+        agentName: agent.name,
+        error: errorInfo || 'API调用失败',
+        type: agent.id.startsWith('custom_') ? 'custom' : 'preset',
+      };
+    }
+    
+    results[agent.id] = { text, success: apiSuccess, error: errorInfo, source };
+    if (onAgentComplete) onAgentComplete(agent.id, text, apiSuccess, errorInfo, source);
+  });
+
+  await Promise.all(promises);
+  
+  if (onError && Object.keys(errors).length > 0) {
+    onError(errors);
+  }
+  
+  return { dialogues, results, errors };
+}
+
+/* ============================================================
+   Agent 反问引擎 - 实现 Agent 反问-回答-追问循环
+============================================================ */
+
+const AGENT_QUESTIONS = {
+  qiangu: [
+    '这个数字背后，隐性成本你算过吗？',
+    '如果算上三年累计差值，还划算吗？',
+    '对方给你的估值，有什么具体依据？',
+    '你现在的机会成本，真的是零吗？',
+  ],
+  luxiang: [
+    '这个选择是三年题还是十年题？',
+    '三年后回看，你想成为什么样的人？',
+    '这个机会能给你带来什么稀缺性？',
+    '你的能力护城河，够不够宽？',
+  ],
+  fengyan: [
+    '最坏情况是什么，你能承受吗？',
+    '如果这事崩了，你的备用方案是什么？',
+    '你忽略了什么信息不对称？',
+    '这个光鲜的选择背后，谁在买单？',
+  ],
+  xinhe: [
+    '你描述这件事时，身体是放松还是紧绷？',
+    '最近一次让你真正开心是什么时候？',
+    '如果没有任何人看着，你会怎么选？',
+    '这个选择会让你夜里睡不好吗？',
+  ],
+  yuntu: [
+    '这件事放进大周期看，现在是涨潮还是退潮？',
+    '你是在吃Beta红利，还是做Alpha？',
+    '行业的拐点，你看见了吗？',
+    '政策面的风向，对你有利还是不利？',
+  ],
+  jingyuan: [
+    '你问"该不该"，这个"该"是谁的标准？',
+    '如果不用考虑对错，你真正愿意做什么？',
+    '你是不是在用分析逃避决定？',
+    '这个问题背后，你真正害怕的是什么？',
+  ],
+  zhenxing: [
+    '再等一周，你的处境会变好还是变差？',
+    '分析够了，第一刀切在哪里？',
+    '今晚能做什么，让明天不一样？',
+    '这个窗口期，还有多久？',
+  ],
+  duiyan: [
+    '你和对方真的谈过你的纠结吗？',
+    '对方的真实诉求，你真的知道吗？',
+    '有没有可能，这只是一场沟通误会？',
+    '如果用谈判思维重新看，会怎么样？',
+  ],
+};
+
+function selectAgentQuestion(agentId, roundIndex) {
+  const questions = AGENT_QUESTIONS[agentId] || AGENT_QUESTIONS.jingyuan;
+  return questions[roundIndex % questions.length];
+}
+
+/**
+ * 判断是否需要继续追问
+ * 本地降级规则：回答长度 < 10 字或包含"不知道""随便""都行"等词则继续追问
+ */
+function shouldContinueAsking(answer) {
+  if (!answer || !answer.trim()) return true;
+  const trimmed = answer.trim();
+  if (trimmed.length < 10) return true;
+  const vagueWords = ['不知道', '随便', '都行', '无所谓', '看看', '再说', '差不多'];
+  return vagueWords.some(w => trimmed.includes(w));
+}
+
+/**
+ * 生成 Agent 反问
+ * @returns {string} Agent 的问题
+ */
+export async function generateAgentQuestion(agent, question, dialogueHistory) {
+  const roundIndex = dialogueHistory ? dialogueHistory.length : 0;
+  
+  if (isLlmAvailable()) {
+    try {
+      const result = await apiClient.askQuestion(agent.id, question, dialogueHistory, { multiple: true, count: 3 });
+      if (result && result.questions && Array.isArray(result.questions)) {
+        return result.questions;
+      }
+      if (result && result.question) {
+        return result.question;
+      }
+    } catch (e) {
+      console.warn('[反问] 后端失败，降级本地', e);
+    }
+  }
+  
+  const questions = selectMultipleAgentQuestions(agent.id, roundIndex);
+  if (questions && questions.length > 0) {
+    return questions;
+  }
+  return selectAgentQuestion(agent.id, roundIndex);
+}
+
+function selectMultipleAgentQuestions(agentId, roundIndex) {
+  const questionBank = {
+    qiangu: [
+      ['隐性成本你算过吗？', '三年累计差值还划算吗？', '期权行权价多少？'],
+      ['社保基数算过吗？', '年终奖金比例多少？', '签字费包含在内吗？'],
+    ],
+    luxiang: [
+      ['这个选择是三年题还是十年题？', '三年后你想成为什么样的人？', '赛道天花板在哪里？'],
+      ['你的能力护城河够吗？', '团队氛围如何？', '晋升路径清晰吗？'],
+    ],
+    fengyan: [
+      ['最坏情况是什么，能承受吗？', '备用方案准备好了吗？', '对方信息有多少不对称？'],
+      ['还有哪些反面证据？', '时机是否成熟？', '机会成本是多少？'],
+    ],
+    xinhe: [
+      ['描述时身体放松还是紧绷？', '最近一次真正开心是什么时候？', '如果没人看着你会怎么选？'],
+      ['心里其实有答案吗？', '这个选择让你兴奋还是焦虑？', '最害怕失去什么？'],
+    ],
+    yuntu: [
+      ['放进大周期看是涨潮还是退潮？', '吃Beta红利还是做Alpha？', '政策风向如何？'],
+      ['行业聚集度怎样？', '技术变革会影响吗？', '未来五年趋势如何？'],
+    ],
+    jingyuan: [
+      ['这个"该"是谁的标准？', '如果不用考虑对错你愿意做什么？', '上次类似情况结果如何？'],
+      ['你在逃避什么？', '真正想要的是什么？', '什么在阻碍你？'],
+    ],
+    zhenxing: [
+      ['再等一周处境会变好还是变差？', '第一刀切在哪里？', '窗口期还有多久？'],
+      ['现在不做会后悔吗？', '最小可行行动是什么？', '下一步具体怎么做？'],
+    ],
+    duiyan: [
+      ['你和对方真的谈过纠结吗？', '对方的真实诉求是什么？', '还有什么没说清楚？'],
+      ['换个方式沟通会怎样？', '如何表达你的真实需求？', '对方可能的顾虑是什么？'],
+    ],
+  };
+  
+  const qs = questionBank[agentId] || questionBank.jingyuan;
+  const index = Math.min(roundIndex, qs.length - 1);
+  return qs[index] || qs[0];
+}
+
+/**
+ * 判断 Agent 是否继续追问
+ * @returns {Object} { continueAsking: boolean, nextQuestion?: string }
+ */
+export async function judgeContinueAsking(agent, question, dialogueHistory, lastAnswer) {
+  const roundIndex = dialogueHistory ? dialogueHistory.length : 0;
+  
+  if (roundIndex >= 2) {
+    return { continueAsking: false };
+  }
+  
+  if (agent.id.startsWith('custom_')) {
+    const shouldContinue = shouldContinueAsking(lastAnswer);
+    if (shouldContinue) {
+      return { continueAsking: true, nextQuestion: selectAgentQuestion('luxiang', roundIndex + 1) };
+    }
+    return { continueAsking: false };
+  }
+  
+  if (isLlmAvailable()) {
+    try {
+      const result = await apiClient.continueAsking(agent.id, question, dialogueHistory, lastAnswer);
+      return result;
+    } catch (e) {
+      console.warn('[追问判断] 后端失败，降级本地', e);
+    }
+  }
+  
+  const shouldContinue = shouldContinueAsking(lastAnswer);
+  if (shouldContinue) {
+    return { continueAsking: true, nextQuestion: selectAgentQuestion(agent.id, roundIndex + 1) };
+  }
+  return { continueAsking: false };
+}
+
+/**
+ * 生成演的全局总结和选项
+ * @returns {Object} { summary, options: [{ label, keyPoints, guaRecommendation }] }
+ */
+export async function generateYanSummary(question, agentDialogues, agents) {
+  const nonMasterAgents = (agents || []).filter(a => a.role !== 'master');
+  const dialoguesArr = nonMasterAgents
+    .map(a => ({ name: a.name, stance: a.stance || a.perspective || '其道', text: agentDialogues[a.id] || '' }))
+    .filter(d => d.text);
+
+  if (isLlmAvailable()) {
+    try {
+      const result = await apiClient.generateSummary(question, nonMasterAgents.map(a => a.id), agentDialogues);
+      if (result && result.options) return result;
+    } catch (e) {
+      console.warn('[演总结] 后端失败，降级本地', e);
+    }
+  }
+
+  return generateLocalYanSummary(question, dialoguesArr);
+}
+
+function generateLocalYanSummary(question, dialoguesArr) {
+  const keyPoints = dialoguesArr.map(d => {
+    const stance = d.stance;
+    const text = d.text;
+    let point = '';
+    if (text.includes('成本') || text.includes('数字') || text.includes('钱')) {
+      point = `${d.name}提醒：关注成本与收益的实际差值`;
+    } else if (text.includes('风险') || text.includes('最坏') || text.includes('崩')) {
+      point = `${d.name}警示：先考虑最坏情况的承受力`;
+    } else if (text.includes('感受') || text.includes('身体') || text.includes('心')) {
+      point = `${d.name}提示：倾听身体和内心的真实感受`;
+    } else if (text.includes('三年') || text.includes('十年') || text.includes('长期')) {
+      point = `${d.name}建议：把选择放回更长的时间尺度`;
+    } else if (text.includes('做') || text.includes('行动') || text.includes('deadline')) {
+      point = `${d.name}催促：分析够了，该行动了`;
+    } else {
+      point = `${d.name}从${stance}角度提出了关键问题`;
+    }
+    return point;
+  });
+
+  const summary = `「${question}」，诸位各抒己见。\n\n${keyPoints.slice(0, 3).join('\n')}\n\n此局的关键，不在选哪边，而在你最在意什么。`;
+
+  const options = [
+    {
+      label: '抓住机会',
+      keyPoints: [
+        keyPoints.find(p => p.includes('机会') || p.includes('收益')) || '机会窗口有限',
+        keyPoints.find(p => p.includes('行动') || p.includes('做')) || '分析够了该出手',
+        '评估风险后大胆尝试',
+      ],
+      guaRecommendation: '大有',
+    },
+    {
+      label: '规避风险',
+      keyPoints: [
+        keyPoints.find(p => p.includes('风险') || p.includes('最坏')) || '先考虑最坏情况',
+        keyPoints.find(p => p.includes('成本') || p.includes('数字')) || '算清隐性成本',
+        '保持谨慎，留有余地',
+      ],
+      guaRecommendation: '坎',
+    },
+    {
+      label: '稳守当前',
+      keyPoints: [
+        keyPoints.find(p => p.includes('长期') || p.includes('十年')) || '从长计议',
+        keyPoints.find(p => p.includes('感受') || p.includes('心')) || '倾听内心声音',
+        '不急于决定，静待时机',
+      ],
+      guaRecommendation: '艮',
+    },
+    {
+      label: '探索新路',
+      keyPoints: [
+        keyPoints.find(p => p.includes('行动') || p.includes('做')) || '迈出第一步',
+        keyPoints.find(p => p.includes('风险') || p.includes('最坏')) || '小步试错可控',
+        '在行动中寻找答案',
+      ],
+      guaRecommendation: '巽',
+    },
+  ];
+
+  return { summary, options };
+}
+
+/**
+ * 为选项生成卦象推荐详情
+ */
+export async function generateOptionDivination(question, option) {
+  const query = `${question} - ${option.label}`;
+  
+  if (isLlmAvailable()) {
+    try {
+      const hexagram = await apiClient.castHexagram(query);
+      const interpretation = await apiClient.interpretHexagram(hexagram, query, { [option.label]: option.keyPoints });
+      return { ...option, guaDetail: interpretation, gua: hexagram };
+    } catch (e) {
+      console.warn('[选项卜卦] 后端失败，降级本地', e);
+    }
+  }
+
+  const guaMap = {
+    '抓住机会': { gua: '大有', trigram: '☰', element: '火', verse: '元亨。柔得尊位,大亨以正。', gloss: '把握时机,顺势而为。' },
+    '规避风险': { gua: '坎', trigram: '☵', element: '水', verse: '习坎,有孚,维心亨。', gloss: '险中可通,谨慎前行。' },
+    '稳守当前': { gua: '艮', trigram: '☶', element: '山', verse: '艮其背,不获其身。', gloss: '静观其变,止于其所。' },
+    '探索新路': { gua: '巽', trigram: '☴', element: '风', verse: '小亨,利有攸往。', gloss: '顺势而进,渐入佳境。' },
+  };
+  
+  const gua = guaMap[option.label] || guaMap['稳守当前'];
+  return { ...option, guaDetail: { verse: gua.verse, gloss: gua.gloss }, gua };
+}
+
+/**
+ * 基于实际辩论内容生成演的总结
+ * 在所有智囊发言完毕后调用
+ */
+export async function generateSummaryFromDebate(question, agentDialogues, agents) {
+  const nonMasterAgents = (agents || []).filter(a => a.role !== 'master');
+  const dialoguesArr = nonMasterAgents
+    .map(a => ({ name: a.name, stance: a.stance || a.perspective || '其道', text: agentDialogues[a.id] || '' }))
+    .filter(d => d.text);
+
+  // 尝试后端生成
+  if (isLlmAvailable()) {
+    try {
+      const result = await apiClient.generateSummary(question, nonMasterAgents.map(a => a.id), agentDialogues);
+      if (result && result.length > 10) return result;
+    } catch (e) {
+      console.warn('[总结] 后端失败，降级本地', e);
+    }
+  }
+
+  // 本地降级：基于实际发言内容综合分析
+  return generateLocalSummaryEnhanced(question, dialoguesArr);
+}
+
+function generateLocalSummaryEnhanced(question, dialoguesArr) {
+  if (!dialoguesArr || dialoguesArr.length === 0) {
+    return `此问「${question}」，尚无智囊发言。或许答案不在外界，而在你心中。`;
+  }
+
+  const views = dialoguesArr.map(d => `${d.name}从${d.stance}切入：${d.text.slice(0, 30)}…`);
+  const names = dialoguesArr.map(d => d.name).join('、');
+
+  // 检测分歧
+  const allText = dialoguesArr.map(d => d.text).join(' ');
+  const hasRisk = /风险|最坏|崩|亏|谨慎/.test(allText);
+  const hasOpportunity = /机会|红利|上升|出手|窗口/.test(allText);
+  const hasEmotion = /感受|身体|开心|紧绷|内心/.test(allText);
+
+  let analysis = '';
+  if (hasRisk && hasOpportunity) {
+    analysis = `诸位所言，机会与风险各执一词。`;
+  } else if (hasRisk && !hasOpportunity) {
+    analysis = `诸位倾向谨慎，但谨慎不是不做，而是想清楚再做。`;
+  } else if (hasOpportunity && !hasRisk) {
+    analysis = `诸位看好前景，但越是共识看好的事，越要追问风险在哪。`;
+  } else if (hasEmotion) {
+    analysis = `诸位中有人触及了感受层面，这往往是理性分析忽略的盲区。`;
+  } else {
+    analysis = `诸君各有侧重，但尚未触及核心。`;
+  }
+
+  // 提取关键追问
+  const keyQuestion = dialoguesArr
+    .map(d => {
+      const m = d.text.match(/[？?][^。？?]*$/);
+      return m ? m[0] : null;
+    })
+    .filter(Boolean)[0];
+
+  const conclusion = keyQuestion
+    ? `关键不在选哪边，而在回答这个问题：${keyQuestion}`
+    : `此局无定论，关键在你自己最在意什么。`;
+
+  return `${views.join('\n')}\n\n${analysis}\n${conclusion}`;
+}
+
+/* ============================================================
+   主入口
+============================================================ */
+
+/**
+ * 透传 apiClient 的流式 Agent 对话接口
+ * 供需要逐字流式展示的调用方直接使用
+ */
+export async function streamAgentDialogue(agent, question, previousDialogues, onChunk) {
+  return apiClient.streamAgentDialogue(agent, question, previousDialogues, onChunk);
+}
+
+/**
+ * 生成推演内容
+ * 优先调后端 API（动态 Agent + 真实卜卦），失败降级到本地智能预设
+ * @returns {Object} { agents, agentDialogues, choices, summary, gua, powerfulQuestion, framework, verse, questionType, source }
+ */
+export async function generateInferenceContent(question) {
+  const localAgents = getAgentsForQuestion(question).filter((a) => a.role !== 'master');
+  const questionType = detectQuestionType(question);
+  const localGua = getGuo(questionType);
+
+  console.log('[inference] 本地Agent:', localAgents.map(a => a.name));
+  console.log('[inference] API_BASE_URL:', apiClient.API_BASE_URL);
+
+  try {
+    console.log('[inference] 开始调用后端分析...');
+    const analysis = await apiClient.analyzeQuestion(question);
+    console.log('[inference] 后端分析成功:', analysis);
+    
+    const agents = analysis.agents || localAgents;
+    return {
+      agents: agents.map(a => ({
+        ...a,
+        role: a.role || 'dynamic',
+        trigram: a.trigram || '☯',
+        color: a.color || '#C8A850',
+        glow: a.glow || '#F0D890',
+      })),
+      agentDialogues: {},
+      choices: DEFAULT_CHOICES,
+      summary: analysis.summary || '',
+      gua: analysis.gua || localGua,
+      powerfulQuestion: analysis.powerfulQuestion || getPowerfulQuestion(questionType),
+      framework: analysis.framework || getFramework(questionType),
+      verse: analysis.verse || getVerse(questionType),
+      questionType,
+      source: 'backend',
+    };
+  } catch (e) {
+    console.error('[inference] 后端分析失败，降级本地:', e.message, e.stack);
+  }
+
+  if (!localAgents || localAgents.length === 0) {
+    console.error('[inference] 本地Agent为空，使用默认Agent');
+    const defaultAgents = [
+      { id: 'fengyan', name: '风眼', stance: '风险视角', role: 'permanent', trigram: '☵', color: '#A84848', glow: '#E88080' },
+      { id: 'jingyuan', name: '镜渊', stance: '反思视角', role: 'permanent', trigram: '☶', color: '#685888', glow: '#A898C8' },
+      { id: 'qiangu', name: '钱谷', stance: '财务视角', role: 'dynamic', trigram: '☰', color: '#C88848', glow: '#E8B880' },
+      { id: 'luxiang', name: '路向', stance: '职业视角', role: 'dynamic', trigram: '☴', color: '#508870', glow: '#80C8A8' },
+    ];
+    return {
+      agents: defaultAgents,
+      agentDialogues: {},
+      choices: DEFAULT_CHOICES,
+      summary: '',
+      gua: localGua,
+      powerfulQuestion: getPowerfulQuestion(questionType),
+      framework: getFramework(questionType),
+      verse: getVerse(questionType),
+      questionType,
+      source: 'default',
+    };
+  }
+
+  return {
+    agents: localAgents,
+    agentDialogues: {},
+    choices: DEFAULT_CHOICES,
+    summary: '',
+    gua: localGua,
+    powerfulQuestion: getPowerfulQuestion(questionType),
+    framework: getFramework(questionType),
+    verse: getVerse(questionType),
+    questionType,
+    source: 'preset-smart',
+  };
 }

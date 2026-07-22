@@ -1,0 +1,181 @@
+.checkin-modal-overlay {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.checkin-modal-content {
+  animation: modalSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.xp-float-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 20;
+  white-space: nowrap;
+}
+
+.checkin-day {
+  transition: all 0.3s ease;
+}
+
+.checkin-day.checked {
+  animation: checkInGlow 0.6s ease-out;
+}
+
+@keyframes checkInGlow {
+  0% {
+    box-shadow: 0 0 0 rgba(200, 168, 80, 0);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(200, 168, 80, 0.8), inset 0 0 20px rgba(200, 168, 80, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 16px rgba(200, 168, 80, 0.25), inset 0 0 12px rgba(200, 168, 80, 0.13);
+  }
+}
+
+.checkin-checkmark {
+  animation: checkmarkPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes checkmarkPop {
+  0% {
+    transform: scale(0) rotate(-45deg);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.3) rotate(10deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+.today-pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+}
+
+.checkin-modal-close:hover {
+  background-color: rgba(200, 168, 80, 0.1) !important;
+  border-color: rgba(200, 168, 80, 0.3) !important;
+  color: #8B7355 !important;
+}
+
+.level-display:hover .level-detail-popup {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.level-detail-popup {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: all 0.25s ease;
+  pointer-events: none;
+}
+
+.level-progress-bar {
+  position: relative;
+  overflow: hidden;
+}
+
+.level-progress-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.3),
+    transparent
+  );
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.checkin-button-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.checkin-button-shine::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.4),
+    transparent
+  );
+  animation: buttonShine 3s infinite;
+}
+
+@keyframes buttonShine {
+  0% {
+    left: -100%;
+  }
+  50%, 100% {
+    left: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .checkin-modal-content {
+    max-width: 100%;
+    margin: 10px;
+  }
+  
+  .checkin-day {
+    width: 40px !important;
+    height: 56px !important;
+  }
+}

@@ -8,6 +8,9 @@ import SplitText from '../components/fx/SplitText';
 import ScrollVelocity from '../components/fx/ScrollVelocity';
 import SpotlightCard from '../components/fx/Spotlight';
 import ShinyText from '../components/fx/ShinyText';
+import Footer from '../components/layout/Footer';
+import AppNav from '../components/AppNav';
+
 
 /* ------------------------------------------------------------------
    Design tokens - 墨纸风格
@@ -1145,7 +1148,7 @@ export default function Landing() {
   const heroY = useTransform(scrollY, [0, 600], [0, -60]);
   const baguaRotate = useTransform(scrollY, [0, 800], [0, 30]);
 
-  /* 首访引导 - 5 步惊艳序列 */
+  /* 首访引导 - 7 步惊艳序列 */
   const [showGuide, setShowGuide] = useState(() => {
     try { return !localStorage.getItem('yance:visited'); } catch { return true; }
   });
@@ -1153,10 +1156,12 @@ export default function Landing() {
   useEffect(() => {
     if (!showGuide) return;
     const timers = [
-      setTimeout(() => setGuideStep(1), 800),    // 0.8s: 天光下注
-      setTimeout(() => setGuideStep(2), 2400),   // 2.4s: 演字浮现
-      setTimeout(() => setGuideStep(3), 4000),   // 4s: 6 卦围绕
-      setTimeout(() => setGuideStep(4), 5800),   // 5.8s: CTA 高亮
+      setTimeout(() => setGuideStep(1), 600),    // 0.6s: 天光下注
+      setTimeout(() => setGuideStep(2), 2000),   // 2.0s: 演字浮现
+      setTimeout(() => setGuideStep(3), 3600),   // 3.6s: 8 卦围绕
+      setTimeout(() => setGuideStep(4), 5000),   // 5.0s: 铜钱落下
+      setTimeout(() => setGuideStep(5), 6800),   // 6.8s: 卦象绽放
+      setTimeout(() => setGuideStep(6), 8600),   // 8.6s: CTA 高亮
     ];
     return () => timers.forEach(t => clearTimeout(t));
   }, [showGuide]);
@@ -1196,49 +1201,14 @@ export default function Landing() {
         <span className="text-[10px] font-mono tracking-wide">
           <span style={{ color: T.accentBright }}>开源 / MIT</span>
           <span className="mx-3" style={{ color: '#555' }}>|</span>
-          <span style={{ color: '#999' }}>完全本地运行，数据不上传</span>
+          <span style={{ color: '#999' }}>数据云端同步，跨设备可用</span>
           <span className="mx-3" style={{ color: '#555' }}>|</span>
           <button onClick={() => navigate('/scenarios')} className="hover:underline" style={{ color: T.accentBright }}>查看剧本 →</button>
         </span>
       </motion.div>
 
       {/* ── 导航 ── */}
-      <motion.nav
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1, duration: 0.5 }}
-        className="sticky top-0 z-50 border-b"
-        style={{ backgroundColor: `${T.paper}E6`, backdropFilter: 'blur(14px)', borderColor: T.border }}
-      >
-        <div className="max-w-[1200px] mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 flex items-center justify-center text-[13px] font-serif font-bold" style={{ color: T.accent, border: `1.5px solid ${T.ink}`, borderRadius: 3, backgroundColor: T.paperLight }}>演</div>
-            <div className="flex flex-col leading-none">
-              <span className="text-sm font-serif font-semibold">演策</span>
-              <span className="text-[8px] font-mono tracking-[0.2em] mt-0.5" style={{ color: T.muted }}>YAN CE / BAGUA ENGINE</span>
-            </div>
-          </div>
-          <div className="hidden md:flex items-center gap-8">
-            {['首页', '剧本', '沙盘', '卡牌', '社区'].map((item, i) => {
-              const paths = ['/', '/scenarios', '/sandbox', '/cards', '/community'];
-              return (
-                <button key={item} onClick={() => navigate(paths[i])} className="text-[12px] font-medium transition-colors" style={{ color: i === 0 ? T.accent : T.ink }}>
-                  {item}
-                </button>
-              );
-            })}
-          </div>
-          <motion.button
-            whileHover={{ y: -1 }}
-            whileTap={{ scale: 0.97 }}
-            onClick={() => navigate('/sandbox')}
-            className="px-4 py-2 text-[11px] font-medium text-white"
-            style={{ backgroundColor: T.ink, borderRadius: 3 }}
-          >
-            开演 →
-          </motion.button>
-        </div>
-      </motion.nav>
+      <AppNav variant="light" />
 
       {/* ── HERO ── */}
       <section className="relative overflow-hidden">
@@ -1643,15 +1613,7 @@ export default function Landing() {
       </section>
 
       {/* ── Footer ── */}
-      <footer className="border-t py-8 px-6" style={{ borderColor: T.border }}>
-        <div className="max-w-[1200px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 flex items-center justify-center text-[9px] font-serif font-bold" style={{ color: T.accent, border: `1px solid ${T.ink}`, borderRadius: 2, backgroundColor: T.paperLight }}>演</div>
-            <span className="text-[11px] font-mono" style={{ color: T.muted }}>演策 / BAGUA ENGINE</span>
-          </div>
-          <span className="text-[10px] font-mono" style={{ color: T.muted }}>MIT License / Open Source</span>
-        </div>
-      </footer>
+      <Footer theme={T} />
 
       {/* ═════════ 首访引导层 ═════════ */}
       <AnimatePresence>
@@ -1736,23 +1698,17 @@ export default function Landing() {
                     <motion.span
                       key={t}
                       initial={{ opacity: 0, scale: 0.4 }}
-                      animate={{
-                        opacity: [0.4, 1, 0.4],
-                        scale: 1,
-                      }}
-                      transition={{
-                        opacity: { duration: 2.4, repeat: Infinity, delay: i * 0.15, ease: 'easeInOut' },
-                        scale: { duration: 0.6, delay: i * 0.08 },
-                      }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.15 * i, duration: 0.6 }}
                       style={{
                         position: 'absolute',
-                        left: `calc(50% + ${Math.cos(a) * r}px - 18px)`,
-                        top: `calc(50% + ${Math.sin(a) * r}px - 18px)`,
-                        fontSize: 36,
-                        color: '#F0D890',
-                        textShadow: '0 0 16px rgba(240,216,144,0.9), 0 0 32px rgba(240,216,144,0.5)',
+                        left: `calc(50% + ${Math.cos(a) * r}px)`,
+                        top: `calc(50% + ${Math.sin(a) * r}px)`,
+                        transform: 'translate(-50%, -50%)',
+                        fontSize: 28,
                         fontFamily: F.cursive,
-                        pointerEvents: 'none',
+                        color: `rgba(240,216,144,${0.4 + Math.random() * 0.4})`,
+                        opacity: 0.7,
                       }}
                     >{t}</motion.span>
                   );
@@ -1760,8 +1716,82 @@ export default function Landing() {
               </motion.div>
             )}
 
-            {/* 步骤 4: 引导文字 + CTA */}
+            {/* 步骤 4: 铜钱落下 - 三枚铜钱从天而降 */}
             {guideStep >= 4 && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.6 }}
+                style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                {[0, 1, 2].map((coin, i) => (
+                  <motion.div
+                    key={coin}
+                    initial={{ opacity: 0, y: -300, rotate: 0 }}
+                    animate={{ opacity: 1, y: 0, rotate: 720 }}
+                    transition={{ delay: 0.2 * i, duration: 1.2, ease: [0.34, 1.56, 0.64, 1] }}
+                    style={{
+                      position: 'absolute',
+                      width: 36, height: 36,
+                      borderRadius: '50%',
+                      background: 'linear-gradient(135deg, #C8A850 0%, #A88840 50%, #C8A850 100%)',
+                      border: '2px solid #8A6830',
+                      boxShadow: '0 4px 12px rgba(200,168,80,0.6), inset 0 2px 4px rgba(255,255,255,0.4)',
+                      left: `calc(50% + ${(i - 1) * 50}px)`,
+                      top: 'calc(50% + 40px)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    <span style={{ fontSize: 14, fontFamily: F.cursive, color: '#8A6830' }}>●</span>
+                  </motion.div>
+                ))}
+              </motion.div>
+            )}
+
+            {/* 步骤 5: 卦象绽放 - 中央演字周围卦象炸开 */}
+            {guideStep >= 5 && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.8 }}
+                style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                {['☰', '☱', '☲', '☳', '☴', '☵', '☶', '☷'].map((t, i) => {
+                  const a = (i / 8) * Math.PI * 2;
+                  const r = 300;
+                  return (
+                    <motion.span
+                      key={`burst-${t}`}
+                      initial={{ opacity: 0, scale: 0.5, x: 0, y: 0 }}
+                      animate={{ opacity: [0, 1, 0.3], scale: [0.5, 1.5, 1], x: Math.cos(a) * r, y: Math.sin(a) * r }}
+                      transition={{ delay: 0.08 * i, duration: 1.5, ease: EASE }}
+                      style={{
+                        position: 'absolute',
+                        fontSize: 36,
+                        fontFamily: F.cursive,
+                        color: '#F0D890',
+                        textShadow: '0 0 20px rgba(240,216,144,0.8)',
+                      }}
+                    >{t}</motion.span>
+                  );
+                })}
+                <motion.div
+                  initial={{ scale: 1 }}
+                  animate={{ scale: [1, 1.15, 1] }}
+                  transition={{ duration: 0.6, delay: 0.4 }}
+                  style={{
+                    position: 'absolute',
+                    width: 180, height: 180,
+                    borderRadius: '50%',
+                    border: '2px solid rgba(240,216,144,0.6)',
+                    boxShadow: '0 0 30px rgba(240,216,144,0.4), inset 0 0 30px rgba(240,216,144,0.2)',
+                  }}
+                />
+              </motion.div>
+            )}
+
+            {/* 步骤 6: 引导文字 + CTA */}
+            {guideStep >= 6 && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1784,7 +1814,7 @@ export default function Landing() {
                 <motion.button
                   whileHover={{ scale: 1.04, y: -2 }}
                   whileTap={{ scale: 0.97 }}
-                  onClick={(e) => { e.stopPropagation(); finishGuide(); navigate('/sandbox'); }}
+                  onClick={(e) => { e.stopPropagation(); finishGuide(); }}
                   style={{
                     padding: '14px 36px',
                     background: 'linear-gradient(135deg, #A8472E 0%, #8A3925 100%)',
@@ -1798,7 +1828,7 @@ export default function Landing() {
                     boxShadow: '0 8px 32px rgba(168,71,46,0.5), 0 0 24px rgba(240,216,144,0.3)',
                   }}
                 >
-                  立 卦 开 演 →
+                  进入演策 →
                 </motion.button>
                 <p style={{ fontSize: 10, letterSpacing: '0.2em', marginTop: 16, opacity: 0.5 }}>
                   点击任意处跳过
@@ -1811,3 +1841,5 @@ export default function Landing() {
     </div>
   );
 }
+
+

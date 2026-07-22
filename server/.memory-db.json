@@ -1,0 +1,246 @@
+{
+  "custom_advisors": [
+    [
+      "c6d70275-cddb-4257-93eb-05dbb06e0fd6",
+      {
+        "id": "c6d70275-cddb-4257-93eb-05dbb06e0fd6",
+        "user_id": "testuser123",
+        "name": "更新后的顾问",
+        "persona": "你是一位测试顾问，擅长从测试角度分析问题。",
+        "perspective": "测试视角",
+        "style": "严谨风格",
+        "element": "风",
+        "trigram": "巽",
+        "created_at": "2026-07-12T03:03:26.690Z",
+        "updated_at": "2026-07-12T03:03:26.715Z"
+      }
+    ]
+  ],
+  "user_memories": [],
+  "conversations": [
+    [
+      "conv-1783856551331-kxrzsi",
+      {
+        "id": "conv-1783856551331-kxrzsi",
+        "user_id": "test-001",
+        "title": "与演的对话",
+        "created_at": "2026-07-12T11:42:31.331Z",
+        "updated_at": "2026-07-12T11:45:03.879Z"
+      }
+    ],
+    [
+      "conv-1783856772545-31o83e",
+      {
+        "id": "conv-1783856772545-31o83e",
+        "user_id": "test-002",
+        "title": "与演的对话",
+        "created_at": "2026-07-12T11:46:12.545Z",
+        "updated_at": "2026-07-12T11:46:12.545Z"
+      }
+    ],
+    [
+      "conv-1783856958609-ykhmp1",
+      {
+        "id": "conv-1783856958609-ykhmp1",
+        "user_id": "test-003",
+        "title": "与演的对话",
+        "created_at": "2026-07-12T11:49:18.609Z",
+        "updated_at": "2026-07-12T11:49:18.609Z"
+      }
+    ],
+    [
+      "conv-1783857056334-32viqs",
+      {
+        "id": "conv-1783857056334-32viqs",
+        "user_id": "test-004",
+        "title": "与演的对话",
+        "created_at": "2026-07-12T11:50:56.334Z",
+        "updated_at": "2026-07-12T11:50:56.334Z"
+      }
+    ],
+    [
+      "conv-1783857091645-ehi49y",
+      {
+        "id": "conv-1783857091645-ehi49y",
+        "user_id": "test-005",
+        "title": "与演的对话",
+        "created_at": "2026-07-12T11:51:31.645Z",
+        "updated_at": "2026-07-12T11:51:31.645Z"
+      }
+    ],
+    [
+      "conv-1783866794569-655mtn",
+      {
+        "id": "conv-1783866794569-655mtn",
+        "user_id": "f6783946-648b-4309-ab95-47f7c13c03f4",
+        "title": "与演的对话",
+        "created_at": "2026-07-12T14:33:14.569Z",
+        "updated_at": "2026-07-12T14:33:14.569Z"
+      }
+    ]
+  ],
+  "conversation_messages": [
+    [
+      "msg-1783856551340-edn1dg",
+      {
+        "id": "msg-1783856551340-edn1dg",
+        "conversation_id": "conv-1783856551331-kxrzsi",
+        "role": "user",
+        "content": "?????????",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:42:31.340Z"
+      }
+    ],
+    [
+      "msg-1783856558209-m80aoh",
+      {
+        "id": "msg-1783856558209-m80aoh",
+        "conversation_id": "conv-1783856551331-kxrzsi",
+        "role": "assistant",
+        "content": "客问阴阳之变，吾观此卦，乾坤相荡，阴阳相成。乾坤者，天地也，天地变化，万物生焉。阴阳相成，万物化生，此乃自然之理，万物皆循此道而行。\n\n客再问人生之路，且听吾言。人生如行舟，浮沉不定，然有恒心则可渡彼岸。观卦象，需待时而动，不可强求。君子藏器于身，待时而动，此乃明智之举。",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:42:38.209Z"
+      }
+    ],
+    [
+      "msg-1783856703896-rge3c5",
+      {
+        "id": "msg-1783856703896-rge3c5",
+        "conversation_id": "conv-1783856551331-kxrzsi",
+        "role": "user",
+        "content": "????????",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:45:03.896Z"
+      }
+    ],
+    [
+      "msg-1783856710542-8isp5s",
+      {
+        "id": "msg-1783856710542-8isp5s",
+        "conversation_id": "conv-1783856551331-kxrzsi",
+        "role": "assistant",
+        "content": "客问人生之迷，吾思此卦，水火不相射，而能相济，此乃既济之象。既济者，事之成也。人生如既济，虽有时艰，然有志者事竟成。君子见机而作，适时而行，此乃成功之道。然世事无常，需审时度势，方能立于不败之地。客宜静心反思，明辨是非，此乃明智之举。",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:45:10.542Z"
+      }
+    ],
+    [
+      "msg-1783856772598-7lcb69",
+      {
+        "id": "msg-1783856772598-7lcb69",
+        "conversation_id": "conv-1783856772545-31o83e",
+        "role": "user",
+        "content": "????????",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:46:12.598Z"
+      }
+    ],
+    [
+      "msg-1783856774614-qjyohb",
+      {
+        "id": "msg-1783856774614-qjyohb",
+        "conversation_id": "conv-1783856772545-31o83e",
+        "role": "assistant",
+        "content": "客子何来，有何疑惑？且道其详，演将为你解惑。",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:46:14.614Z"
+      }
+    ],
+    [
+      "msg-1783856958692-ib5ozm",
+      {
+        "id": "msg-1783856958692-ib5ozm",
+        "conversation_id": "conv-1783856958609-ykhmp1",
+        "role": "user",
+        "content": "????????",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:49:18.692Z"
+      }
+    ],
+    [
+      "msg-1783856963857-693qif",
+      {
+        "id": "msg-1783856963857-693qif",
+        "conversation_id": "conv-1783856958609-ykhmp1",
+        "role": "assistant",
+        "content": "客子问曰：“人生在世，何为至善？”\n演曰：“善哉斯问！吾观《易经》，谓‘天行健，君子以自强不息。’此乃人生至善之道。君子当如日之升，不断追求，自强不息，方能成就大业。”",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:49:23.857Z"
+      }
+    ],
+    [
+      "msg-1783857056346-hbx9en",
+      {
+        "id": "msg-1783857056346-hbx9en",
+        "conversation_id": "conv-1783857056334-32viqs",
+        "role": "user",
+        "content": "????????",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:50:56.346Z"
+      }
+    ],
+    [
+      "msg-1783857059338-zbhda1",
+      {
+        "id": "msg-1783857059338-zbhda1",
+        "conversation_id": "conv-1783857056334-32viqs",
+        "role": "assistant",
+        "content": "客问何事，演未曾预知，然以卦象观之，宜静观其变。此乃天机，非可轻易揣测。且待时机成熟，演自会以卦象为客解惑。客可安心，勿忧。",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:50:59.338Z"
+      }
+    ],
+    [
+      "msg-1783857091659-zo79mp",
+      {
+        "id": "msg-1783857091659-zo79mp",
+        "conversation_id": "conv-1783857091645-ehi49y",
+        "role": "user",
+        "content": "要不要去看演唱会",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:51:31.659Z"
+      }
+    ],
+    [
+      "msg-1783857094527-nq4dbz",
+      {
+        "id": "msg-1783857094527-nq4dbz",
+        "conversation_id": "conv-1783857091645-ehi49y",
+        "role": "assistant",
+        "content": "演曰：观演唱会，亦乐事也。然否泰各半，宜先观卦象，以决吉凶。子可否告知，此刻心中所想？",
+        "meta": "{}",
+        "created_at": "2026-07-12T11:51:34.527Z"
+      }
+    ],
+    [
+      "msg-1783866794573-mtq9cu",
+      {
+        "id": "msg-1783866794573-mtq9cu",
+        "conversation_id": "conv-1783866794569-655mtn",
+        "role": "user",
+        "content": "我最近有点迷茫，不知道去哪里呆着",
+        "meta": "{}",
+        "created_at": "2026-07-12T14:33:14.573Z"
+      }
+    ]
+  ],
+  "decision_follow_ups": [],
+  "user_levels": [
+    [
+      "ul_mrhqifdcj0acdj",
+      {
+        "id": "ul_mrhqifdcj0acdj",
+        "user_id": "f6783946-648b-4309-ab95-47f7c13c03f4",
+        "level": 1,
+        "xp": 10,
+        "realm": "初入卦门",
+        "total_inferences": 0,
+        "total_chats": 0,
+        "streak_days": 1,
+        "last_login_date": "2026-07-12",
+        "created_at": "2026-07-12T11:53:07.921Z",
+        "updated_at": "2026-07-12T14:34:03.211Z"
+      }
+    ]
+  ]
+}

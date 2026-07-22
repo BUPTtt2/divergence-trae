@@ -69,6 +69,7 @@ export default function Board3D({
   showQuestion,
   selectedChoice,
   inference,
+  yanOptions,
 }) {
   return (
     <group>
@@ -87,6 +88,7 @@ export default function Board3D({
         selectedChoice={selectedChoice}
         activeAgents={activeAgents}
         inference={inference}
+        yanOptions={yanOptions}
       />
 
       {/* Agent 虚影 - 围绕光球上方分布 */}

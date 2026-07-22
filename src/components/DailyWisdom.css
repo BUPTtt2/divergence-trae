@@ -1,0 +1,295 @@
+.daily-wisdom-card {
+  position: relative;
+  background: linear-gradient(145deg, #FAF6EC 0%, #F2EDE0 100%);
+  border: 1px solid #C8A850;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 
+    0 4px 24px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.daily-wisdom-card.daily-wisdom-dark {
+  background: linear-gradient(145deg, #2A241E 0%, #1A1410 100%);
+  border-color: #C8A850;
+  box-shadow: 
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 215, 130, 0.1);
+}
+
+.daily-wisdom-inner {
+  position: relative;
+  padding: 28px 24px;
+}
+
+.daily-wisdom-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.daily-wisdom-tag {
+  font-family: "Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 12px;
+  letter-spacing: 0.3em;
+  color: #A8472E;
+  padding: 4px 12px;
+  background: rgba(168, 71, 46, 0.08);
+  border: 1px solid rgba(168, 71, 46, 0.2);
+  border-radius: 2px;
+}
+
+.daily-wisdom-dark .daily-wisdom-tag {
+  color: #F0D890;
+  background: rgba(200, 168, 80, 0.1);
+  border-color: rgba(200, 168, 80, 0.3);
+}
+
+.daily-wisdom-date {
+  font-family: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 11px;
+  color: #7A7468;
+  letter-spacing: 0.1em;
+}
+
+.daily-wisdom-dark .daily-wisdom-date {
+  color: #8A8478;
+}
+
+.daily-wisdom-symbol {
+  text-align: center;
+  margin: 20px 0;
+  cursor: default;
+}
+
+.daily-wisdom-hexagram {
+  font-size: 64px;
+  line-height: 1;
+  color: #1A1410;
+  text-shadow: 0 0 40px rgba(200, 168, 80, 0.3);
+  font-family: serif;
+}
+
+.daily-wisdom-dark .daily-wisdom-hexagram {
+  color: #F0D890;
+  text-shadow: 0 0 40px rgba(240, 216, 144, 0.4);
+}
+
+.daily-wisdom-title-section {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.daily-wisdom-name {
+  font-family: "Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 28px;
+  color: #1A1410;
+  margin: 0 0 4px 0;
+  letter-spacing: 0.2em;
+}
+
+.daily-wisdom-dark .daily-wisdom-name {
+  color: #FAF6EC;
+}
+
+.daily-wisdom-chinese {
+  font-family: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 13px;
+  color: #7A7468;
+  margin-right: 12px;
+  letter-spacing: 0.1em;
+}
+
+.daily-wisdom-dark .daily-wisdom-chinese {
+  color: #9A9488;
+}
+
+.daily-wisdom-element {
+  font-family: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 11px;
+  color: #A8472E;
+  padding: 2px 8px;
+  background: rgba(168, 71, 46, 0.06);
+  border-radius: 2px;
+  letter-spacing: 0.1em;
+}
+
+.daily-wisdom-dark .daily-wisdom-element {
+  color: #F0D890;
+  background: rgba(200, 168, 80, 0.1);
+}
+
+.daily-wisdom-verse-section {
+  text-align: center;
+  padding: 16px 0;
+  border-top: 1px dashed rgba(200, 168, 80, 0.3);
+  border-bottom: 1px dashed rgba(200, 168, 80, 0.3);
+  margin-bottom: 16px;
+}
+
+.daily-wisdom-verse-label {
+  font-family: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 10px;
+  color: #C8A850;
+  letter-spacing: 0.3em;
+  margin: 0 0 8px 0;
+}
+
+.daily-wisdom-verse {
+  font-family: "Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 18px;
+  color: #1A1410;
+  margin: 0;
+  line-height: 1.6;
+  letter-spacing: 0.05em;
+}
+
+.daily-wisdom-dark .daily-wisdom-verse {
+  color: #F0D890;
+}
+
+.daily-wisdom-vernacular {
+  margin-bottom: 16px;
+}
+
+.daily-wisdom-vernacular-label {
+  font-family: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 10px;
+  color: #C8A850;
+  letter-spacing: 0.3em;
+  margin: 0 0 6px 0;
+}
+
+.daily-wisdom-vernacular-text {
+  font-family: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 13px;
+  color: #4A4438;
+  margin: 0;
+  line-height: 1.8;
+  text-align: justify;
+}
+
+.daily-wisdom-dark .daily-wisdom-vernacular-text {
+  color: #D0CCC0;
+}
+
+.daily-wisdom-expanded {
+  overflow: hidden;
+}
+
+.daily-wisdom-deeper,
+.daily-wisdom-lesson,
+.daily-wisdom-image {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: rgba(200, 168, 80, 0.04);
+  border-left: 2px solid #C8A850;
+  border-radius: 0 2px 2px 0;
+}
+
+.daily-wisdom-dark .daily-wisdom-deeper,
+.daily-wisdom-dark .daily-wisdom-lesson,
+.daily-wisdom-dark .daily-wisdom-image {
+  background: rgba(200, 168, 80, 0.06);
+  border-left-color: #F0D890;
+}
+
+.daily-wisdom-deeper-label,
+.daily-wisdom-lesson-label,
+.daily-wisdom-image-label {
+  font-family: "Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 12px;
+  color: #A8472E;
+  letter-spacing: 0.2em;
+  margin: 0 0 6px 0;
+}
+
+.daily-wisdom-dark .daily-wisdom-deeper-label,
+.daily-wisdom-dark .daily-wisdom-lesson-label,
+.daily-wisdom-dark .daily-wisdom-image-label {
+  color: #F0D890;
+}
+
+.daily-wisdom-deeper-text,
+.daily-wisdom-lesson-text,
+.daily-wisdom-image-text {
+  font-family: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 12px;
+  color: #5A5448;
+  margin: 0;
+  line-height: 1.8;
+  text-align: justify;
+}
+
+.daily-wisdom-dark .daily-wisdom-deeper-text,
+.daily-wisdom-dark .daily-wisdom-lesson-text,
+.daily-wisdom-dark .daily-wisdom-image-text {
+  color: #C0BCB0;
+}
+
+.daily-wisdom-toggle {
+  width: 100%;
+  padding: 10px;
+  background: transparent;
+  border: 1px solid #C8A850;
+  border-radius: 2px;
+  color: #A8472E;
+  font-family: "Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  margin-top: 8px;
+}
+
+.daily-wisdom-dark .daily-wisdom-toggle {
+  color: #F0D890;
+  border-color: #C8A850;
+}
+
+.daily-wisdom-toggle:hover {
+  background: rgba(200, 168, 80, 0.1);
+  box-shadow: 0 0 16px rgba(200, 168, 80, 0.2);
+}
+
+.daily-wisdom-decoration {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 1px solid #C8A850;
+  opacity: 0.6;
+}
+
+.daily-wisdom-decoration.top-left {
+  top: 8px;
+  left: 8px;
+  border-right: none;
+  border-bottom: none;
+}
+
+.daily-wisdom-decoration.top-right {
+  top: 8px;
+  right: 8px;
+  border-left: none;
+  border-bottom: none;
+}
+
+.daily-wisdom-decoration.bottom-left {
+  bottom: 8px;
+  left: 8px;
+  border-right: none;
+  border-top: none;
+}
+
+.daily-wisdom-decoration.bottom-right {
+  bottom: 8px;
+  right: 8px;
+  border-left: none;
+  border-top: none;
+}
+
+.daily-wisdom-dark .daily-wisdom-decoration {
+  border-color: #F0D890;
+  opacity: 0.4;
+}

@@ -6,6 +6,7 @@ import { COLORS } from './layoutConfig';
 import {
   createBaguaCompassTexture,
   createGlowTexture,
+  createRuneTexture,
 } from '../../utils/trigramTextures';
 
 /* ============================================================
@@ -15,81 +16,34 @@ import {
 function BaguaCompass() {
   const ringRef = useRef();
   const glowRef = useRef();
-  const glowRef2 = useRef();
-  const innerRingRef = useRef();
-  const ringGlowRef = useRef();
-  const ringGlowSpriteRef = useRef();
-  const innerRingSpriteRef = useRef();
 
   const compassTexture = useMemo(() => createBaguaCompassTexture(512), []);
-  const glowTexture = useMemo(() => createGlowTexture(COLORS.gold.light, 256), []);
-  // 面向屏幕的金色圆环贴图
-  const ringSpriteTexture = useMemo(() => createRingSpriteTexture(256), []);
+  const glowTexture = useMemo(() => createGlowTexture('#D4B888', 256), []);
 
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
     if (ringRef.current) {
-      ringRef.current.rotation.z = t * 0.06;
-    }
-    if (innerRingRef.current) {
-      innerRingRef.current.rotation.z = -t * 0.1;
+      ringRef.current.rotation.z = t * 0.03;
     }
     if (glowRef.current) {
-      const pulse = 1 + Math.sin(t * 0.5) * 0.1;
+      const pulse = 1 + Math.sin(t * 0.25) * 0.04;
       glowRef.current.scale.set(pulse, pulse, 1);
-      glowRef.current.material.opacity = 0.35 + Math.sin(t * 0.4) * 0.08;
-    }
-    if (glowRef2.current) {
-      const pulse = 1.4 + Math.sin(t * 0.3) * 0.18;
-      glowRef2.current.scale.set(pulse, pulse, 1);
-      glowRef2.current.material.opacity = 0.18 + Math.sin(t * 0.2) * 0.06;
-    }
-    if (ringGlowRef.current) {
-      const pulse = 1 + Math.sin(t * 0.7) * 0.08;
-      ringGlowRef.current.scale.set(pulse, pulse, 1);
-      if (ringGlowRef.current.material) {
-        ringGlowRef.current.material.opacity = 0.55 + Math.sin(t * 0.6) * 0.15;
-      }
-    }
-    // sprite ring - 始终面向屏幕
-    if (ringGlowSpriteRef.current) {
-      const pulse = 1 + Math.sin(t * 0.7) * 0.08;
-      ringGlowSpriteRef.current.scale.set(pulse * 1.5, pulse * 1.5, 1);
-      if (ringGlowSpriteRef.current.material) {
-        ringGlowSpriteRef.current.material.opacity = 0.65 + Math.sin(t * 0.6) * 0.15;
-      }
-    }
-    if (innerRingSpriteRef.current) {
-      innerRingSpriteRef.current.scale.set(0.7, 0.7, 1);
-      if (innerRingSpriteRef.current.material) {
-        innerRingSpriteRef.current.material.opacity = 0.5 + Math.sin(t * 0.4) * 0.1;
-      }
+      glowRef.current.material.opacity = 0.15 + Math.sin(t * 0.2) * 0.02;
     }
   });
 
   return (
     <group>
-      {/* 水平躺地层: 最外层大气光晕 + 外层光晕 + 外圈卦象 */}
       <group position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <mesh ref={glowRef2} position={[0, 0, -0.15]}>
-          <planeGeometry args={[4.5, 4.5]} />
-          <meshBasicMaterial map={glowTexture} transparent opacity={0.18} depthWrite={false} blending={THREE.AdditiveBlending} />
-        </mesh>
         <mesh ref={glowRef} position={[0, 0, -0.05]}>
           <planeGeometry args={[3.0, 3.0]} />
-          <meshBasicMaterial map={glowTexture} transparent opacity={0.35} depthWrite={false} blending={THREE.AdditiveBlending} />
+          <meshBasicMaterial map={glowTexture} transparent opacity={0.15} depthWrite={false} />
         </mesh>
         <mesh ref={ringRef}>
-          <planeGeometry args={[2.3, 2.3]} />
-          <meshBasicMaterial map={compassTexture} transparent depthWrite={false} blending={THREE.NormalBlending} />
-        </mesh>
-        <mesh ref={innerRingRef}>
-          <planeGeometry args={[1.6, 1.6]} />
-          <meshBasicMaterial map={compassTexture} transparent opacity={0.5} depthWrite={false} blending={THREE.NormalBlending} />
+          <planeGeometry args={[2.2, 2.2]} />
+          <meshBasicMaterial map={compassTexture} transparent depthWrite={false} />
         </mesh>
       </group>
-
-      {/* 删除了面对屏幕的金色圆环 sprite - 与八卦阵重叠 */}
     </group>
   );
 }
@@ -223,67 +177,74 @@ function CenterSymbol({ phase }) {
   );
 }
 
-/* ============================================================
-   环绕 3D 卦象粒子 - 8 个卦象沿主体圆周运动
-   根据 phase 调整: 旋转速度 / 半径 / 明灭
-   - input:        慢, 半径 0.62, 不明灭
-   - analyzing:    中, 半径 0.7
-   - summoning:    快, 半径 0.85, 明灭
-   - agent_debate: 最快, 半径 0.95, 强明灭
-   - summary:      收回, 半径 0.7
-   - branch_select: 半径 0.62
-   - path_reveal:  半径 0.65
-   - final:        半径 0.55 (让位给命运卡)
-============================================================ */
+function createTrigramTexture(trigram, size = 128) {
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  const cx = size / 2, cy = size / 2;
+  ctx.clearRect(0, 0, size, size);
+
+  ctx.font = `600 ${size * 0.75}px "Ma Shan Zheng", "STKaiti", serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(240, 216, 144, 0.9)';
+  ctx.shadowBlur = size * 0.15;
+  ctx.fillStyle = 'rgba(240, 216, 144, 0.95)';
+  ctx.fillText(trigram, cx, cy + size * 0.04);
+
+  return new THREE.CanvasTexture(c);
+}
+
 function OrbitTrigrams({ phase }) {
   const groupRef = useRef();
   const trigramRefs = useRef([]);
 
   const trigrams = useMemo(() => ['☰', '☱', '☲', '☳', '☷', '☵', '☶', '☴'], []);
+  const textures = useMemo(() => trigrams.map(tg => createTrigramTexture(tg)), []);
 
-  // phase → 参数 (target)
   const phaseParams = {
-    input:         { rotSpeed: 0.18, radius: 0.62, twinkle: 0.0 },
-    analyzing:     { rotSpeed: 0.30, radius: 0.72, twinkle: 0.15 },
-    summoning:     { rotSpeed: 0.55, radius: 0.86, twinkle: 0.55 },
-    casting:       { rotSpeed: 0.40, radius: 0.78, twinkle: 0.30 },
-    reflecting:    { rotSpeed: 0.65, radius: 0.92, twinkle: 0.65 },
-    committing:    { rotSpeed: 0.45, radius: 0.80, twinkle: 0.25 },
-    agent_debate:  { rotSpeed: 0.75, radius: 0.96, twinkle: 0.80 },
-    summary:       { rotSpeed: 0.40, radius: 0.74, twinkle: 0.20 },
-    branch_select: { rotSpeed: 0.25, radius: 0.65, twinkle: 0.10 },
-    path_reveal:   { rotSpeed: 0.30, radius: 0.68, twinkle: 0.18 },
-    final:         { rotSpeed: 0.18, radius: 0.55, twinkle: 0.0 },
+    input:         { rotSpeed: 0.18, radius: 0.68, twinkle: 0.0 },
+    analyzing:     { rotSpeed: 0.28, radius: 0.76, twinkle: 0.15 },
+    summoning:     { rotSpeed: 0.45, radius: 0.90, twinkle: 0.45 },
+    yan_analyze:   { rotSpeed: 0.35, radius: 0.85, twinkle: 0.35 },
+    casting:       { rotSpeed: 0.32, radius: 0.82, twinkle: 0.25 },
+    reflecting:    { rotSpeed: 0.52, radius: 0.94, twinkle: 0.50 },
+    committing:    { rotSpeed: 0.36, radius: 0.82, twinkle: 0.22 },
+    agent_debate:  { rotSpeed: 0.60, radius: 0.98, twinkle: 0.60 },
+    summary:       { rotSpeed: 0.32, radius: 0.78, twinkle: 0.20 },
+    branch_select: { rotSpeed: 0.20, radius: 0.68, twinkle: 0.10 },
+    path_reveal:   { rotSpeed: 0.26, radius: 0.72, twinkle: 0.15 },
+    final:         { rotSpeed: 0.18, radius: 0.60, twinkle: 0.0 },
   };
 
-  // 平滑插值器 (避免突跳)
-  const lerpRef = useRef({ rotSpeed: 0.18, radius: 0.62, twinkle: 0.0 });
+  const lerpRef = useRef({ rotSpeed: 0.18, radius: 0.68, twinkle: 0.0 });
   useFrame((_, delta) => {
-    lerpRef.current.rotSpeed += (targetParams().rotSpeed - lerpRef.current.rotSpeed) * Math.min(1, delta * 1.5);
-    lerpRef.current.radius   += (targetParams().radius   - lerpRef.current.radius)   * Math.min(1, delta * 1.5);
-    lerpRef.current.twinkle  += (targetParams().twinkle  - lerpRef.current.twinkle)  * Math.min(1, delta * 1.5);
+    const lerpSpeed = 0.8;
+    lerpRef.current.rotSpeed += (targetParams().rotSpeed - lerpRef.current.rotSpeed) * Math.min(1, delta * lerpSpeed);
+    lerpRef.current.radius   += (targetParams().radius   - lerpRef.current.radius)   * Math.min(1, delta * lerpSpeed);
+    lerpRef.current.twinkle  += (targetParams().twinkle  - lerpRef.current.twinkle)  * Math.min(1, delta * lerpSpeed);
   });
   function targetParams() {
     return phaseParams[phase] || phaseParams.input;
   }
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock, camera }) => {
     const t = clock.getElapsedTime();
     if (!groupRef.current) return;
     const p = lerpRef.current;
     groupRef.current.rotation.y = t * p.rotSpeed;
-    trigramRefs.current.forEach((mesh, i) => {
-      if (!mesh) return;
-      const angle = (i / 8) * Math.PI * 2 + t * (p.rotSpeed * 1.2);
-      const yOscillation = Math.sin(t * 0.6 + i) * 0.05;
-      mesh.position.x = Math.cos(angle) * p.radius;
-      mesh.position.z = Math.sin(angle) * p.radius;
-      mesh.position.y = yOscillation;
-      mesh.lookAt(groupRef.current.position);
-      // 明灭: 每个卦象按时间偏移闪烁
-      if (mesh.material) {
-        const twinkle = 0.6 + Math.sin(t * (3 + p.twinkle * 8) + i * 0.7) * 0.4 * p.twinkle;
-        mesh.material.opacity = 0.85 - twinkle * 0.4;
+
+    trigramRefs.current.forEach((sprite, i) => {
+      if (!sprite) return;
+      const angle = (i / 8) * Math.PI * 2 + t * (p.rotSpeed * 0.9);
+      const yOscillation = Math.sin(t * 0.35 + i * 0.7) * 0.05;
+      sprite.position.x = Math.cos(angle) * p.radius;
+      sprite.position.z = Math.sin(angle) * p.radius;
+      sprite.position.y = yOscillation;
+      sprite.lookAt(camera.position);
+      if (sprite.material) {
+        const breath = 0.5 + Math.sin(t * 0.6 + i * 0.5) * 0.5 * p.twinkle;
+        sprite.material.opacity = 0.9 + breath * 0.1;
       }
     });
   });
@@ -291,35 +252,15 @@ function OrbitTrigrams({ phase }) {
   return (
     <group ref={groupRef}>
       {trigrams.map((tg, i) => (
-        <mesh key={i} ref={(el) => (trigramRefs.current[i] = el)}>
-          <planeGeometry args={[0.12, 0.12]} />
-          <meshBasicMaterial
-            color={'#F0D890'}
+        <sprite key={i} ref={(el) => (trigramRefs.current[i] = el)} scale={[0.28, 0.28, 1]}>
+          <spriteMaterial
+            map={textures[i]}
             transparent
-            opacity={0.85}
+            opacity={0.9}
             depthWrite={false}
             blending={THREE.AdditiveBlending}
           />
-          <Html
-            center
-            transform
-            distanceFactor={2.5}
-            style={{ pointerEvents: 'none' }}
-          >
-            <div
-              style={{
-                color: '#F0D890',
-                fontSize: '20px',
-                fontWeight: 600,
-                fontFamily: '"Ma Shan Zheng", serif',
-                textShadow: '0 0 10px rgba(240,216,144,0.9), 0 0 4px rgba(240,216,144,0.6)',
-                userSelect: 'none',
-              }}
-            >
-              {tg}
-            </div>
-          </Html>
-        </mesh>
+        </sprite>
       ))}
     </group>
   );
@@ -461,6 +402,7 @@ function CoinRitual({ visible }) {
 ============================================================ */
 function CompassNeedle({ visible, agentCount }) {
   const needleRef = useRef();
+  const glowRef = useRef();
 
   useFrame(({ clock }) => {
     if (!visible || !needleRef.current) return;
@@ -469,19 +411,32 @@ function CompassNeedle({ visible, agentCount }) {
     const target = (idx / Math.max(1, agentCount)) * Math.PI * 2;
     const current = needleRef.current.rotation.z;
     needleRef.current.rotation.z = current + (target - current) * 0.1;
+    
+    if (glowRef.current) {
+      const pulse = 1 + Math.sin(t * 2) * 0.2;
+      glowRef.current.scale.set(pulse, pulse, pulse);
+    }
   });
 
   if (!visible) return null;
 
   return (
     <group position={[0, 0, 0]}>
-      <mesh ref={needleRef} position={[0, 0, 0.01]}>
-        <planeGeometry args={[0.04, 0.8]} />
-        <meshBasicMaterial color={'#F0D890'} transparent opacity={0.9} blending={THREE.AdditiveBlending} depthWrite={false} />
+      <mesh ref={glowRef} position={[0, 0, 0]}>
+        <sphereGeometry args={[0.15, 16, 16]} />
+        <meshBasicMaterial color={'#F0D890'} transparent opacity={0.3} depthWrite={false} blending={THREE.AdditiveBlending} />
       </mesh>
-      <mesh position={[0, 0.35, 0.02]}>
-        <coneGeometry args={[0.06, 0.12, 4]} />
-        <meshStandardMaterial color={'#F0D890'} emissive={'#C8A050'} emissiveIntensity={1.5} />
+      <mesh ref={needleRef} position={[0, 0, 0.02]} rotation={[-Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.01, 0.01, 0.6, 8]} />
+        <meshStandardMaterial color={'#F0D890'} emissive={'#C8A050'} emissiveIntensity={2} />
+      </mesh>
+      <mesh ref={needleRef} position={[0, 0.3, 0.03]} rotation={[-Math.PI / 2, 0, 0]}>
+        <coneGeometry args={[0.04, 0.15, 8]} />
+        <meshStandardMaterial color={'#F0D890'} emissive={'#D8B060'} emissiveIntensity={2.5} />
+      </mesh>
+      <mesh ref={needleRef} position={[0, -0.3, 0.03]} rotation={[-Math.PI / 2, 0, Math.PI]}>
+        <coneGeometry args={[0.025, 0.08, 8]} />
+        <meshStandardMaterial color={'#C8A050'} emissive={'#A88040'} emissiveIntensity={1} />
       </mesh>
     </group>
   );
@@ -554,17 +509,18 @@ function ZiweiDisk({ visible }) {
 }
 
 /* ============================================================
-   流动粒子 - analyzing 飞向中心 / summary 环绕
+   流动粒子 - 多阶段效果
 ============================================================ */
 function FlowParticles({ phase }) {
   const groupRef = useRef();
-  const PARTICLE_COUNT = 40;
+  const PARTICLE_COUNT = 50;
   const particles = useMemo(() => {
     return Array.from({ length: PARTICLE_COUNT }).map((_, i) => ({
       angle: (i / PARTICLE_COUNT) * Math.PI * 2,
       radius: 1.0 + Math.random() * 0.5,
       speed: 0.2 + Math.random() * 0.3,
       yPhase: Math.random() * Math.PI * 2,
+      colorOffset: Math.random() * 0.3,
     }));
   }, []);
 
@@ -577,6 +533,7 @@ function FlowParticles({ phase }) {
       if (!child || !child.material) return;
       const p = particles[i];
       if (!p) return;
+      
       if (phase === 'analyzing') {
         const cycle = (t * p.speed + p.angle) % (Math.PI * 2);
         const progress = (Math.sin(t * 0.5 + i * 0.3) + 1) / 2;
@@ -587,6 +544,24 @@ function FlowParticles({ phase }) {
         child.material.opacity = 0.6 * (1 - progress * 0.7);
         const s = 0.05 * (1 - progress * 0.5);
         child.scale.setScalar(Math.max(0.01, s));
+      } else if (phase === 'yan_analyze') {
+        const a = p.angle + t * 0.3;
+        const r = 0.8 + Math.sin(t * 0.5 + i * 0.4) * 0.2;
+        child.position.x = Math.cos(a) * r;
+        child.position.z = Math.sin(a) * r;
+        child.position.y = Math.sin(t * 0.7 + p.yPhase) * 0.3;
+        child.material.opacity = 0.5 + Math.sin(t * 1.5 + i) * 0.3;
+        const s = 0.04 + Math.sin(t * 1.5 + i) * 0.02;
+        child.scale.setScalar(Math.max(0.01, s));
+      } else if (phase === 'agent_debate') {
+        const baseAngle = p.angle + t * 0.8;
+        const wobble = Math.sin(t * 3 + i * 0.8) * 0.2;
+        child.position.x = Math.cos(baseAngle + wobble) * p.radius;
+        child.position.z = Math.sin(baseAngle + wobble) * p.radius;
+        child.position.y = Math.sin(t * 1.2 + p.yPhase) * 0.4 + Math.sin(t * 0.4) * 0.2;
+        child.material.opacity = 0.4 + Math.sin(t * 4 + i) * 0.4;
+        const s = 0.03 + Math.sin(t * 3 + i) * 0.03;
+        child.scale.setScalar(Math.max(0.01, s));
       } else if (phase === 'summary') {
         const a = p.angle + t * 0.5;
         const r = 0.5 + Math.sin(t + i) * 0.05;
@@ -596,13 +571,33 @@ function FlowParticles({ phase }) {
         child.material.opacity = 0.7 + Math.sin(t * 2 + i) * 0.2;
         const s = 0.06 + Math.sin(t * 2 + i) * 0.02;
         child.scale.setScalar(Math.max(0.01, s));
+      } else if (phase === 'reflecting') {
+        const a = p.angle + t * 0.2;
+        const r = 1.2 + Math.sin(t * 0.3 + i) * 0.3;
+        child.position.x = Math.cos(a) * r;
+        child.position.z = Math.sin(a) * r;
+        child.position.y = Math.sin(t * 0.5 + p.yPhase) * 0.25;
+        child.material.opacity = 0.3 + Math.sin(t + i) * 0.2;
+        const s = 0.04 + Math.sin(t + i) * 0.01;
+        child.scale.setScalar(Math.max(0.01, s));
       } else {
         child.material.opacity = 0;
       }
     });
   });
 
-  if (phase !== 'analyzing' && phase !== 'summary' && phase !== 'reflecting') return null;
+  if (phase !== 'analyzing' && phase !== 'yan_analyze' && phase !== 'agent_debate' && phase !== 'summary' && phase !== 'reflecting') {
+    return (
+      <group ref={groupRef} position={[0, 1.5, 0]}>
+        {particles.map((_, i) => (
+          <mesh key={i}>
+            <sphereGeometry args={[1, 8, 8]} />
+            <meshBasicMaterial map={particleTex} color={'#F0D890'} transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
+          </mesh>
+        ))}
+      </group>
+    );
+  }
 
   return (
     <group ref={groupRef} position={[0, 1.5, 0]}>
@@ -611,6 +606,171 @@ function FlowParticles({ phase }) {
           <sphereGeometry args={[1, 8, 8]} />
           <meshBasicMaterial map={particleTex} color={'#F0D890'} transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
         </mesh>
+      ))}
+    </group>
+  );
+}
+
+/* ============================================================
+   演·析问阶段特效 - 符文浮动
+============================================================ */
+function YanAnalyzeRunes({ visible }) {
+  const groupRef = useRef();
+  const runeRefs = [useRef(), useRef(), useRef(), useRef()];
+  const runes = ['天', '地', '人', '和'];
+  
+  const runeTex = useMemo(() => {
+    return runes.map(ch => {
+      const size = 128;
+      const c = document.createElement('canvas');
+      c.width = size; c.height = size;
+      const ctx = c.getContext('2d');
+      const cx = size / 2, cy = size / 2;
+      ctx.clearRect(0, 0, size, size);
+      
+      ctx.font = `600 ${size * 0.65}px "Ma Shan Zheng", "STKaiti", serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(200, 180, 120, 0.8)';
+      ctx.shadowBlur = size * 0.15;
+      ctx.fillStyle = 'rgba(240, 220, 160, 0.95)';
+      ctx.fillText(ch, cx, cy + size * 0.04);
+      
+      return new THREE.CanvasTexture(c);
+    });
+  }, []);
+
+  useFrame(({ clock }) => {
+    if (!visible || !groupRef.current) return;
+    const t = clock.getElapsedTime();
+    runeRefs.forEach((ref, i) => {
+      if (!ref.current) return;
+      const angle = (i / 4) * Math.PI * 2 + t * 0.15;
+      const radius = 1.2 + Math.sin(t * 0.5 + i) * 0.1;
+      ref.current.position.x = Math.cos(angle) * radius;
+      ref.current.position.z = Math.sin(angle) * radius;
+      ref.current.position.y = Math.sin(t * 0.8 + i * 1.2) * 0.4;
+      const scale = 0.2 + Math.sin(t * 1.2 + i) * 0.05;
+      ref.current.scale.set(scale, scale, 1);
+      ref.current.material.opacity = 0.6 + Math.sin(t * 1.5 + i) * 0.3;
+    });
+  });
+
+  if (!visible) return null;
+
+  return (
+    <group ref={groupRef}>
+      {runeRefs.map((ref, i) => (
+        <sprite key={i} ref={ref}>
+          <spriteMaterial
+            map={runeTex[i]}
+            transparent
+            opacity={0.9}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+          />
+        </sprite>
+      ))}
+    </group>
+  );
+}
+
+/* ============================================================
+   Agent辩论阶段特效 - 能量连接
+============================================================ */
+function DebateEnergy({ visible, activeAgentIdx, activeAgents }) {
+  const groupRef = useRef();
+  const lineRefs = useRef([]);
+  
+  const agents = activeAgents?.filter(a => a.role !== 'master') || [];
+
+  useFrame(({ clock }) => {
+    if (!visible || !groupRef.current) return;
+    const t = clock.getElapsedTime();
+    lineRefs.current.forEach((ref, i) => {
+      if (!ref.current) return;
+      const opacity = 0.3 + Math.sin(t * 2 + i * 0.5) * 0.2;
+      ref.current.material.opacity = opacity;
+    });
+  });
+
+  if (!visible || agents.length < 2) return null;
+
+  return (
+    <group ref={groupRef}>
+      {agents.map((agent, i) => {
+        const nextIdx = (i + 1) % agents.length;
+        const angle1 = (i / agents.length) * Math.PI * 2;
+        const angle2 = (nextIdx / agents.length) * Math.PI * 2;
+        const radius = 1.0;
+        
+        return (
+          <mesh key={`line-${i}`} ref={(el) => (lineRefs.current[i] = el)}>
+            <lineGeometry points={[
+              new THREE.Vector3(Math.cos(angle1) * radius, 0.5, Math.sin(angle1) * radius),
+              new THREE.Vector3(Math.cos(angle2) * radius, 0.3, Math.sin(angle2) * radius),
+            ]} />
+            <lineBasicMaterial color={'#C8A850'} transparent opacity={0.3} linewidth={2} />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+/* ============================================================
+   选择阶段特效 - 选项光晕
+============================================================ */
+function ChoiceAura({ visible, optionCount = 4 }) {
+  const groupRef = useRef();
+  const auraRefs = useRef([]);
+
+  useFrame(({ clock }) => {
+    if (!visible || !groupRef.current) return;
+    const t = clock.getElapsedTime();
+    auraRefs.current.forEach((ref, i) => {
+      if (!ref.current) return;
+      const angle = (i / optionCount) * Math.PI * 2;
+      const radius = 2.0;
+      const pulse = 1 + Math.sin(t * 0.8 + i) * 0.15;
+      ref.current.position.x = Math.cos(angle) * radius;
+      ref.current.position.z = Math.sin(angle) * radius;
+      ref.current.scale.set(pulse, pulse, 1);
+      ref.current.material.opacity = 0.2 + Math.sin(t * 0.6 + i) * 0.1;
+    });
+  });
+
+  if (!visible) return null;
+
+  const auraTex = useMemo(() => {
+    const size = 128;
+    const c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2, cy = size / 2;
+    
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, size / 2);
+    g.addColorStop(0, 'rgba(200, 168, 80, 0.4)');
+    g.addColorStop(0.5, 'rgba(200, 168, 80, 0.15)');
+    g.addColorStop(1, 'rgba(200, 168, 80, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    
+    return new THREE.CanvasTexture(c);
+  }, []);
+
+  return (
+    <group ref={groupRef} position={[0, 0.8, 0]}>
+      {Array.from({ length: optionCount }).map((_, i) => (
+        <sprite key={i} ref={(el) => (auraRefs.current[i] = el)} scale={[1.5, 1.5, 1]}>
+          <spriteMaterial
+            map={auraTex}
+            transparent
+            opacity={0.3}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+          />
+        </sprite>
       ))}
     </group>
   );
@@ -914,7 +1074,7 @@ function wrapText(ctx, text, maxWidth) {
 /* ============================================================
    光球主组 - 中心符号 + 各种阶段特效
 ============================================================ */
-export default function LightOrb({ phase, position = [0, 1.5, 0], selectedChoice, activeAgents, inference }) {
+export default function LightOrb({ phase, position = [0, 1.5, 0], selectedChoice, activeAgents, inference, yanOptions }) {
   const mainGroupRef = useRef();
   const labelGroupRef = useRef();
 
@@ -929,6 +1089,9 @@ export default function LightOrb({ phase, position = [0, 1.5, 0], selectedChoice
   const showNeedle = phase === 'summoning';
   const showDisk = phase === 'summary';
   const showFate = phase === 'final';
+  const showYanRunes = phase === 'yan_analyze';
+  const showDebateEnergy = phase === 'agent_debate';
+  const showChoiceAura = phase === 'branch_select';
 
   return (
     <group>
@@ -937,6 +1100,15 @@ export default function LightOrb({ phase, position = [0, 1.5, 0], selectedChoice
 
       {/* 流动粒子 - 阶段化显示 */}
       <FlowParticles phase={phase} />
+
+      {/* 演·析问符文 */}
+      <YanAnalyzeRunes visible={showYanRunes} />
+
+      {/* Agent辩论能量连接 */}
+      <DebateEnergy visible={showDebateEnergy} activeAgents={activeAgents} />
+
+      {/* 选择阶段选项光晕 */}
+      <ChoiceAura visible={showChoiceAura} optionCount={yanOptions?.length || 4} />
 
       {/* 命运卡 - 最终阶段 - 偏左上 */}
       <FateCard visible={showFate} choice={selectedChoice} activeAgents={activeAgents} inference={inference} />

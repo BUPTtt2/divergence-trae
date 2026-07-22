@@ -1,0 +1,23 @@
+{
+  "name": "yance-bagua-worker",
+  "version": "1.0.0",
+  "description": "演策 · 八卦推演引擎 — Cloudflare Workers 生产级后端",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "db:migrate": "wrangler d1 execute yance --file=./migrations/0001_init.sql",
+    "db:migrate:remote": "wrangler d1 execute yance --remote --file=./migrations/0001_init.sql",
+    "db:query": "wrangler d1 execute yance --command",
+    "db:query:remote": "wrangler d1 execute yance --remote --command"
+  },
+  "dependencies": {
+    "hono": "^4.6.10",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "wrangler": "^3.85.0"
+  }
+}

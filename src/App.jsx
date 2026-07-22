@@ -1,13 +1,63 @@
 import { BrowserRouter, Routes, Route, useLocation, Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Component } from 'react';
+import { Component, lazy, Suspense, useEffect } from 'react';
 import { GameProvider } from './context/GameContext';
-import Landing from './pages/Landing';
-import Scenarios from './pages/Scenarios';
-import Game from './pages/Game';
-import Collection from './pages/Collection';
-import Community from './pages/Community';
+import { ThemeProvider } from './context/ThemeContext';
+import { SoundProvider } from './context/SoundContext';
+import { AuthProvider } from './context/AuthContext.jsx';
+import { extendTHREE } from './utils/extendThree';
 import DraggableCompass from './components/fx/DraggableCompass';
+import AchievementToast from './components/AchievementToast';
+import FollowUpReminder from './components/FollowUpReminder';
+import YanChat from './components/YanChat';
+
+/* 水墨风格 Loading 骨架屏 */
+function InkLoading() {
+  return (
+    <div style={{
+      minHeight: '100dvh',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#FAF8F0',
+      fontFamily: '"Ma Shan Zheng", "Noto Serif SC", serif',
+    }}>
+      <div style={{
+        fontSize: 48,
+        color: '#A8472E',
+        opacity: 0.6,
+        animation: 'inkPulse 1.4s ease-in-out infinite',
+      }}>☯</div>
+      <div style={{
+        fontSize: 13,
+        color: '#7A7468',
+        marginTop: 16,
+        letterSpacing: '0.3em',
+        opacity: 0.7,
+      }}>水墨晕染中</div>
+      <style>{`
+        @keyframes inkPulse {
+          0%, 100% { opacity: 0.3; transform: scale(1); }
+          50% { opacity: 0.7; transform: scale(1.08); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+/* 页面级代码分割：每个页面独立 chunk，减小首屏包体积 */
+const Landing = lazy(() => import('./pages/Landing'));
+const Scenarios = lazy(() => import('./pages/Scenarios'));
+const Game = lazy(() => import('./pages/Game'));
+const Collection = lazy(() => import('./pages/Collection'));
+const Community = lazy(() => import('./pages/Community'));
+const Daily = lazy(() => import('./pages/Daily'));
+const Calendar = lazy(() => import('./pages/Calendar'));
+const Dictionary = lazy(() => import('./pages/Dictionary'));
+const Agents = lazy(() => import('./pages/Agents'));
+const Legal = lazy(() => import('./pages/Legal'));
+const Privacy = lazy(() => import('./pages/Privacy'));
 
 /* ErrorBoundary - 防止子组件抛错导致整页白屏 */
 class ErrorBoundary extends Component {
@@ -114,29 +164,60 @@ function AnimatedRoutes() {
         transition={{ duration: 0.25 }}
         className={isGame ? 'h-screen' : ''}
       >
-        <Routes location={location}>
-          <Route path="/" element={<Landing />} />
-          <Route path="/scenarios" element={<Scenarios />} />
-          <Route path="/sandbox" element={<Game />} />
-          <Route path="/cards" element={<Collection />} />
-          <Route path="/community" element={<Community />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <Suspense fallback={<InkLoading />}>
+          <Routes location={location}>
+            <Route path="/" element={<Landing />} />
+            <Route path="/daily" element={<Daily />} />
+            <Route path="/scenarios" element={<Scenarios />} />
+            <Route path="/sandbox" element={<Game />} />
+            <Route path="/agents" element={<Agents />} />
+            <Route path="/cards" element={<Collection />} />
+            <Route path="/community" element={<Community />} />
+            <Route path="/calendar" element={<Calendar />} />
+            <Route path="/dictionary" element={<Dictionary />} />
+            <Route path="/legal" element={<Legal />} />
+            <Route path="/privacy" element={<Privacy />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
       </motion.div>
     </AnimatePresence>
   );
 }
 
 export default function App() {
+  extendTHREE();
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const CHANNEL = 'yance-tab-sync';
+    const bc = new BroadcastChannel(CHANNEL);
+    bc.postMessage({ type: 'TAB_OPEN', url: window.location.href });
+    bc.onmessage = (e) => {
+      if (e.data?.type === 'TAB_OPEN' && e.data.url !== window.location.href) {
+        console.warn('[Tab] 检测到另一个标签页打开');
+      }
+    };
+    return () => bc.close();
+  }, []);
+
   return (
     <ErrorBoundary>
-      <BrowserRouter>
-        <GameProvider>
-          <AnimatedRoutes />
-          {/* 悬浮八卦罗盘 - 所有页面通用 (fixed, 拖拽位置 localStorage 持久化) */}
-          <DraggableCompass />
-        </GameProvider>
-      </BrowserRouter>
+      <ThemeProvider>
+        <SoundProvider>
+          <BrowserRouter>
+            <AuthProvider>
+              <GameProvider>
+                <AnimatedRoutes />
+                <DraggableCompass />
+                <AchievementToast />
+                <FollowUpReminder />
+                <YanChat />
+              </GameProvider>
+            </AuthProvider>
+          </BrowserRouter>
+        </SoundProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }
