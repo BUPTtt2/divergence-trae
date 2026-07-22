@@ -65,26 +65,11 @@ router.post(
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
 
-    if (!req.userId) {
-      const mockReply = `我听到了你说的，但听到的只是表层。\n请允许我问三点：\n一、这件事最坏的结果，你能否承受？\n二、三年后回看今天，你希望自己已经做了什么？\n三、你此刻最怕的不是失败，而是什么？\n回答之前不必急，先静坐片刻。`;
-      
-      res.write(`data: ${JSON.stringify({ type: 'meta', conversationId: conversationId || 'anonymous-' + Date.now(), hasUserId: false })}\n\n`);
-      
-      const CHUNK = 8;
-      for (let i = 0; i < mockReply.length; i += CHUNK) {
-        const chunk = mockReply.slice(i, i + CHUNK);
-        res.write(`data: ${JSON.stringify({ type: 'content', content: chunk })}\n\n`);
-      }
-      
-      res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-      if (typeof res.end === 'function') res.end();
-      return;
-    }
-
-    res.write(`data: ${JSON.stringify({ type: 'meta', conversationId, hasUserId: true })}\n\n`);
+    const actualUserId = req.userId || 'anonymous-' + Date.now();
+    res.write(`data: ${JSON.stringify({ type: 'meta', conversationId: conversationId || actualUserId, hasUserId: !!req.userId })}\n\n`);
 
     try {
-      for await (const chunk of streamChatWithYan(req.userId, message, conversationId)) {
+      for await (const chunk of streamChatWithYan(actualUserId, message, conversationId)) {
         res.write(`data: ${chunk}\n\n`);
         if (!res.writable) break;
       }
