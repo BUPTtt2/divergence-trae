@@ -79,7 +79,7 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     name: '演策 - 八卦推演引擎',
-    version: '1.0.0',
+    version: '1.1.0',
     endpoints: {
       agent: '/api/agent/analyze, /api/agent/dialogue',
       divination: '/api/divination/cast, /api/divination/interpret',
