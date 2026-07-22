@@ -1,5 +1,3 @@
-/*
-  Content-Type: application/javascript
 /assets/*.js
   Content-Type: application/javascript
 /assets/*.css
@@ -8,3 +6,9 @@
   Content-Type: image/svg+xml
 /assets/*.png
   Content-Type: image/png
+/assets/*.jpg
+  Content-Type: image/jpeg
+/assets/*.woff2
+  Content-Type: font/woff2
+/assets/*.woff
+  Content-Type: font/woff

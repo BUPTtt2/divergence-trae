@@ -26,6 +26,14 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
 
   const { status, user, login, register, logout, upgradeAccount, retryConnect } = useAuth();
   const [authModal, setAuthModal] = useState(null);
+
+  useEffect(() => {
+    const handleOpenAuth = (e) => {
+      openAuthModal(e.detail?.type || 'login');
+    };
+    window.addEventListener('open-auth-modal', handleOpenAuth);
+    return () => window.removeEventListener('open-auth-modal', handleOpenAuth);
+  }, []);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authNickname, setAuthNickname] = useState('');

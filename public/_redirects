@@ -1,2 +1,3 @@
-/assets/* /assets/:splat
-/api/* https://yance-bagua-engine-production.up.railway.app/api/:splat
+/assets/* /assets/:splat 200
+/api/* https://yance-bagua-engine-production.up.railway.app/api/:splat 200
+/* /index.html 200

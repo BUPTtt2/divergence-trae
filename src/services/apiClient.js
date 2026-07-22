@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 后端 API 封装模块
  * 统一管理所有后端接口调用，包含 SSE 流式处理
  *
@@ -72,7 +72,7 @@ export async function checkServerHealth() {
   const urls = [PRIMARY_API, FALLBACK_API];
   for (const url of urls) {
     try {
-      const resp = await tryFetch(`${url}/api/health`, {}, 3000);
+      const resp = await tryFetch(`${url}/health`, {}, 3000);
       if (resp.ok) {
         _activeApi = url;
         _apiUnavailableUntil = 0;

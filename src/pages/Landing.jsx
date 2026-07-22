@@ -1298,6 +1298,18 @@ export default function Landing() {
                 >
                   浏览剧本
                 </motion.button>
+                <motion.button
+                  whileHover={{ y: -2 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => {
+                    const event = new CustomEvent('open-auth-modal', { detail: { type: 'login' } });
+                    window.dispatchEvent(event);
+                  }}
+                  className="px-6 py-3 text-[12px] font-medium"
+                  style={{ backgroundColor: T.accent, color: T.paperLight, borderRadius: 3 }}
+                >
+                  登录 / 注册
+                </motion.button>
               </motion.div>
 
               <motion.div
