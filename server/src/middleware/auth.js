@@ -56,13 +56,6 @@ export function requireUser(req, res, next) {
     return res.status(401).json({ error: '未登录', message: '缺少有效的用户标识' });
   }
 
-  if (process.env.NODE_ENV === 'production') {
-    const sigResult = validateSignature(req);
-    if (!sigResult.valid) {
-      return res.status(401).json({ error: '认证失败', message: sigResult.reason });
-    }
-  }
-
   req.userId = userId;
   next();
 }
