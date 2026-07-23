@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { motion, AnimatePresence, useMotionValue, useTransform, animate } from 'framer-motion';
 import { useNavigate, Link } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
 import CheckInModal from '../components/CheckInModal';
@@ -7,6 +7,41 @@ import DailyWisdom from '../components/DailyWisdom';
 import DailyTasks from '../components/DailyTasks';
 import { getDaily, getLevelInfo } from '../services/apiClient';
 import AppNav from '../components/AppNav';
+
+/* 滚动数字组件 - 幸运数字浮现效果 */
+function RollingNumber({ value, duration = 1.2 }) {
+  const count = useMotionValue(0);
+  const rounded = useTransform(count, (v) => String(Math.round(v)).padStart(2, '0'));
+  const ref = useRef(null);
+  useEffect(() => {
+    const controls = animate(count, value, { duration, ease: [0.16, 1, 0.3, 1] });
+    const unsub = rounded.on('change', (v) => {
+      if (ref.current) ref.current.textContent = v;
+    });
+    return () => { controls.stop(); unsub(); };
+  }, [value, duration, count, rounded]);
+  return <span ref={ref}>00</span>;
+}
+
+/* 逐字浮现 - 卦辞 */
+function StaggeredText({ text, baseDelay = 0 }) {
+  const chars = Array.from(text);
+  return (
+    <>
+      {chars.map((ch, i) => (
+        <motion.span
+          key={i}
+          initial={{ opacity: 0, y: 6, filter: 'blur(4px)' }}
+          animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+          transition={{ delay: baseDelay + i * 0.05, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+          style={{ display: 'inline-block' }}
+        >
+          {ch === ' ' ? '\u00A0' : ch}
+        </motion.span>
+      ))}
+    </>
+  );
+}
 
 const T = {
   paper: '#F2EDE0',
@@ -68,36 +103,105 @@ const getDailyData = () => {
 };
 
 function CheckInBadge({ checkedIn, streak, onClick }) {
+  const isHot = streak >= 3;
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: 1, scale: 1 }}
+      initial={{ opacity: 0, scale: 0.9, y: 6 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
       className="flex items-center gap-3"
     >
       {checkedIn ? (
         <motion.button
-          whileHover={{ scale: 1.02 }}
+          whileHover={{ scale: 1.02, y: -1 }}
           whileTap={{ scale: 0.98 }}
           onClick={onClick}
-          className="flex items-center gap-2 px-4 py-2"
-          style={{ backgroundColor: `${T.gold}12`, border: `1px solid ${T.gold}40`, borderRadius: 4, cursor: 'pointer' }}
+          className="flex items-center gap-2 px-4 py-2 relative overflow-hidden"
+          style={{
+            backgroundColor: `${T.gold}12`,
+            border: `1px solid ${T.gold}40`,
+            borderRadius: 4,
+            cursor: 'pointer',
+          }}
         >
-          <span className="text-xl">✓</span>
-          <div className="text-left">
-            <span className="text-[11px] font-mono block" style={{ color: T.gold }}>今日已签到</span>
-            {streak > 0 && <span className="text-[9px] font-mono" style={{ color: T.muted }}>连续 {streak} 天</span>}
+          {/* 连击光晕 */}
+          {isHot && (
+            <motion.span
+              animate={{ opacity: [0.2, 0.5, 0.2], scale: [1, 1.1, 1] }}
+              transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+              style={{
+                position: 'absolute', inset: 0,
+                background: `radial-gradient(circle at 20% 50%, ${T.gold}30, transparent 70%)`,
+                pointerEvents: 'none',
+              }}
+            />
+          )}
+          <motion.span
+            initial={{ scale: 0, rotate: -30 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ delay: 0.2, type: 'spring', stiffness: 200, damping: 15 }}
+            className="text-xl relative"
+            style={{ color: isHot ? T.accent : T.gold }}
+          >
+            {isHot ? '✦' : '✓'}
+          </motion.span>
+          <div className="text-left relative">
+            <span className="text-[11px] font-mono block" style={{ color: T.gold, letterSpacing: '0.1em' }}>今日已签到</span>
+            {streak > 0 && (
+              <motion.span
+                key={streak}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-[9px] font-mono flex items-center gap-1"
+                style={{ color: isHot ? T.accent : T.muted }}
+              >
+                连续
+                <motion.span
+                  initial={{ scale: 1.4 }}
+                  animate={{ scale: 1 }}
+                  transition={{ type: 'spring', stiffness: 300, damping: 12 }}
+                  style={{ fontWeight: 700, color: isHot ? T.accent : T.gold }}
+                >
+                  {streak}
+                </motion.span>
+                天
+                {isHot && <span style={{ marginLeft: '2px', color: T.accent }}>✦</span>}
+              </motion.span>
+            )}
           </div>
         </motion.button>
       ) : (
         <motion.button
-          whileHover={{ scale: 1.02 }}
+          whileHover={{ scale: 1.02, y: -1 }}
           whileTap={{ scale: 0.98 }}
           onClick={onClick}
-          className="flex items-center gap-2 px-4 py-2 text-[11px] font-mono"
-          style={{ backgroundColor: T.accent, color: T.paperLight, borderRadius: 4, cursor: 'pointer' }}
+          className="flex items-center gap-2 px-4 py-2 text-[11px] font-mono relative"
+          style={{
+            backgroundColor: T.accent,
+            color: T.paperLight,
+            borderRadius: 4,
+            cursor: 'pointer',
+            letterSpacing: '0.15em',
+          }}
         >
-          <span>📅</span>
+          <motion.span
+            animate={{ rotate: [0, 8, -8, 0] }}
+            transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
+            style={{ display: 'inline-block' }}
+          >
+            📅
+          </motion.span>
           <span>签到领运势</span>
+          {/* 呼吸光点 */}
+          <motion.span
+            animate={{ opacity: [0.4, 1, 0.4], scale: [0.8, 1.2, 0.8] }}
+            transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+            style={{
+              position: 'absolute', top: '4px', right: '6px',
+              width: '6px', height: '6px', borderRadius: '50%',
+              backgroundColor: T.goldLight,
+            }}
+          />
         </motion.button>
       )}
     </motion.div>
@@ -153,8 +257,6 @@ export default function Daily() {
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: F.regular }}>
-      <AppNav variant="light" />
-      <Navbar activeIndex={1} />
 
       {/* Main Content */}
       <div className="pt-14 max-w-[800px] mx-auto px-6 py-12">
@@ -197,20 +299,66 @@ export default function Daily() {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="text-center mb-8"
+              transition={{ delay: 0.2, duration: 0.7, ease: EASE }}
+              className="text-center mb-8 relative"
             >
-              <span className="text-[8rem] md:text-[10rem] font-serif" style={{ fontFamily: F.cursive, color: T.accent }}>
+              {/* 水墨晕染背景圆 */}
+              <motion.div
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 0.08 }}
+                transition={{ delay: 0.3, duration: 1.2, ease: EASE }}
+                style={{
+                  position: 'absolute',
+                  left: '50%', top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '280px', height: '280px',
+                  borderRadius: '50%',
+                  background: `radial-gradient(circle, ${T.accent} 0%, transparent 65%)`,
+                  pointerEvents: 'none',
+                  filter: 'blur(2px)',
+                }}
+              />
+              {/* 缓慢旋转的虚线圆 */}
+              <motion.div
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 0.25, scale: 1, rotate: 360 }}
+                transition={{
+                  opacity: { delay: 0.4, duration: 0.8 },
+                  scale: { delay: 0.4, duration: 0.8 },
+                  rotate: { duration: 40, repeat: Infinity, ease: 'linear' },
+                }}
+                style={{
+                  position: 'absolute',
+                  left: '50%', top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '200px', height: '200px',
+                  borderRadius: '50%',
+                  border: `1px dashed ${T.accent}50`,
+                  pointerEvents: 'none',
+                }}
+              />
+              <motion.span
+                initial={{ opacity: 0, scale: 0.6, filter: 'blur(12px)' }}
+                animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+                transition={{ delay: 0.5, duration: 1, ease: EASE }}
+                className="text-[8rem] md:text-[10rem] font-serif relative inline-block"
+                style={{ fontFamily: F.cursive, color: T.accent, textShadow: `0 0 24px ${T.accent}30` }}
+              >
                 {dailyData.trigram.trigram}
-              </span>
-              <div className="mt-4">
+              </motion.span>
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.9, duration: 0.5 }}
+                className="mt-4"
+              >
                 <span className="text-2xl font-serif font-bold" style={{ color: T.ink }}>
                   {dailyData.trigram.name}
                 </span>
                 <span className="text-[11px] font-mono ml-3 px-2 py-0.5" style={{ color: T.muted, backgroundColor: `${T.muted}10`, borderRadius: 2 }}>
                   五行属 {dailyData.trigram.element}
                 </span>
-              </div>
+              </motion.div>
             </motion.div>
 
             {/* Fortune */}
@@ -230,12 +378,12 @@ export default function Daily() {
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4 }}
+              transition={{ delay: 0.4, duration: 0.5 }}
               className="text-center mb-8"
             >
               <p className="text-[10px] font-mono tracking-[0.3em] mb-2" style={{ color: T.muted }}>卦辞</p>
               <p className="text-[14px] font-serif italic" style={{ color: T.muted }}>
-                {dailyData.trigram.desc}
+                <StaggeredText text={dailyData.trigram.desc} baseDelay={0.6} />
               </p>
             </motion.div>
 
@@ -243,13 +391,13 @@ export default function Daily() {
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.5 }}
+              transition={{ delay: 1.4, duration: 0.5 }}
               className="flex items-center justify-center gap-8 mb-8"
             >
               <div className="text-center">
                 <p className="text-[10px] font-mono mb-1" style={{ color: T.muted }}>幸运数字</p>
                 <p className="text-2xl font-serif font-bold" style={{ color: T.accent }}>
-                  {String(dailyData.luckyNum).padStart(2, '0')}
+                  <RollingNumber value={dailyData.luckyNum} duration={1.4} />
                 </p>
               </div>
               <div className="w-px h-12" style={{ backgroundColor: T.border }} />
@@ -302,18 +450,32 @@ export default function Daily() {
                 {dailyData.advice.map((item, i) => (
                   <motion.div
                     key={item.category}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.1 }}
-                    className="p-4"
+                    initial={{ opacity: 0, x: -16, filter: 'blur(4px)' }}
+                    animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+                    transition={{ delay: i * 0.12 + 0.2, duration: 0.5, ease: EASE }}
+                    whileHover={{ x: 4, backgroundColor: `${T.accent}06` }}
+                    className="p-4 relative overflow-hidden"
                     style={{
                       backgroundColor: T.paperLight,
                       border: `1px solid ${T.border}`,
                       borderRadius: 4,
                     }}
                   >
+                    {/* 左侧色条 */}
+                    <motion.div
+                      initial={{ scaleY: 0 }}
+                      animate={{ scaleY: 1 }}
+                      transition={{ delay: i * 0.12 + 0.4, duration: 0.4, ease: EASE }}
+                      style={{
+                        position: 'absolute',
+                        left: 0, top: 0, bottom: 0,
+                        width: '3px',
+                        backgroundColor: T.accent,
+                        transformOrigin: 'top',
+                      }}
+                    />
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-mono" style={{ color: T.accent }}>{item.category}</span>
+                      <span className="text-[11px] font-mono" style={{ color: T.accent, letterSpacing: '0.15em' }}>{item.category}</span>
                       <span className="text-[13px] font-serif" style={{ color: T.ink }}>{item.item}</span>
                     </div>
                   </motion.div>

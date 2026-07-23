@@ -77,7 +77,7 @@ router.post(
   optionalAuth,
   llmRateLimit,
   asyncHandler(async (req, res) => {
-    const { agentId, question, previousDialogues = [] } = req.body;
+    const { agentId, question, previousDialogues = [], agentConfig } = req.body;
     const userId = req.userId;
 
     if (!agentId || !question) {
@@ -100,6 +100,20 @@ router.post(
       } catch (e) {
         console.warn('[agent] 加载自定义顾问失败:', e.message);
       }
+    }
+
+    // 如果从数据库加载失败，检查请求体中是否有 agentConfig
+    if (!agent && agentConfig && typeof agentConfig === 'object') {
+      agent = {
+        id: agentId,
+        name: agentConfig.name || '自定义顾问',
+        stance: agentConfig.stance || agentConfig.perspective || '旁观者',
+        persona: agentConfig.persona || `你是一位${agentConfig.stance || '中立'}视角的顾问。`,
+        color: agentConfig.color || '#6b7280',
+        glow: agentConfig.glow || 'rgba(107, 114, 128, 0.3)',
+        symbol: agentConfig.icon || '◉',
+        isCustom: true,
+      };
     }
 
     if (!agent) {

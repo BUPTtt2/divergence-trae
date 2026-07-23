@@ -6,6 +6,9 @@
 import { COLORS } from '../components/board/layoutConfig';
 import { detectQuestionType, getAgentsForQuestion, AGENT_MAP } from '../data/agents';
 import * as apiClient from './apiClient';
+import { API_BASE_URL } from './baseConfig.js';
+import { Blackboard } from './multiAgentFramework';
+import { formatFeedbackForPrompt } from './memoryStore';
 
 export const DEFAULT_CHOICES = [
   { id: 'opportunity', label: '抓住机会', color: COLORS.choice.opportunity, glowColor: '#E8B880', icon: '☰' },
@@ -161,10 +164,16 @@ function generateCustomAgentDialogue(agent, question, questionType, previousDial
   const stance = agent.stance || agent.perspective || '其道';
   const name = agent.name || '智囊';
   const persona = agent.persona || '';
+  const relationLabel = agent.relationLabel || '';
+  const contextSummary = agent.contextSummary || '';
+  const blessing = agent.blessing || '';
   const prev = previousDialogues[previousDialogues.length - 1];
 
+  // 开场：优先用关系标签（解决"宝宝=孩子"误读），让发言有"关系感"
   let opener = '';
-  if (ctx.numbers.length > 0) {
+  if (relationLabel) {
+    opener = `作为你的${relationLabel}，${name}想说——`;
+  } else if (ctx.numbers.length > 0) {
     opener = `你提到「${ctx.numbers.join('、')}」——`;
   } else if (ctx.keywords.length > 0) {
     opener = `围绕「${ctx.keywords[0]}」这件事——`;
@@ -242,8 +251,12 @@ function generateCustomAgentDialogue(agent, question, questionType, previousDial
   }
 
   if (persona && persona.length > 10) {
-    const personaSnippet = persona.slice(0, 30);
-    return `${opener}${debate}${angle} ${personaSnippet}……`;
+    // 从 persona 中提取关键句（说话风格或盲点），而非简单截断前30字
+    const styleMatch = persona.match(/说话风格[：:]\s*([^。\n]+)/);
+    const blindMatch = persona.match(/盲点[：:]\s*([^。\n]+)/);
+    const personaHint = styleMatch?.[1] || blindMatch?.[1] || persona.slice(0, 30);
+    const blessingSuffix = blessing ? ` 正如演所言：「${blessing}」` : '';
+    return `${opener}${debate}${angle} ${personaHint}。${blessingSuffix}`.trim();
   }
 
   return `${opener}${debate}${angle}`;
@@ -357,7 +370,7 @@ export async function checkBackendHealth() {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
-    const resp = await fetch(`${apiClient.API_BASE_URL}/api/health`, {
+    const resp = await fetch(`${API_BASE_URL}/health`, {
       method: 'GET',
       signal: controller.signal,
     });
@@ -544,27 +557,93 @@ function generateLocalSummary(question, agentDialogues) {
 
 /**
  * 为指定智囊列表生成发言（含自定义智囊）
- * 优先并行调用，每个 Agent 独立超时，完成一个就回调一个，让用户实时看到效果
+ * 顺序辩论模式：每个 Agent 能看到前面 Agent 的发言，形成真正的辩论而非各自独立发言
  * @param {string} question - 用户问题
  * @param {Array} agents - 智囊列表
  * @param {string} questionType - 问题类型
  * @param {Function} onAgentComplete - 每个 Agent 完成后的回调 (agentId, text, success, error) => void
  * @param {Function} onError - 整体错误回调
+ * @param {string} userContext - 演提炼的用户回答上下文（来自析问阶段）
  * @returns {Object} { dialogues, results: { agentId: { text, success, error, source } } }
  */
-export async function generateDialoguesForAgents(question, agents, questionType, onAgentComplete, onError) {
+
+/**
+ * 从 Agent 发言文本推断协作关系（msgType + 目标 Agent）
+ * 通过关键词匹配：反驳/补充/同意/追问 + agent 名字
+ * @param {string} text - Agent 发言文本
+ * @param {Array} allAgents - 全部参与智囊（用于名字匹配）
+ * @returns {{msgType: string, targetAgentId: string|null, targetName: string|null}}
+ */
+function inferCollaboration(text, allAgents) {
+  if (!text || !Array.isArray(allAgents)) {
+    return { msgType: 'claim', targetAgentId: null, targetName: null };
+  }
+
+  const rebuttalWords = ['反驳', '反对', '不同意', '不认同', '质疑', '说的不对', '不敢苟同', '但我不这么看'];
+  const supportWords = ['补充', '支持', '同意', '赞同', '认可', '附议', '说的对', '确如', '正如'];
+  const questionWords = ['追问', '反问'];
+
+  let msgType = 'claim';
+  if (rebuttalWords.some(w => text.includes(w))) msgType = 'rebuttal';
+  else if (supportWords.some(w => text.includes(w))) msgType = 'support';
+  else if (questionWords.some(w => text.includes(w))) msgType = 'question';
+
+  if (msgType === 'claim') {
+    return { msgType, targetAgentId: null, targetName: null };
+  }
+
+  // 找发言中提到的目标 agent（排除自己）
+  for (const agent of allAgents) {
+    if (agent.name && text.includes(agent.name)) {
+      return { msgType, targetAgentId: agent.id, targetName: agent.name };
+    }
+  }
+  return { msgType, targetAgentId: null, targetName: null };
+}
+
+export async function generateDialoguesForAgents(question, agents, questionType, onAgentComplete, onError, userContext, options = {}) {
   if (!agents || agents.length === 0) return { dialogues: {}, results: {}, errors: {} };
 
+  const { existingBlackboard, round = 1 } = options;
   const nonMasterAgents = agents.filter(a => a.role !== 'master');
   const dialogues = {};
   const results = {};
   const errors = {};
 
-  const promises = nonMasterAgents.map(async (agent) => {
+  // 顺序辩论：每个 Agent 依次发言，后续 Agent 通过 Blackboard 订阅前面观点
+  // 多轮辩论时复用同一 blackboard，保留前序轮次上下文
+  const blackboard = existingBlackboard || new Blackboard();
+  for (let i = 0; i < nonMasterAgents.length; i++) {
+    const agent = nonMasterAgents[i];
     let text = '';
     let apiSuccess = false;
     let errorInfo = null;
     let source = 'preset';
+
+    // 构建前面 Agent 的发言摘要，供当前 Agent 参考（保留原格式以兼容后端 API）
+    const previousDialogues = Object.entries(dialogues).map(([aid, dText]) => {
+      const prevAgent = nonMasterAgents.find(a => a.id === aid);
+      return `${prevAgent?.name || aid}: ${dText}`;
+    });
+
+    // Blackboard 结构化上下文（带协作标注，比纯文本更利于 LLM 引用/反驳）
+    const blackboardCtx = blackboard.formatForPrompt(agent.id, 8);
+    const isFirstSpeaker = blackboardCtx === '（你是第一个发言的智囊）';
+
+    // 构建完整的问题上下文（包含用户回答和前面 Agent 的发言）
+    const contextParts = [];
+    if (userContext) contextParts.push(`【用户补充信息】${userContext}`);
+    if (previousDialogues.length > 0) {
+      contextParts.push(`【前面智囊的观点】\n${previousDialogues.join('\n')}`);
+      if (!isFirstSpeaker) {
+        contextParts.push(`【结构化协作上下文】\n${blackboardCtx}`);
+      }
+      contextParts.push(`请你基于自己的视角，可以引用、反驳或补充前面智囊的观点，形成真正的辩论。`);
+    }
+    // 智囊调校：注入历史反馈（你上次被赞/踩过XX，请据此微调）
+    const feedbackCtx = formatFeedbackForPrompt(agent.id);
+    if (feedbackCtx) contextParts.push(feedbackCtx);
+    const contextStr = contextParts.length > 0 ? `\n\n${contextParts.join('\n\n')}` : '';
 
     if (isLlmAvailable()) {
       let attempt = 0;
@@ -573,14 +652,29 @@ export async function generateDialoguesForAgents(question, agents, questionType,
       while (attempt < maxAttempts) {
         attempt++;
         try {
-          text = await getAgentDialogueWithTimeout(agent, question, []);
+          // 将上下文注入到问题中
+          const questionWithContext = contextStr ? `${question}${contextStr}` : question;
+          text = await getAgentDialogueWithTimeout(agent, questionWithContext, previousDialogues);
           if (text && text.length > 5) {
             dialogues[agent.id] = text;
+            // 推断协作关系（反驳/补充/同意/追问 + 目标 Agent）
+            const collaboration = inferCollaboration(text, nonMasterAgents);
+            // 发布到 Blackboard（供后续 Agent 结构化订阅 + 收敛检测）
+            blackboard.publish({
+              agentId: agent.id,
+              role: agent.role || 'dynamic',
+              round,
+              content: text,
+              confidence: 0.8,
+              references: [],
+              msgType: collaboration.msgType,
+              targetAgentId: collaboration.targetAgentId,
+            });
             apiSuccess = true;
             source = 'llm';
-            results[agent.id] = { text, success: true, error: null, source };
-            if (onAgentComplete) onAgentComplete(agent.id, text, true, null, source);
-            return;
+            results[agent.id] = { text, success: true, error: null, source, collaboration };
+            if (onAgentComplete) onAgentComplete(agent.id, text, true, null, source, collaboration);
+            break;
           }
         } catch (e) {
           errorInfo = e.message;
@@ -589,30 +683,39 @@ export async function generateDialoguesForAgents(question, agents, questionType,
       }
     }
 
-    const localText = selectSmartDialogue(agent.id, question, questionType, agent, []);
-    text = localText;
-    dialogues[agent.id] = localText;
-    source = 'preset';
-    
     if (!apiSuccess) {
+      const localText = selectSmartDialogue(agent.id, question, questionType, agent, previousDialogues);
+      text = localText;
+      dialogues[agent.id] = localText;
+      // 推断协作关系（降级发言同样分析）
+      const collaboration = inferCollaboration(localText, nonMasterAgents);
+      // 降级发言也发布到 Blackboard（confidence 较低，标记来源）
+      blackboard.publish({
+        agentId: agent.id,
+        role: agent.role || 'dynamic',
+        round,
+        content: localText,
+        confidence: 0.6,
+        references: [],
+        msgType: collaboration.msgType,
+        targetAgentId: collaboration.targetAgentId,
+      });
+      source = 'preset';
       errors[agent.id] = {
         agentName: agent.name,
         error: errorInfo || 'API调用失败',
         type: agent.id.startsWith('custom_') ? 'custom' : 'preset',
       };
+      results[agent.id] = { text, success: apiSuccess, error: errorInfo, source, collaboration };
+      if (onAgentComplete) onAgentComplete(agent.id, text, apiSuccess, errorInfo, source, collaboration);
     }
-    
-    results[agent.id] = { text, success: apiSuccess, error: errorInfo, source };
-    if (onAgentComplete) onAgentComplete(agent.id, text, apiSuccess, errorInfo, source);
-  });
-
-  await Promise.all(promises);
+  }
   
   if (onError && Object.keys(errors).length > 0) {
     onError(errors);
   }
   
-  return { dialogues, results, errors };
+  return { dialogues, results, errors, blackboard };
 }
 
 /* ============================================================
@@ -797,13 +900,23 @@ export async function judgeContinueAsking(agent, question, dialogueHistory, last
  */
 export async function generateYanSummary(question, agentDialogues, agents) {
   const nonMasterAgents = (agents || []).filter(a => a.role !== 'master');
+  
+  // 转换对话格式：前端是 { agentId: string }，后端期望 { agentId: Array<string> }
+  const formattedDialogues = {};
+  for (const agent of nonMasterAgents) {
+    const dialogue = agentDialogues[agent.id];
+    if (dialogue) {
+      formattedDialogues[agent.id] = Array.isArray(dialogue) ? dialogue : [dialogue];
+    }
+  }
+  
   const dialoguesArr = nonMasterAgents
     .map(a => ({ name: a.name, stance: a.stance || a.perspective || '其道', text: agentDialogues[a.id] || '' }))
     .filter(d => d.text);
 
   if (isLlmAvailable()) {
     try {
-      const result = await apiClient.generateSummary(question, nonMasterAgents.map(a => a.id), agentDialogues);
+      const result = await apiClient.generateSummary(question, nonMasterAgents.map(a => a.id), formattedDialogues);
       if (result && result.options) return result;
     } catch (e) {
       console.warn('[演总结] 后端失败，降级本地', e);
@@ -972,6 +1085,110 @@ function generateLocalSummaryEnhanced(question, dialoguesArr) {
 }
 
 /* ============================================================
+   命签生成深化 - LLM 根据卦象+智囊发言+抉择生成个性化 verse/summary
+   本地降级：基于卦象+抉择类型组合的模板
+============================================================ */
+
+/**
+ * 生成本地降级卦辞（基于卦象+抉择类型）
+ */
+function generateLocalVerse(guaName, choiceLabel) {
+  const verseMap = {
+    '大有': '元亨。柔得尊位,大亨以正。',
+    '乾': '元亨利贞。初九潜龙勿用。',
+    '坎': '习坎,有孚,维心亨。行有尚。',
+    '艮': '艮其背,不获其身。行其庭,不见其人。',
+    '巽': '小亨,利有攸往。',
+    '震': '亨。震来虩虩,笑言哑哑。',
+    '离': '利贞,亨。畜牝牛,吉。',
+    '兑': '兑,亨,利贞。',
+    '渐': '渐之进也。女归吉,利贞。',
+    '咸': '亨,利贞。取女吉。',
+    '鼎': '元吉,亨。',
+    '屯': '元亨利贞。勿用有攸往。',
+  };
+  return verseMap[guaName] || '元亨利贞。';
+}
+
+/**
+ * 生成本地降级总结（基于卦象+抉择+智囊发言摘要）
+ */
+function generateLocalCardSummary(question, guaName, choiceLabel, agentDialogues) {
+  const dialogues = Object.values(agentDialogues || {}).filter(d => typeof d === 'string' && d.length > 5).slice(0, 3);
+  const snippets = dialogues.map(d => d.slice(0, 20)).join('；');
+  const guaMeaning = {
+    '大有': '柔得尊位，上下应之',
+    '乾': '龙现田中，见龙在田',
+    '坎': '重险陷身，唯诚信可通',
+    '艮': '兼山之象，止其所也',
+    '巽': '顺势而进，渐入佳境',
+    '震': '雷动万物，惶恐中得醒',
+    '离': '附丽光明，柔得中道',
+    '兑': '两泽相丽，朋友讲习',
+    '渐': '鸿渐于陆，循序而进',
+    '咸': '山泽通气，二气感应',
+    '鼎': '鼎象成器，革故鼎新',
+    '屯': '云雷之动，见险而止',
+  };
+  const meaning = guaMeaning[guaName] || '此卦已现，需静心体悟';
+  return `${meaning}。${snippets ? `诸位所言「${snippets}」。` : ''}汝择「${choiceLabel}」，此路已明，后日自验。`;
+}
+
+/**
+ * 生成个性化命签内容（verse + summary）
+ * 优先调 LLM（streamYanChat）根据卦象+智囊发言+抉择生成，失败降级本地
+ * @param {Object} params - { question, guaName, choiceLabel, agentDialogues, trigram }
+ * @returns {Promise<{verse: string, summary: string, source: string}>}
+ */
+export async function generatePersonalizedCardContent({ question, guaName, choiceLabel, agentDialogues, trigram }) {
+  // 本地降级结果（兜底）
+  const localVerse = generateLocalVerse(guaName, choiceLabel);
+  const localSummary = generateLocalCardSummary(question, guaName, choiceLabel, agentDialogues);
+
+  if (!isLlmAvailable()) {
+    return { verse: localVerse, summary: localSummary, source: 'preset' };
+  }
+
+  try {
+    const dialoguesText = Object.values(agentDialogues || {})
+      .filter(d => typeof d === 'string' && d.length > 5)
+      .slice(0, 3)
+      .map(d => d.slice(0, 60))
+      .join('\n');
+
+    const prompt = `你是一位通晓易经的智者「演」。请根据以下推演结果，为用户的命签生成个性化内容。
+
+【用户问题】${question}
+【所得卦象】${guaName}（${trigram || '☯'}）
+【用户抉择】${choiceLabel}
+【智囊发言摘要】
+${dialoguesText || '（无智囊发言）'}
+
+请输出两段内容，用【卦辞】和【终局】标记：
+【卦辞】一句古风卦辞（8-15字，贴合卦象与抉择，不要直接照搬原卦辞）
+【终局】一段总结（30-50字，融合卦象寓意与智囊观点，点出抉择后的走向与提醒，语气克制含蓄）`;
+
+    const result = await apiClient.streamYanChat({ message: prompt });
+    const text = result?.text || '';
+
+    // 提取【卦辞】和【终局】
+    const verseMatch = text.match(/【卦辞】\s*([^\n【]+)/);
+    const summaryMatch = text.match(/【终局】\s*([^\n【]+)/);
+
+    const verse = verseMatch?.[1]?.trim() || localVerse;
+    const summary = summaryMatch?.[1]?.trim() || localSummary;
+
+    if (verse.length > 3 && summary.length > 10) {
+      return { verse, summary, source: 'llm' };
+    }
+    return { verse: localVerse, summary: localSummary, source: 'preset' };
+  } catch (e) {
+    console.warn('[命签生成] LLM失败，降级本地:', e.message);
+    return { verse: localVerse, summary: localSummary, source: 'preset' };
+  }
+}
+
+/* ============================================================
    主入口
 ============================================================ */
 
@@ -994,7 +1211,7 @@ export async function generateInferenceContent(question) {
   const localGua = getGuo(questionType);
 
   console.log('[inference] 本地Agent:', localAgents.map(a => a.name));
-  console.log('[inference] API_BASE_URL:', apiClient.API_BASE_URL);
+  console.log('[inference] API_BASE_URL:', API_BASE_URL);
 
   try {
     console.log('[inference] 开始调用后端分析...');

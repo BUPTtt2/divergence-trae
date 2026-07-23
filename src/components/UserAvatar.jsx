@@ -295,7 +295,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
                 {status === 'offline' && (
                   <>
                     <div className="text-[11px] mb-2" style={{ color: T.accent }}>
-                      网络连接不稳定，已降级本地模式
+                      网络连接不稳定，已降级预设模式
                     </div>
                     <div className="flex flex-col gap-1.5">
                       <button

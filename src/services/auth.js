@@ -8,13 +8,23 @@
  * - 数据双写：登录态走云端，未登录走 localStorage 降级
  */
 
-import { API_BASE_URL, checkServerHealth } from './apiClient.js';
+import { 
+  API_BASE_URL, 
+  TOKEN_KEYS, 
+  storageGet, 
+  storageSet, 
+  storageRemove,
+  getAccessTokenSync,
+  getRefreshTokenSync,
+  getCurrentUserIdSync,
+  isTokenExpiringSoonSync,
+} from './baseConfig.js';
 
-const ACCESS_TOKEN_KEY = 'yance_access_token';
-const REFRESH_TOKEN_KEY = 'yance_refresh_token';
-const USER_KEY = 'yance_user';
-const ANON_ID_KEY = 'yance_user_id'; // 兼容旧版本地匿名ID
-const TOKEN_EXPIRY_KEY = 'yance_token_expires_at';
+const ACCESS_TOKEN_KEY = TOKEN_KEYS.ACCESS_TOKEN;
+const REFRESH_TOKEN_KEY = TOKEN_KEYS.REFRESH_TOKEN;
+const USER_KEY = TOKEN_KEYS.USER;
+const ANON_ID_KEY = TOKEN_KEYS.USER_ID;
+const TOKEN_EXPIRY_KEY = TOKEN_KEYS.TOKEN_EXPIRY;
 
 let isRefreshing = false;
 let refreshPromise = null;
@@ -23,46 +33,29 @@ let refreshPromise = null;
  * 获取当前存储的 access token
  */
 export function getAccessToken() {
-  try {
-    return localStorage.getItem(ACCESS_TOKEN_KEY) || null;
-  } catch {
-    return null;
-  }
+  return getAccessTokenSync();
 }
 
 /**
  * 获取当前存储的 refresh token
  */
 export function getRefreshToken() {
-  try {
-    return localStorage.getItem(REFRESH_TOKEN_KEY) || null;
-  } catch {
-    return null;
-  }
+  return getRefreshTokenSync();
 }
 
 /**
  * 获取当前用户信息（本地缓存）
  */
 export function getCachedUser() {
-  try {
-    const raw = localStorage.getItem(USER_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  return storageGet(USER_KEY, null);
 }
 
 /**
  * 获取 token 过期时间（毫秒时间戳）
  */
 function getTokenExpiry() {
-  try {
-    const v = localStorage.getItem(TOKEN_EXPIRY_KEY);
-    return v ? parseInt(v, 10) : 0;
-  } catch {
-    return 0;
-  }
+  const v = typeof window !== 'undefined' ? window.localStorage.getItem(TOKEN_EXPIRY_KEY) : null;
+  return v ? parseInt(v, 10) : 0;
 }
 
 /**
@@ -70,12 +63,12 @@ function getTokenExpiry() {
  */
 function saveAuth({ accessToken, refreshToken, user, expiresIn }) {
   try {
-    localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
-    if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-    if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+    storageSet(ACCESS_TOKEN_KEY, accessToken);
+    if (refreshToken) storageSet(REFRESH_TOKEN_KEY, refreshToken);
+    if (user) storageSet(USER_KEY, user);
     if (expiresIn) {
       const expiresAt = Date.now() + expiresIn * 1000 - 30 * 1000; // 提前 30s 过期
-      localStorage.setItem(TOKEN_EXPIRY_KEY, String(expiresAt));
+      storageSet(TOKEN_EXPIRY_KEY, String(expiresAt));
     }
   } catch (e) {
     console.warn('[auth] 保存 token 失败:', e.message);
@@ -87,10 +80,10 @@ function saveAuth({ accessToken, refreshToken, user, expiresIn }) {
  */
 export function clearAuth() {
   try {
-    localStorage.removeItem(ACCESS_TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    localStorage.removeItem(TOKEN_EXPIRY_KEY);
+    storageRemove(ACCESS_TOKEN_KEY);
+    storageRemove(REFRESH_TOKEN_KEY);
+    storageRemove(USER_KEY);
+    storageRemove(TOKEN_EXPIRY_KEY);
   } catch { /* ignore */ }
 }
 

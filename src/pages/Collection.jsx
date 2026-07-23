@@ -4,6 +4,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
 import NoteModal from '../components/NoteModal';
 import { getCards, updateCard, deleteCard, shareCard, getUserId, getCardNotes } from '../services/apiClient';
+import { getPendingFollowUps, updateEpisodeOutcome } from '../services/memoryStore';
 import AppNav from '../components/AppNav';
 
 const T = {
@@ -819,6 +820,13 @@ export default function Collection() {
   const [showCompare, setShowCompare] = useState(false);
   const [noteModalCard, setNoteModalCard] = useState(null);
   const [showNoteModal, setShowNoteModal] = useState(false);
+  // 决策回顾闭环 - 30天到期回访
+  const [followUps, setFollowUps] = useState([]);
+  const [completedFollowUps, setCompletedFollowUps] = useState([]);
+  const [followUpStats, setFollowUpStats] = useState({ total: 0, positive: 0, negative: 0, neutral: 0, accuracy: 0 });
+  const [reviewingId, setReviewingId] = useState(null);
+  const [outcomeText, setOutcomeText] = useState('');
+  const [outcomeStatus, setOutcomeStatus] = useState('neutral');
 
   const handleOpenNotes = useCallback((card) => {
     setNoteModalCard(card);
@@ -857,7 +865,20 @@ export default function Collection() {
       const savedAchievements = JSON.parse(localStorage.getItem('yance_achievements') || '{}');
       setAchievements(savedAchievements);
     } catch (e) { /* ignore */ }
+    // 加载到期待回访的决策
+    try { setFollowUps(getPendingFollowUps()); setCompletedFollowUps(getCompletedFollowUps()); setFollowUpStats(getFollowUpStats()); } catch (e) { /* ignore */ }
   }, [loadCards]);
+
+  const handleSubmitOutcome = useCallback((id) => {
+    if (!outcomeText.trim()) return;
+    updateEpisodeOutcome(id, outcomeText.trim(), outcomeStatus);
+    setFollowUps(prev => prev.filter(ep => ep.id !== id));
+    setReviewingId(null);
+    setOutcomeText('');
+    setOutcomeStatus('neutral');
+    // 刷新已完成对照与统计
+    try { setCompletedFollowUps(getCompletedFollowUps()); setFollowUpStats(getFollowUpStats()); } catch (e) { /* ignore */ }
+  }, [outcomeText, outcomeStatus]);
 
   // 保存编辑：调 updateCard，失败降级 localStorage
   const handleSaveCard = useCallback(async (updatedCard) => {
@@ -952,6 +973,156 @@ export default function Collection() {
           <span style={{ color: T.accent }}>{allCards.length} 张在册</span>
         </span>
       </div>
+
+      {/* 决策回顾闭环 - 30天到期回访 + 实际结局对照 */}
+      {followUps.length > 0 && (
+        <section className="px-6 py-6" style={{ backgroundColor: '#FFF8E8', borderBottom: `1px solid ${T.gold}40` }}>
+          <div className="max-w-[1200px] mx-auto">
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-[10px] font-mono tracking-[0.25em]" style={{ color: T.gold }}>FOLLOW-UP / 决策回顾</span>
+                <span className="text-[11px]" style={{ color: T.accent }}>{followUps.length} 个决策到期回访</span>
+              </div>
+              <div className="flex flex-col gap-3">
+                {followUps.map(ep => (
+                  <div key={ep.id} className="p-4 rounded-lg" style={{ backgroundColor: T.paperLight, border: `1px solid ${T.border}` }}>
+                    <div className="flex items-start justify-between gap-4 flex-wrap">
+                      <div className="flex-1 min-w-[200px]">
+                        <div className="text-[13px] mb-1" style={{ color: T.ink }}>
+                          <span style={{ color: T.muted }}>曾问：</span>{ep.question}
+                        </div>
+                        <div className="text-[12px]" style={{ color: T.muted }}>
+                          <span>当时抉择：{ep.decision || '—'}</span>
+                          {ep.guaName && <span className="ml-3">卦：{ep.guaName}</span>}
+                        </div>
+                        <div className="text-[10px] mt-1" style={{ color: T.accent }}>
+                          至今 {Math.round((Date.now() - (ep.createdAt || Date.now())) / 86400000)} 天 · 实际结果如何？
+                        </div>
+                      </div>
+                      {reviewingId === ep.id ? (
+                        <div className="flex-1 min-w-[260px]">
+                          <textarea
+                            value={outcomeText}
+                            onChange={(e) => setOutcomeText(e.target.value)}
+                            placeholder="写下实际的结局…"
+                            rows={2}
+                            className="w-full p-2 text-[12px] rounded border"
+                            style={{ borderColor: T.border, color: T.ink, background: '#fff' }}
+                          />
+                          <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            {[
+                              { v: 'positive', l: '如愿', c: '#80A880' },
+                              { v: 'negative', l: '未如', c: '#C87060' },
+                              { v: 'neutral', l: '中性', c: T.muted },
+                            ].map(o => (
+                              <button key={o.v} onClick={() => setOutcomeStatus(o.v)}
+                                className="px-2 py-1 text-[11px] rounded"
+                                style={{ border: `1px solid ${outcomeStatus === o.v ? o.c : T.border}`, color: outcomeStatus === o.v ? o.c : T.muted, background: outcomeStatus === o.v ? `${o.c}15` : 'transparent' }}>
+                                {o.l}
+                              </button>
+                            ))}
+                            <button onClick={() => handleSubmitOutcome(ep.id)} className="ml-auto px-3 py-1 text-[11px] rounded" style={{ background: T.gold, color: T.ink }}>提交</button>
+                            <button onClick={() => { setReviewingId(null); setOutcomeText(''); }} className="px-2 py-1 text-[11px]" style={{ color: T.muted }}>取消</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button onClick={() => setReviewingId(ep.id)} className="px-3 py-1.5 text-[11px] rounded whitespace-nowrap" style={{ border: `1px solid ${T.gold}`, color: T.gold }}>回填结局</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+        </section>
+      )}
+
+      {/* 成长轨迹 · 结局对照 - 已回访决策的预言vs实际 */}
+      {completedFollowUps.length > 0 && (
+        <section className="px-6 py-6" style={{ backgroundColor: '#F5F2EA', borderBottom: `1px solid ${T.border}` }}>
+          <div className="max-w-[1200px] mx-auto">
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-[10px] font-mono tracking-[0.25em]" style={{ color: T.accent }}>GROWTH / 成长轨迹</span>
+                <span className="text-[11px]" style={{ color: T.muted }}>已回顾 {followUpStats.total} 次</span>
+              </div>
+
+              {/* 统计概览 */}
+              <div className="flex items-center gap-4 mb-4 flex-wrap">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded" style={{ background: '#fff', border: `1px solid ${T.border}` }}>
+                  <span className="text-[10px]" style={{ color: T.muted }}>卦象准度</span>
+                  <motion.span
+                    initial={{ scale: 0.6, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: 'spring', stiffness: 200, damping: 14 }}
+                    className="text-[16px] font-bold"
+                    style={{ color: followUpStats.accuracy >= 60 ? '#80A880' : followUpStats.accuracy >= 40 ? T.gold : '#C87060' }}
+                  >
+                    {followUpStats.accuracy}%
+                  </motion.span>
+                </div>
+                {[
+                  { v: followUpStats.positive, l: '如愿', c: '#80A880' },
+                  { v: followUpStats.negative, l: '未如', c: '#C87060' },
+                  { v: followUpStats.neutral, l: '中性', c: T.muted },
+                ].map(s => (
+                  <div key={s.l} className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full" style={{ background: s.c }} />
+                    <span className="text-[11px]" style={{ color: T.muted }}>{s.l} {s.v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* 对照列表 */}
+              <div className="flex flex-col gap-3">
+                {completedFollowUps.slice(0, 10).map((ep, idx) => {
+                  const statusColor = ep.outcomeStatus === 'positive' ? '#80A880' : ep.outcomeStatus === 'negative' ? '#C87060' : T.muted;
+                  const statusLabel = ep.outcomeStatus === 'positive' ? '如愿' : ep.outcomeStatus === 'negative' ? '未如' : '中性';
+                  const days = Math.round(((ep.outcomeAt || Date.now()) - (ep.createdAt || Date.now())) / 86400000);
+                  return (
+                    <motion.div
+                      key={ep.id}
+                      initial={{ opacity: 0, x: -12 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.06, duration: 0.4 }}
+                      className="p-4 rounded-lg grid md:grid-cols-2 gap-4"
+                      style={{ backgroundColor: '#fff', border: `1px solid ${T.border}`, borderLeft: `3px solid ${statusColor}` }}
+                    >
+                      {/* 左：演之预言 */}
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-[9px] font-mono tracking-[0.2em] px-1.5 py-0.5 rounded" style={{ color: T.gold, background: `${T.gold}15` }}>演之预言</span>
+                          {ep.guaName && <span className="text-[11px]" style={{ color: T.ink }}>{ep.guaName}</span>}
+                        </div>
+                        <div className="text-[12px] mb-1" style={{ color: T.ink }}>
+                          <span style={{ color: T.muted }}>曾问：</span>{ep.question}
+                        </div>
+                        <div className="text-[11px]" style={{ color: T.muted }}>
+                          抉择：{ep.decision || '—'}
+                        </div>
+                      </div>
+                      {/* 右：汝之实际 */}
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-[9px] font-mono tracking-[0.2em] px-1.5 py-0.5 rounded" style={{ color: statusColor, background: `${statusColor}15` }}>汝之实际</span>
+                          <span className="text-[10px]" style={{ color: T.muted }}>{days} 天后</span>
+                        </div>
+                        <div className="text-[12px] mb-2" style={{ color: T.ink, lineHeight: 1.6 }}>
+                          {ep.outcome}
+                        </div>
+                        <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded" style={{ color: statusColor, border: `1px solid ${statusColor}40` }}>
+                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor }} />
+                          {statusLabel}
+                        </span>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </div>
+        </section>
+      )}
 
       {/* Hero */}
       <section className="relative overflow-hidden px-6 pt-16 pb-10">

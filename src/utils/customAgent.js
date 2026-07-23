@@ -165,6 +165,41 @@ export function subscribeAgent(agent) {
   }
 }
 
+/**
+ * 获取所有已订阅智囊（从 customAgents 中筛 isSubscribed）
+ * 用于推演时演推荐订阅智囊参与讨论
+ */
+export function getSubscribedAgents() {
+  try {
+    return getCustomAgents().filter(a => a.isSubscribed);
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * 基于问题关键词推荐订阅智囊（简单匹配 stance/desc）
+ * @param {string} question
+ * @returns {Array} 推荐的订阅智囊（最多2个）
+ */
+export function recommendSubscribedAgents(question) {
+  if (!question) return [];
+  const subs = getSubscribedAgents();
+  if (subs.length === 0) return [];
+  const q = String(question);
+  const scored = subs.map(a => {
+    const text = `${a.stance || ''} ${a.desc || ''} ${a.name || ''}`;
+    let score = 0;
+    // 简单关键词匹配
+    const tokens = q.match(/[\u4e00-\u9fa5]{2,4}/g) || [];
+    for (const t of tokens) {
+      if (text.includes(t)) score += 1;
+    }
+    return { agent: a, score };
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+  return scored.slice(0, 2).map(x => x.agent);
+}
+
 export function hasSensitiveWord(text) {
   if (!text) return false;
   const lower = text.toLowerCase();
@@ -444,4 +479,311 @@ export function refineAgentWithAnswers(agent, answers) {
 已知盲点：${validAnswers[2] || '未明确'}`;
 
   return { ...agent, persona: refinedPersona, interviewed: true };
+}
+
+/* ============================================================
+   智囊铸造 5 步向导 - 演共创模式
+   - understandNameContext: LLM 理解名字真实语境（解决"宝宝=孩子"误读）
+   - generateInterviewQuestionsByContext: 据关系+视角生成递进审问问题
+   - refinePersonaWithInterview: 据审问回答提炼最终 persona
+   - 本地降级：LLM 不可用时用规则匹配兜底
+============================================================ */
+
+// 关系角色预设
+export const RELATION_OPTIONS = [
+  { id: 'partner', label: '伴侣', icon: '⚤', desc: '男/女朋友、老公/老婆' },
+  { id: 'family', label: '家人', icon: '☰', desc: '父母、兄弟姐妹、孩子' },
+  { id: 'friend', label: '挚友', icon: '☱', desc: '知心好友、老同学' },
+  { id: 'mentor', label: '导师', icon: '☴', desc: '前辈、老师、引路人' },
+  { id: 'colleague', label: '合作者', icon: '☲', desc: '同事、合伙人' },
+  { id: 'rival', label: '对手', icon: '☵', desc: '竞争者、反面参照' },
+  { id: 'self', label: '自我', icon: '☶', desc: '未来的自己、内心的声音' },
+  { id: 'other', label: '其他', icon: '☯', desc: '自定义关系' },
+];
+
+// 视角预设（对应八卦）
+export const PERSPECTIVE_OPTIONS = [
+  { id: '财务', label: '财务视角', icon: '☰', gua: '乾', color: '#B89038', glow: '#E8C068', desc: '看账、算隐性成本、折现值' },
+  { id: '风险', label: '风险视角', icon: '☵', gua: '坎', color: '#406088', glow: '#7098C8', desc: '泼冷水、最坏情况、信息不对称' },
+  { id: '情感', label: '情感视角', icon: '☱', gua: '兑', color: '#C06888', glow: '#E898B8', desc: '共情、身体反应、被忽略的情绪' },
+  { id: '反思', label: '反思视角', icon: '☶', gua: '艮', color: '#7858A0', glow: '#A888D0', desc: '翻转问题、看见自己的盲点' },
+  { id: '职业', label: '职业视角', icon: '☴', gua: '巽', color: '#489090', glow: '#78C0C0', desc: '赛道、天花板、3-10年尺度' },
+  { id: '宏观', label: '宏观视角', icon: '☷', gua: '坤', color: '#887050', glow: '#B8A080', desc: '周期、Beta、大时代变量' },
+  { id: '行动', label: '行动视角', icon: '☳', gua: '震', color: '#588050', glow: '#88B880', desc: '窗口期、deadline、最小行动' },
+  { id: '沟通', label: '沟通视角', icon: '☲', gua: '离', color: '#C07048', glow: '#E8A078', desc: '谈判、对话、对方真实诉求' },
+];
+
+/**
+ * 步骤1: 让演理解名字的真实语境
+ * 解决"宝宝"被字面理解为"孩子"的问题
+ * @returns { understood, summary, relationGuess, conversationId, source }
+ */
+export async function understandNameContext(name, desc, conversationId) {
+  const cleanName = filterSpecialChars(name);
+  const cleanDesc = filterSpecialChars(desc);
+
+  // 先尝试 LLM
+  try {
+    const { streamYanChat } = await import('../services/apiClient.js');
+    const prompt = `用户要创建一个自定义智囊，名字是「${cleanName}」${cleanDesc ? `，描述是「${cleanDesc}」` : ''}。
+
+请用1-2句话确认你理解的"${cleanName}"在这个语境下指代什么（比如"宝宝"可能是对女朋友的昵称，而非孩子）。
+然后从这些关系里猜一个最可能的：伴侣/家人/挚友/导师/合作者/对手/自我/其他。
+
+输出格式（严格遵守）：
+理解：xxx
+关系：xxx
+
+不要寒暄，不要解释，直接输出这两行。`;
+
+    const result = await streamYanChat({ message: prompt, conversationId });
+    if (result && result.text && result.text.length > 5) {
+      const text = result.text;
+      const understandingMatch = text.match(/理解[：:]\s*(.+?)(?:\n|$)/);
+      const relationMatch = text.match(/关系[：:]\s*(.+?)(?:\n|$)/);
+      const summary = understandingMatch ? understandingMatch[1].trim() : text.slice(0, 60);
+      const relationGuess = relationMatch ? relationMatch[1].trim() : '';
+      return {
+        understood: true,
+        summary,
+        relationGuess,
+        conversationId: result.conversationId || conversationId,
+        source: 'llm',
+      };
+    }
+  } catch (e) {
+    console.warn('[understandNameContext] LLM失败，降级本地:', e.message);
+  }
+
+  // 本地降级：规则匹配
+  return localUnderstandName(cleanName, cleanDesc, conversationId);
+}
+
+/**
+ * 本地降级：规则匹配理解名字语境
+ */
+function localUnderstandName(name, desc, conversationId) {
+  const text = (name + ' ' + (desc || '')).toLowerCase();
+  const rules = [
+    { pattern: /宝宝|宝贝|亲爱的|老公|老婆|男友|女友|先生|太太|对象|媳妇|相公/, relation: '伴侣', summary: `「${name}」听起来是用户对伴侣的称呼。` },
+    { pattern: /爸|妈|爹|娘|父|母|哥|姐|弟|妹|儿|女|爷爷|奶奶|外公|外婆/, relation: '家人', summary: `「${name}」是用户的家人。` },
+    { pattern: /老师|师傅|前辈|导师|教授|教练/, relation: '导师', summary: `「${name}」是用户的导师或前辈。` },
+    { pattern: /兄弟|闺蜜|哥们|老友|知己|发小/, relation: '挚友', summary: `「${name}」是用户的挚友。` },
+    { pattern: /同事|老板|上司|下属|合伙/, relation: '合作者', summary: `「${name}」是用户的工作伙伴。` },
+    { pattern: /对手|敌人|竞争/, relation: '对手', summary: `「${name}」是用户的对手或反面参照。` },
+    { pattern: /自己|未来|内心|本我|自我/, relation: '自我', summary: `「${name}」代表用户的另一个自我。` },
+  ];
+  for (const r of rules) {
+    if (r.pattern.test(text)) {
+      return { understood: true, summary: r.summary, relationGuess: r.relation, conversationId, source: 'local' };
+    }
+  }
+  return {
+    understood: true,
+    summary: `「${name}」是用户要邀请入营的智囊。`,
+    relationGuess: '其他',
+    conversationId,
+    source: 'local',
+  };
+}
+
+/**
+ * 步骤4: 据关系+视角生成3个递进审问问题
+ * @returns { questions: [q1, q2, q3], conversationId, source }
+ */
+export async function generateInterviewQuestionsByContext(name, relation, perspective, conversationId) {
+  const relationLabel = RELATION_OPTIONS.find(r => r.id === relation)?.label || relation;
+  const perspectiveOption = PERSPECTIVE_OPTIONS.find(p => p.id === perspective);
+  const perspectiveLabel = perspectiveOption?.label || perspective;
+  const perspectiveDesc = perspectiveOption?.desc || '';
+
+  // LLM 优先
+  try {
+    const { streamYanChat } = await import('../services/apiClient.js');
+    const prompt = `用户要铸造一个智囊「${name}」，关系是「${relationLabel}」，主视角是「${perspectiveLabel}」（${perspectiveDesc}）。
+
+请提出3个递进式审问问题，帮助补全这位智囊的人设：
+1. 第1问：TA最擅长在什么场景下发言？（具体到场景，不要套话）
+2. 第2问：TA说话的风格是什么？（直接/温和/犀利/幽默？举个例子）
+3. 第3问：TA最大的盲点是什么？（什么情况下TA会看走眼？）
+
+每个问题要简短（30字内），递进式深入，针对"${name}是${relationLabel}"这个具体关系来问。
+
+输出格式（严格遵守，每行一问，不要编号不要解释）：
+问题1
+问题2
+问题3`;
+
+    const result = await streamYanChat({ message: prompt, conversationId });
+    if (result && result.text && result.text.length > 10) {
+      const lines = result.text.split('\n').map(l => l.replace(/^\d+[.、）)]\s*/, '').trim()).filter(l => l.length > 2).slice(0, 3);
+      if (lines.length === 3) {
+        return { questions: lines, conversationId: result.conversationId || conversationId, source: 'llm' };
+      }
+    }
+  } catch (e) {
+    console.warn('[generateInterviewQuestions] LLM失败，降级本地:', e.message);
+  }
+
+  // 本地降级
+  return {
+    questions: localGenerateInterview(name, relationLabel, perspectiveLabel),
+    conversationId,
+    source: 'local',
+  };
+}
+
+/**
+ * 本地降级：生成递进审问问题
+ */
+function localGenerateInterview(name, relationLabel, perspectiveLabel) {
+  const scenarioMap = {
+    '伴侣': `「${name}」在你们讨论什么类型的事情时，TA的建议最管用？是感情纠结、金钱取舍，还是人生方向？`,
+    '家人': `「${name}」最常在你做什么决定时插话？TA关心的核心是什么？`,
+    '挚友': `「${name}」最擅长戳穿你的什么借口？举一个具体的例子。`,
+    '导师': `「${name}」曾经在什么关键时刻给过你指点？TA看问题的角度是什么？`,
+    '合作者': `「${name}」在工作上最擅长补你的什么短板？TA的专长是什么？`,
+    '对手': `「${name}」做过什么让你佩服或警醒的事？TA的行事风格是什么？`,
+    '自我': `「${name}」代表你的哪个面相？是未来的你、过去的你，还是被压抑的你？`,
+    '其他': `「${name}」最擅长在什么场景下发言？举个例子。`,
+  };
+  return [
+    scenarioMap[relationLabel] || scenarioMap['其他'],
+    `「${name}」说话的风格是直接犀利、温和引导，还是冷幽默？TA最常说的一句口头禅是什么？`,
+    `「${name}」从「${perspectiveLabel}」看问题时，最容易忽略什么？什么情况下TA会看走眼？`,
+  ];
+}
+
+/**
+ * 步骤4 收尾: 据审问回答提炼最终 persona
+ * @returns { persona, conversationId, source }
+ */
+export async function refinePersonaWithInterview(name, relation, perspective, contextSummary, answers, conversationId) {
+  const relationLabel = RELATION_OPTIONS.find(r => r.id === relation)?.label || relation;
+  const perspectiveLabel = PERSPECTIVE_OPTIONS.find(p => p.id === perspective)?.label || perspective;
+  const validAnswers = answers.filter(a => a && a.trim());
+
+  // LLM 优先
+  if (validAnswers.length > 0) {
+    try {
+      const { streamYanChat } = await import('../services/apiClient.js');
+      const prompt = `基于以下信息，为智囊「${name}」生成一段人设 persona（用于AI发言时的角色设定）：
+
+关系：${relationLabel}
+主视角：${perspectiveLabel}
+演的理解：${contextSummary}
+
+用户的审问回答：
+1. 擅长场景：${validAnswers[0] || '未明确'}
+2. 说话风格：${validAnswers[1] || '未明确'}
+3. 已知盲点：${validAnswers[2] || '未明确'}
+
+请输出一段 100-150 字的 persona，包含：
+- TA 是谁（基于关系和用户的描述）
+- TA 看问题的独特角度（基于视角）
+- TA 的说话风格（基于用户回答）
+- TA 的盲点（基于用户回答）
+
+直接输出 persona 文本，不要寒暄、不要解释、不要 "persona:" 前缀。`;
+
+      const result = await streamYanChat({ message: prompt, conversationId });
+      if (result && result.text && result.text.length > 30) {
+        return { persona: result.text.trim(), conversationId: result.conversationId || conversationId, source: 'llm' };
+      }
+    } catch (e) {
+      console.warn('[refinePersonaWithInterview] LLM失败，降级本地:', e.message);
+    }
+  }
+
+  // 本地降级
+  return {
+    persona: localRefinePersona(name, relationLabel, perspectiveLabel, contextSummary, validAnswers),
+    conversationId,
+    source: 'local',
+  };
+}
+
+/**
+ * 本地降级：提炼 persona
+ */
+function localRefinePersona(name, relationLabel, perspectiveLabel, contextSummary, answers) {
+  const scene = answers[0]?.trim() || '在用户面临抉择时';
+  const style = answers[1]?.trim() || '直接、不绕弯子';
+  const blind = answers[2]?.trim() || '容易被情绪带偏';
+
+  return `你是「${name}」，${contextSummary || `用户的${relationLabel}`}。
+你的视角是「${perspectiveLabel}」，${scene}。
+你的说话风格：${style}。
+你的盲点：${blind}——遇到这种情况时，主动让位给其他智囊。
+你的回答特点：1-3句话，直击要害，可以质疑、追问、泼冷水，但永远站在用户的长期利益这边。`;
+}
+
+/**
+ * 步骤5: 封印成型 - 生成开光评语
+ */
+export async function generateSealingBlessing(agent, conversationId) {
+  try {
+    const { streamYanChat } = await import('../services/apiClient.js');
+    const prompt = `智囊「${agent.name}」刚刚被用户铸造完成。
+关系：${RELATION_OPTIONS.find(r => r.id === agent.relation)?.label || '其他'}
+视角：${agent.stance}
+人设：${agent.persona?.slice(0, 80) || ''}
+
+请用一句话（20字内）给这位智囊一个"开光"评语，像印章盖在TA的命签上。
+要求：有水墨韵味，点出TA的独特价值，不要套话。
+
+直接输出评语，不要引号、不要解释。`;
+
+    const result = await streamYanChat({ message: prompt, conversationId });
+    if (result && result.text && result.text.length > 3) {
+      return { blessing: result.text.trim().slice(0, 30), conversationId: result.conversationId || conversationId, source: 'llm' };
+    }
+  } catch (e) {
+    console.warn('[generateSealingBlessing] LLM失败，降级本地:', e.message);
+  }
+
+  // 本地降级
+  const blessings = [
+    `${agent.name}入营，一针见血。`,
+    `得${agent.name}，如得一面明镜。`,
+    `${agent.name}之眼，看透虚妄。`,
+    `有${agent.name}在侧，决策不孤。`,
+    `${agent.name}一言，胜千言。`,
+  ];
+  const hash = [...(agent.name || '')].reduce((a, c) => a + c.charCodeAt(0), 0);
+  return { blessing: blessings[hash % blessings.length], conversationId, source: 'local' };
+}
+
+/**
+ * 铸造完整智囊（5步向导最终输出）
+ */
+export function forgeAgent({ name, desc, relation, perspective, contextSummary, persona, blessing, source }) {
+  const cleanName = filterSpecialChars(name);
+  const perspectiveOption = PERSPECTIVE_OPTIONS.find(p => p.id === perspective) || PERSPECTIVE_OPTIONS[0];
+  const trigram = perspectiveOption.icon;
+  const colorPair = { color: perspectiveOption.color, glow: perspectiveOption.glow };
+
+  return {
+    id: `custom_${Date.now()}`,
+    name: cleanName,
+    stance: perspectiveOption.label,
+    perspective,
+    relation,
+    relationLabel: RELATION_OPTIONS.find(r => r.id === relation)?.label || '其他',
+    contextSummary: contextSummary || '',
+    persona: persona || generatePersona(cleanName, desc, perspectiveOption.label),
+    blessing: blessing || '',
+    color: colorPair.color,
+    glow: colorPair.glow,
+    form: generateForm(cleanName),
+    icon: trigram,
+    trigram,
+    role: 'custom',
+    desc: desc || `${perspectiveOption.label} · ${RELATION_OPTIONS.find(r => r.id === relation)?.label || ''}`,
+    pauseDuration: 600,
+    isCustom: true,
+    forged: true, // 标记为5步向导铸造
+    forgedAt: new Date().toISOString(),
+    source: source || 'local',
+  };
 }

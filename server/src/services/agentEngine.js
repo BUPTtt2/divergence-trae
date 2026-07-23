@@ -6,7 +6,7 @@
  * LLM 失败时降级到关键词匹配
  */
 
-import { AGENT_POOL, getAgentsByIds, AGENT_POOL_MAP } from '../data/agentPool.js';
+import { AGENT_POOL, getAgentsByIds, AGENT_POOL_MAP, buildAgentSystemPrompt } from '../data/agentPool.js';
 import { callLLM } from './llmRouter.js';
 import { retrieveMemories, getUserProfile, extractMemoriesFromInference } from './memoryService.js';
 import { listAdvisors, formatAdvisorForAgentPool } from './customAdvisorService.js';
@@ -304,23 +304,36 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
     return '停下来想想，你问的这个问题，背后真正担心的是什么？';
   }
 
-  const systemPrompt = `${agent.persona}
+  // 从 previousDialogues 提取参与的智囊列表（用于 team_map）
+  const teamAgentIds = new Set(previousDialogues.map(d => d.agentId).filter(Boolean));
+  const teamAgents = Array.from(teamAgentIds).map(id => AGENT_POOL_MAP[id]).filter(Boolean);
 
-【回答要求】
-- 1-3 句话，不超过 80 字
+  // 三层提示词优先，降级到 persona
+  const basePrompt = buildAgentSystemPrompt(agent, teamAgents);
+
+  const systemPrompt = `${basePrompt}
+
+【补充约束】
 - 用中文口语，不要书面体
 - 必须抓住用户问题里的具体词（数字、对象、场景），不要泛泛而谈
 - 不要给"祝你顺利"之类的客套结尾
-- 可以质疑用户、可以反问、可以泼冷水，但要说人话`;
+- 可以质疑用户、可以反问、可以泼冷水，但要说人话
 
-  // 构建上下文：之前的 Agent 发言
+【真Agent协作指令】
+- 若前面有其他智囊发言，必须主动对其至少一位做明确表态：用"我同意X说的"、"反驳X的观点"、"补充X的判断"这类自然语言引用对方名字
+- 不要各说各话，要让用户看到观点之间的碰撞
+- 若发现前一位智囊遗漏了关键维度，主动补位（如钱谷没算隐性成本，你指出）
+- 你的发言要建立在前面观点之上，而不是平行重述问题`;
+
+  // 构建上下文：之前的 Agent 发言（带 agentId 便于 LLM 精确引用）
   let contextText = '';
   if (previousDialogues.length > 0) {
-    contextText = '\n\n【其他智囊的发言（供参考，不要重复）】\n' +
+    contextText = '\n\n【其他智囊的发言（你可引用、反驳、补充，不要重复）】\n' +
       previousDialogues
         .map((d) => {
           const name = d.name || AGENT_POOL_MAP[d.agentId]?.name || d.agentId || '未知';
-          return `${name}: ${d.text}`;
+          const stance = AGENT_POOL_MAP[d.agentId]?.stance || '';
+          return `${name}（${d.agentId || 'unknown'}${stance ? ' · ' + stance : ''}）: ${d.text}`;
         })
         .join('\n');
   }
@@ -394,7 +407,10 @@ export async function generateAgentQuestion(agent, question, dialogueHistory = [
     return { question: '你心里其实已经有答案了，对吗？', needMoreInfo: false };
   }
 
-  const systemPrompt = `${agent.persona}
+  // 三层提示词优先，降级到 persona
+  const basePrompt = buildAgentSystemPrompt(agent);
+
+  const systemPrompt = `${basePrompt}
 
 【任务】从你的专业视角出发，问用户一个具体、深入的问题，层层递进地挖掘关键信息。
 

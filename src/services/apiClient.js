@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 后端 API 封装模块
  * 统一管理所有后端接口调用，包含 SSE 流式处理
  *
@@ -9,38 +9,67 @@
  * - 后端不可达时降级（让上层用 localStorage 兜底）
  */
 
+// 使用 baseConfig 打破循环依赖 - 完全不依赖 auth.js
 import {
-  getAccessToken,
-  isTokenExpiringSoon,
-  refreshAccessToken,
-  clearAuth,
-  getCurrentUserId,
-} from './auth.js';
+  API_BASE_URL,
+  getAccessTokenSync,
+  getRefreshTokenSync,
+  getCurrentUserIdSync,
+  isTokenExpiringSoonSync,
+  storageRemove,
+  TOKEN_KEYS,
+} from './baseConfig.js';
 
-// 优先使用运行时配置的 API 地址（public/api-config.js 定义）
-// 生产环境（Vercel）使用相对路径 /api，开发环境直连本地
-const getApiBase = () => {
-  if (typeof window !== 'undefined' && window.__API_BASE__) {
-    return window.__API_BASE__;
-  }
-  if (import.meta.env.VITE_API_BASE) {
-    return import.meta.env.VITE_API_BASE;
-  }
-  return import.meta.env.PROD ? '/api' : 'http://localhost:8787';
-};
-
-const USE_DIRECT_API = import.meta.env.VITE_API_BASE !== undefined;
-const API_PATH_PREFIX = '';
-
-
-const PRIMARY_API = getApiBase();
+const PRIMARY_API = API_BASE_URL;
 const FALLBACK_API = PRIMARY_API;
 
 let _activeApi = PRIMARY_API;
 let _apiUnavailableUntil = 0;
 
-export const API_BASE_URL = PRIMARY_API;
-export { PRIMARY_API, FALLBACK_API, getActiveApi, markApiUnavailable };
+// 内联实现 refreshAccessToken，不依赖 auth.js
+async function refreshAccessToken() {
+  const refreshToken = getRefreshTokenSync();
+  if (!refreshToken) return null;
+  
+  try {
+    const resp = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) throw new Error(`status ${resp.status}`);
+    const data = await resp.json();
+    if (data.accessToken) {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(TOKEN_KEYS.ACCESS_TOKEN, data.accessToken);
+        if (data.refreshToken) window.localStorage.setItem(TOKEN_KEYS.REFRESH_TOKEN, data.refreshToken);
+        if (data.expiresIn) {
+          const expiresAt = Date.now() + data.expiresIn * 1000 - 30 * 1000;
+          window.localStorage.setItem(TOKEN_KEYS.TOKEN_EXPIRY, String(expiresAt));
+        }
+      }
+      return data.accessToken;
+    }
+    throw new Error('响应缺少 accessToken');
+  } catch (e) {
+    console.warn('[apiClient] 刷新 token 失败:', e.message);
+    storageRemove(TOKEN_KEYS.ACCESS_TOKEN);
+    storageRemove(TOKEN_KEYS.REFRESH_TOKEN);
+    storageRemove(TOKEN_KEYS.TOKEN_EXPIRY);
+    return null;
+  }
+}
+
+// 内联实现 clearAuth，不依赖 auth.js
+function clearAuth() {
+  storageRemove(TOKEN_KEYS.ACCESS_TOKEN);
+  storageRemove(TOKEN_KEYS.REFRESH_TOKEN);
+  storageRemove(TOKEN_KEYS.USER);
+  storageRemove(TOKEN_KEYS.TOKEN_EXPIRY);
+}
+
+export { PRIMARY_API, FALLBACK_API };
 
 export const API_TIMEOUT = 15000;
 export const SSE_TIMEOUT = 30000;
@@ -56,14 +85,14 @@ async function tryFetch(url, options = {}, timeout = API_TIMEOUT) {
   }
 }
 
-async function getActiveApi() {
+export async function getActiveApi() {
   if (Date.now() < _apiUnavailableUntil) {
     return FALLBACK_API;
   }
   return _activeApi;
 }
 
-async function markApiUnavailable(duration = 300000) {
+export async function markApiUnavailable(duration = 300000) {
   _apiUnavailableUntil = Date.now() + duration;
   _activeApi = FALLBACK_API;
 }
@@ -191,16 +220,16 @@ async function request(path, options = {}, attempt = 1) {
  */
 async function injectAuthHeader(headers) {
   if (headers['Authorization'] || headers['authorization']) return;
-  let token = getAccessToken();
+  let token = getAccessTokenSync();
   if (!token) {
-    const userId = getCurrentUserId();
+    const userId = getCurrentUserIdSync();
     if (userId) {
       token = `local-${userId}`;
     } else {
       return;
     }
   }
-  if (isTokenExpiringSoon()) {
+  if (isTokenExpiringSoonSync()) {
     const refreshed = await refreshAccessToken();
     if (refreshed) token = refreshed;
   }
@@ -275,6 +304,13 @@ export async function streamAgentDialogue(agent, question, previousDialogues, on
       persona: agent.persona,
       color: agent.color,
       icon: agent.icon,
+      // 铸造智囊的扩展字段 - 让后端 LLM 理解真实语境
+      relation: agent.relation,
+      relationLabel: agent.relationLabel,
+      contextSummary: agent.contextSummary,
+      blessing: agent.blessing,
+      perspective: agent.perspective,
+      forged: agent.forged,
     };
   }
 

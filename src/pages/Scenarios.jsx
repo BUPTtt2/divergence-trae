@@ -35,8 +35,6 @@ export default function Scenarios() {
         </span>
       </div>
 
-      <Navbar activeIndex={2} />
-
       {/* Hero */}
       <section className="relative overflow-hidden px-6 pt-20 pb-12">
         <div className="absolute -left-40 -top-20 pointer-events-none opacity-[0.05]">

@@ -430,7 +430,7 @@ export default function Community() {
           <span style={{ color: '#999' }}>社区 / COMMUNITY</span>
           <span className="mx-3" style={{ color: '#444' }}>|</span>
           {offline ? (
-            <span style={{ color: '#E8B880' }}>本地模式 · 数据仅本机可见</span>
+            <span style={{ color: '#E8B880' }}>预设模式 · 数据仅本机可见</span>
           ) : status === 'anonymous' ? (
             <span style={{ color: '#50A070' }}>匿名访问 · 数据已同步</span>
           ) : status === 'registered' ? (

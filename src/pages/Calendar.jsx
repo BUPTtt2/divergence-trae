@@ -89,8 +89,6 @@ export default function Calendar() {
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: F.regular }}>
-      <AppNav variant="light" />
-      <Navbar activeIndex={5} />
 
       {/* Main Content */}
       <div className="pt-14 max-w-[900px] mx-auto px-6 py-12">
