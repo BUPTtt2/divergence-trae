@@ -519,8 +519,17 @@ function normalizeAgent(raw) {
  * 调用 apiClient.streamAgentDialogue，通过 onChunk 累积文本，返回完整结果
  */
 async function getFullAgentDialogue(agent, question, previousDialogues) {
+  // 智囊调校：把该 Agent 的历史反馈摘要附加到 question, 让 LLM 据此微调发言
+  let enrichedQuestion = question;
+  try {
+    const { formatFeedbackForPrompt } = await import('./memoryStore.js');
+    const hint = formatFeedbackForPrompt(agent?.id);
+    if (hint) {
+      enrichedQuestion = `${question}${hint}`;
+    }
+  } catch (e) { /* 降级, 不影响主流程 */ }
   let full = '';
-  await apiClient.streamAgentDialogue(agent, question, previousDialogues, (chunk) => {
+  await apiClient.streamAgentDialogue(agent, enrichedQuestion, previousDialogues, (chunk) => {
     full += chunk;
   });
   return full.trim();

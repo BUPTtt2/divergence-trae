@@ -12,6 +12,7 @@ import { detectConvergenceFromBlackboard } from '../services/multiAgentFramework
 import { getCustomAgents, recommendSubscribedAgents } from '../utils/customAgent';
 import { streamYanChat, addYanMemory, getYanMemories } from '../services/apiClient';
 import { recallRelevantMemories, formatMemoriesForPrompt, saveWorkingMemory, saveEpisode, inferFactsFromSession, saveAgentFeedback, detectChoicePattern } from '../services/memoryStore';
+import { generateShareCard, downloadShareCard } from '../utils/shareCardGenerator';
 
 const BORDER_COLOR = '#C8A850';
 const GLOW_COLOR = '#F0D890';
@@ -60,6 +61,8 @@ export default function Game() {
   const [yanConversationId, setYanConversationId] = useState(null);
   const floatTipTimer = useRef(null);
   const stageTimersRef = useRef([]);
+  // path_reveal 阶段的命牌内容 (提前 LLM 生成)
+  const [fateContent, setFateContent] = useState(null);
 
   const activeAgents = useMemo(() => {
     try {
@@ -538,10 +541,11 @@ export default function Game() {
 
   useEffect(() => () => clearTimers(), [clearTimers]);
 
-  const handleChoiceClick = useCallback((choice, index) => {
+  const handleChoiceClick = useCallback(async (choice, index) => {
     setSelectedChoice(choice);
     setPhase('path_reveal');
     setAwaitingUser(false);
+    setFateContent(null); // 重置
 
     // path_reveal 阶段演 的总结 - 优先用 inference 真实数据
     setAgentDialogues(prev => {
@@ -558,12 +562,30 @@ export default function Game() {
       };
     });
 
+    // 异步提前生成命牌内容 (LLM 个性化卦辞+终局), 不阻塞主流程
+    try {
+      const realGua = inference?.gua;
+      const guaName = realGua?.gua || choice.gua || '大有';
+      const trigram = realGua?.trigram || choice.icon || '☰';
+      const personalized = await generatePersonalizedCardContent({
+        question: userInput,
+        guaName,
+        choiceLabel: choice.label,
+        agentDialogues: inference?.agentDialogues || {},
+        trigram,
+      });
+      setFateContent(personalized);
+    } catch (e) {
+      console.warn('[命牌生成] 失败, 降级:', e.message);
+      setFateContent({ verse: inference?.verse || choice.gua || '', summary: '', source: 'preset' });
+    }
+
     // 4.5s 后等用户点"揭示命签"
     const t = setTimeout(() => {
       setAwaitingUser(true);
     }, 4500);
     stageTimersRef.current.push(t);
-  }, [inference]);
+  }, [inference, userInput]);
 
   // 用户点击"揭示命签" - 从 path_reveal 进入 final
   const handleRevealFate = useCallback(() => {
@@ -684,14 +706,33 @@ export default function Game() {
       const trigram = realGua?.trigram || fb.trigram;
       const choiceLabel = selectedChoice?.label || '抓住机会';
 
-      // 命签生成深化：LLM 根据卦象+智囊发言+抉择生成个性化 verse/summary
-      const personalized = await generatePersonalizedCardContent({
-        question: userInput,
-        guaName,
-        choiceLabel,
-        agentDialogues: inference?.agentDialogues || {},
-        trigram,
-      });
+      // 命签生成深化：优先复用 path_reveal 阶段已生成的个性化内容, 否则现生成
+      let personalized = fateContent;
+      if (!personalized || !personalized.verse) {
+        try {
+          personalized = await generatePersonalizedCardContent({
+            question: userInput,
+            guaName,
+            choiceLabel,
+            agentDialogues: inference?.agentDialogues || {},
+            trigram,
+          });
+        } catch (e) {
+          personalized = { verse: inference?.verse || fb.verse, summary: '', source: 'preset' };
+        }
+      }
+
+      // 完整推演路径 - 供收藏后回看 + 分享卡生成
+      const agentNotes = (activeAgents || [])
+        .filter(a => a && a.role !== 'master')
+        .map(a => {
+          const arr = inference?.agentDialogues?.history?.[a.id] || inference?.agentDialogues?.[a.id] || [];
+          const last = Array.isArray(arr) ? arr[arr.length - 1] : null;
+          const text = typeof last === 'string' ? last : (last?.text || '');
+          return { id: a.id, name: a.name, color: a.color || '#C8A850', note: (text || '').slice(0, 80) };
+        })
+        .filter(a => a.note)
+        .slice(0, 6);
 
       const card = {
         id: `card-${Date.now()}`,
@@ -711,6 +752,11 @@ export default function Game() {
         cardSource: personalized.source,
         // 卦象元素
         guaElement: realGua?.element || fb.element,
+        // 完整推演路径 - 供回看 + 分享
+        yanSummary: inference?.summary || personalized.summary || '',
+        agentNotes,
+        choice: selectedChoice ? { id: selectedChoice.id, label: selectedChoice.label, icon: selectedChoice.icon } : null,
+        commit: currentCommit || '',
         // 时间
         date: new Date().toISOString().split('T')[0],
         pillars: (() => {
@@ -764,7 +810,7 @@ export default function Game() {
     } catch (e) {
       console.error('保存失败', e);
     }
-  }, [selectedChoice, userInput, activeAgents, inference]);
+  }, [selectedChoice, userInput, activeAgents, inference, fateContent]);
 
   // 顶栏提示文字
   const phaseLabel = useMemo(() => {
@@ -1158,6 +1204,21 @@ export default function Game() {
                 </motion.button>
               )}
             </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* 命牌浮层 - path_reveal 阶段, 右侧滑入, 不挡演总结 */}
+        <AnimatePresence>
+          {phase === 'path_reveal' && selectedChoice && (
+            <FateCardPanel
+              choice={selectedChoice}
+              inference={inference}
+              userInput={userInput}
+              agentDialogues={agentDialogues}
+              activeAgents={activeAgents}
+              currentCommit={currentCommit}
+              fateContent={fateContent}
+            />
           )}
         </AnimatePresence>
 
@@ -1677,5 +1738,292 @@ export default function Game() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/* ============================================================
+   命牌浮层 - path_reveal 阶段
+   水墨风格卡片, 右侧滑入, 显示完整推演成果
+   卦象 / 卦名 / 卦辞 / 四柱 / 智囊批注 / 抉择 / 终局 / 承诺
+============================================================ */
+function FateCardPanel({ choice, inference, userInput, agentDialogues, activeAgents, currentCommit, fateContent }) {
+  const [trigramFlipped, setTrigramFlipped] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareTip, setShareTip] = useState('');
+  const realGua = inference?.gua;
+  const guaName = realGua?.gua || choice?.gua || '大有';
+  const trigram = realGua?.trigram || choice?.icon || '☰';
+  const element = realGua?.element || choice?.element || '火';
+
+  // 四柱计算（与 handleSaveToCollection 同算法, 复现方便浮层展示）
+  const pillars = useMemo(() => {
+    const now = new Date();
+    const stems = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸'];
+    const branches = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
+    const pillar = (n) => stems[n % 10] + branches[n % 12];
+    return {
+      year: pillar(now.getFullYear() + 4),
+      month: pillar(now.getMonth() + 1 + now.getFullYear()),
+      day: pillar(now.getDate() + (now.getMonth() + 1) * 3),
+      hour: pillar(now.getHours() + now.getDate() * 2),
+    };
+  }, []);
+
+  // 智囊批注：每位智囊最近一句发言精要（≤30字）
+  const advisorNotes = useMemo(() => {
+    try {
+      const history = agentDialogues?.history || {};
+      return (activeAgents || [])
+        .filter(a => a && a.role !== 'master')
+        .map(a => {
+          const arr = history[a.id] || [];
+          if (arr.length === 0) return null;
+          const last = arr[arr.length - 1];
+          const text = typeof last === 'string' ? last : (last?.text || '');
+          return { name: a.name, color: a.color || '#C8A850', glow: a.glow || '#F0D890', note: (text || '').slice(0, 36) };
+        })
+        .filter(Boolean)
+        .slice(0, 4);
+    } catch (e) {
+      return [];
+    }
+  }, [agentDialogues, activeAgents]);
+
+  const verse = fateContent?.verse || inference?.verse || '';
+  const summary = fateContent?.summary || '';
+  const loading = !fateContent;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 80 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 80 }}
+      transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+      style={{
+        position: 'absolute',
+        right: '24px',
+        top: '50%',
+        transform: 'translateY(-50%)',
+        width: 'min(340px, 32vw)',
+        zIndex: 18,
+        pointerEvents: 'auto',
+      }}
+    >
+      <div
+        style={{
+          background: 'linear-gradient(180deg, rgba(20, 16, 12, 0.92) 0%, rgba(14, 10, 8, 0.96) 100%)',
+          backdropFilter: 'blur(12px)',
+          border: `1px solid ${BORDER_COLOR}50`,
+          borderRadius: '4px',
+          padding: '20px 18px',
+          boxShadow: `0 8px 32px rgba(0,0,0,0.4), 0 0 24px ${GLOW_COLOR}20`,
+          fontFamily: '"Noto Serif SC", "Ma Shan Zheng", serif',
+        }}
+      >
+        {/* 顶部印章 */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+          <span style={{ fontSize: '9px', color: GLOW_COLOR, letterSpacing: '0.3em', fontFamily: '"Ma Shan Zheng", serif', opacity: 0.8 }}>
+            命 签
+          </span>
+          <span style={{ fontSize: '9px', color: '#7A7468', letterSpacing: '0.15em' }}>
+            {new Date().toISOString().split('T')[0]}
+          </span>
+        </div>
+
+        {/* 卦象 + 卦名 + 五行 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '12px', paddingBottom: '12px', borderBottom: `1px solid ${BORDER_COLOR}30` }}>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.5, rotate: -10 }}
+            animate={trigramFlipped
+              ? { opacity: 1, scale: 1.15, rotateY: 180, color: RUST_COLOR, textShadow: `0 0 24px ${RUST_COLOR}80` }
+              : { opacity: 1, scale: 1, rotate: 0, color: GLOW_COLOR, textShadow: `0 0 16px ${GLOW_COLOR}80` }
+            }
+            transition={{ duration: 1.1, ease: [0.16, 1, 0.3, 1] }}
+            onClick={() => setTrigramFlipped(f => !f)}
+            title="点击翻卦"
+            style={{
+              fontSize: '40px',
+              color: GLOW_COLOR,
+              textShadow: `0 0 16px ${GLOW_COLOR}80`,
+              fontFamily: '"Ma Shan Zheng", serif',
+              lineHeight: 1,
+              cursor: 'pointer',
+              userSelect: 'none',
+              transformStyle: 'preserve-3d',
+            }}
+          >
+            {trigramFlipped ? '变' : trigram}
+          </motion.div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '18px', color: '#F0EDE5', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.2em', textShadow: `0 0 8px ${GLOW_COLOR}40` }}>
+              {guaName}
+            </div>
+            <div style={{ fontSize: '10px', color: '#A89888', marginTop: '4px', letterSpacing: '0.15em' }}>
+              五行属 {element}
+            </div>
+          </div>
+        </div>
+
+        {/* 卦辞 (个性化生成) */}
+        <div style={{ marginBottom: '12px' }}>
+          <div style={{ fontSize: '9px', color: GLOW_COLOR, marginBottom: '6px', letterSpacing: '0.25em', opacity: 0.7 }}>卦 辞</div>
+          {loading ? (
+            <motion.div animate={{ opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 1.4, repeat: Infinity }} style={{ fontSize: '12px', color: '#888', fontStyle: 'italic' }}>
+              演 · 正在落卦定辞…
+            </motion.div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7 }}
+              style={{ fontSize: '13px', color: '#F0EDE5', fontFamily: '"Ma Shan Zheng", serif', lineHeight: 1.9, letterSpacing: '0.1em', fontStyle: 'italic' }}
+            >
+              「{verse}」
+            </motion.div>
+          )}
+        </div>
+
+        {/* 四柱 */}
+        <div style={{ marginBottom: '12px', display: 'flex', justifyContent: 'space-between', padding: '6px 8px', background: 'rgba(200, 168, 80, 0.05)', borderRadius: '2px' }}>
+          {[
+            { label: '年', val: pillars.year },
+            { label: '月', val: pillars.month },
+            { label: '日', val: pillars.day },
+            { label: '时', val: pillars.hour },
+          ].map(p => (
+            <div key={p.label} style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '8px', color: '#7A7468', marginBottom: '2px' }}>{p.label}</div>
+              <div style={{ fontSize: '11px', color: '#C8A878', fontFamily: '"Ma Shan Zheng", serif' }}>{p.val}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* 智囊批注 */}
+        {advisorNotes.length > 0 && (
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ fontSize: '9px', color: GLOW_COLOR, marginBottom: '6px', letterSpacing: '0.25em', opacity: 0.7 }}>智 囊 批 注</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {advisorNotes.map((a, i) => (
+                <motion.div
+                  key={a.name + i}
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.4 + i * 0.08, duration: 0.5 }}
+                  style={{ fontSize: '10px', lineHeight: 1.6, paddingLeft: '8px', borderLeft: `2px solid ${a.glow}80` }}
+                >
+                  <span style={{ color: a.glow, fontFamily: '"Ma Shan Zheng", serif', marginRight: '6px' }}>{a.name}</span>
+                  <span style={{ color: '#B0AB9E' }}>{a.note}{a.note.length >= 36 ? '…' : ''}</span>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 抉择 */}
+        <div style={{ marginBottom: '12px', padding: '8px 10px', background: `linear-gradient(90deg, ${RUST_COLOR}20 0%, transparent 100%)`, borderLeft: `2px solid ${RUST_COLOR}` }}>
+          <div style={{ fontSize: '9px', color: RUST_COLOR, marginBottom: '4px', letterSpacing: '0.25em', opacity: 0.9 }}>汝 之 抉 择</div>
+          <div style={{ fontSize: '13px', color: '#F0EDE5', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.15em' }}>
+            {choice?.label}
+          </div>
+        </div>
+
+        {/* 承诺 (committing阶段写的) */}
+        {currentCommit && currentCommit.trim() && (
+          <div style={{ marginBottom: '12px', padding: '8px 10px', background: 'rgba(200, 168, 80, 0.06)', borderRadius: '2px' }}>
+            <div style={{ fontSize: '9px', color: GLOW_COLOR, marginBottom: '4px', letterSpacing: '0.25em', opacity: 0.7 }}>本 心 落 笔</div>
+            <div style={{ fontSize: '11px', color: '#D8D0C0', fontStyle: 'italic', lineHeight: 1.7 }}>
+              {currentCommit.trim()}
+            </div>
+          </div>
+        )}
+
+        {/* 终局 (个性化生成) */}
+        <div style={{ marginBottom: '8px' }}>
+          <div style={{ fontSize: '9px', color: GLOW_COLOR, marginBottom: '6px', letterSpacing: '0.25em', opacity: 0.7 }}>终 局</div>
+          {loading ? (
+            <motion.div animate={{ opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 1.4, repeat: Infinity }} style={{ fontSize: '11px', color: '#888', fontStyle: 'italic' }}>
+              演 · 凝结终局中…
+            </motion.div>
+          ) : summary ? (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7, delay: 0.2 }}
+              style={{ fontSize: '11px', color: '#D8D0C0', lineHeight: 1.8, letterSpacing: '0.05em' }}
+            >
+              {summary}
+            </motion.div>
+          ) : (
+            <div style={{ fontSize: '11px', color: '#888', fontStyle: 'italic' }}>卦已立, 辞已定, 余下的留给时光。</div>
+          )}
+        </div>
+
+        {/* AI 生成标识 */}
+        <div style={{ textAlign: 'center', marginTop: '10px', paddingTop: '8px', borderTop: `1px solid ${BORDER_COLOR}20`, fontSize: '8px', color: '#5A5550', letterSpacing: '0.25em' }}>
+          AI 生成内容，仅供参考
+        </div>
+
+        {/* 分享按钮 */}
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={async () => {
+            if (sharing) return;
+            setSharing(true);
+            setShareTip('演 · 正在凝结命签…');
+            try {
+              const cardForShare = {
+                gua: guaName,
+                trigram,
+                guaElement: element,
+                element,
+                title: choice?.label || '',
+                question: userInput || '',
+                decision: choice?.label || '',
+                verse,
+                summary,
+                pillars,
+                date: new Date().toISOString().split('T')[0],
+              };
+              const dataUrl = await generateShareCard(cardForShare, {
+                yanSummary: summary,
+                agentNotes: advisorNotes.map(a => ({ name: a.name, color: a.color, note: a.note })),
+                commit: currentCommit || '',
+              });
+              downloadShareCard(dataUrl, `${guaName}-命签.png`);
+              setShareTip('命签已下载, 可分享');
+            } catch (e) {
+              console.warn('[分享卡] 生成失败', e);
+              setShareTip('生成失败, 稍后再试');
+            } finally {
+              setTimeout(() => setSharing(false), 600);
+              setTimeout(() => setShareTip(''), 2400);
+            }
+          }}
+          disabled={sharing || loading}
+          style={{
+            marginTop: '10px',
+            width: '100%',
+            padding: '8px 12px',
+            background: sharing ? 'transparent' : `linear-gradient(180deg, ${RUST_COLOR}30 0%, ${RUST_COLOR}15 100%)`,
+            color: sharing ? '#7A7468' : RUST_COLOR,
+            fontSize: '11px',
+            fontFamily: '"Ma Shan Zheng", serif',
+            letterSpacing: '0.3em',
+            border: `1px solid ${RUST_COLOR}60`,
+            borderRadius: '2px',
+            cursor: sharing ? 'wait' : 'pointer',
+            opacity: loading ? 0.4 : 1,
+          }}
+        >
+          {sharing ? (shareTip || '凝结中…') : '☶ 落印成签 · 分享'}
+        </motion.button>
+        {shareTip && !sharing && (
+          <div style={{ textAlign: 'center', marginTop: '6px', fontSize: '9px', color: GLOW_COLOR, letterSpacing: '0.15em' }}>
+            {shareTip}
+          </div>
+        )}
+      </div>
+    </motion.div>
   );
 }

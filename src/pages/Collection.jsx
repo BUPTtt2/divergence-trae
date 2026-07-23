@@ -12,6 +12,7 @@ const T = {
   paperLight: '#FAF6EC',
   ink: '#1A1410',
   inkSoft: '#2A2A33',
+  inkLight: '#4A4238',
   muted: '#7A7468',
   border: '#D9D2C0',
   accent: '#A8472E',
@@ -180,7 +181,7 @@ const RARITY_CONFIG = {
 };
 
 /* 卡牌面 - 真实视觉(卦象 + 卦辞 + 四柱 + 终局) */
-function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes }) {
+function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay }) {
   const [showShare, setShowShare] = useState(false);
   const [noteCount, setNoteCount] = useState(0);
   // 编辑模式：标题 / 个人感悟(summary) / 承诺文字(decision)
@@ -731,6 +732,18 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
                   >
                     ✎ 编辑
                   </motion.button>
+                  {(card.yanSummary || (card.agentNotes && card.agentNotes.length > 0)) && (
+                    <motion.button
+                      onClick={(e) => { e.stopPropagation(); if (onReplay) onReplay(card); }}
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      className="text-[10px] font-mono px-2 py-0.5"
+                      style={{ color: T.gold, border: `1px solid ${T.gold}60`, borderRadius: 2, backgroundColor: `${T.gold}10`, cursor: 'pointer' }}
+                      title="回看完整推演路径"
+                    >
+                      ☳ 回看
+                    </motion.button>
+                  )}
                   <motion.button
                     onClick={(e) => { e.stopPropagation(); setShowShare(true); }}
                     whileHover={{ scale: 1.05 }}
@@ -820,6 +833,8 @@ export default function Collection() {
   const [showCompare, setShowCompare] = useState(false);
   const [noteModalCard, setNoteModalCard] = useState(null);
   const [showNoteModal, setShowNoteModal] = useState(false);
+  // 推演路径回看
+  const [replayCard, setReplayCard] = useState(null);
   // 决策回顾闭环 - 30天到期回访
   const [followUps, setFollowUps] = useState([]);
   const [completedFollowUps, setCompletedFollowUps] = useState([]);
@@ -1308,6 +1323,7 @@ export default function Collection() {
                   onDelete={handleDeleteCard}
                   onShare={handleShareCard}
                   onOpenNotes={handleOpenNotes}
+                  onReplay={setReplayCard}
                 />
               </motion.div>
             ))}
@@ -1383,6 +1399,155 @@ export default function Collection() {
         isOpen={showNoteModal}
         onClose={handleCloseNotes}
       />
+
+      {/* 推演路径回看弹窗 */}
+      <AnimatePresence>
+        {replayCard && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center p-6"
+            style={{ backgroundColor: 'rgba(20,16,12,0.75)', backdropFilter: 'blur(8px)' }}
+            onClick={() => setReplayCard(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.92, y: 20, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.92, y: 20, opacity: 0 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full max-w-[640px] max-h-[85vh] overflow-y-auto p-7"
+              style={{
+                backgroundColor: '#FAF8F0',
+                border: `1px solid ${T.border}`,
+                borderRadius: 4,
+                boxShadow: `0 20px 60px rgba(0,0,0,0.4)`,
+                fontFamily: '"Noto Serif SC", "KaiTi", serif',
+              }}
+            >
+              {/* 关闭按钮 */}
+              <button
+                onClick={() => setReplayCard(null)}
+                className="absolute top-3 right-3 text-[14px]"
+                style={{ color: T.muted, background: 'transparent', border: 'none', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+
+              {/* 头部：卦象 + 卦名 + 五行 + 日期 */}
+              <div className="flex items-center gap-4 mb-5 pb-4" style={{ borderBottom: `1px solid ${T.border}` }}>
+                <div className="text-4xl" style={{ color: T.gold, textShadow: `0 0 12px ${T.gold}60` }}>
+                  {replayCard.trigram || '☰'}
+                </div>
+                <div className="flex-1">
+                  <div className="text-xl font-bold" style={{ color: T.ink, letterSpacing: '0.15em' }}>
+                    {replayCard.gua}
+                  </div>
+                  <div className="text-[11px] mt-1" style={{ color: T.muted }}>
+                    五行属 {replayCard.guaElement || replayCard.element || '火'} · {replayCard.date}
+                  </div>
+                </div>
+              </div>
+
+              {/* 原问题 */}
+              {replayCard.question && (
+                <div className="mb-4 p-3" style={{ backgroundColor: `${T.gold}08`, borderLeft: `2px solid ${T.gold}` }}>
+                  <div className="text-[10px] mb-1" style={{ color: T.gold, letterSpacing: '0.25em' }}>汝 之 所 问</div>
+                  <div className="text-[13px]" style={{ color: T.ink, lineHeight: 1.7 }}>{replayCard.question}</div>
+                </div>
+              )}
+
+              {/* 智囊批注 */}
+              {replayCard.agentNotes && replayCard.agentNotes.length > 0 && (
+                <div className="mb-4">
+                  <div className="text-[10px] mb-2" style={{ color: T.gold, letterSpacing: '0.25em' }}>智 囊 批 注</div>
+                  <div className="flex flex-col gap-2">
+                    {replayCard.agentNotes.map((a, i) => (
+                      <div key={i} className="text-[12px] pl-3" style={{ borderLeft: `2px solid ${a.color || T.gold}`, lineHeight: 1.7 }}>
+                        <span style={{ color: a.color || T.gold, fontWeight: 600 }} className="mr-2">{a.name}</span>
+                        <span style={{ color: T.inkLight }}>{a.note}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 抉择 */}
+              {replayCard.choice && (
+                <div className="mb-4 p-3" style={{ backgroundColor: `${T.accent}10`, borderLeft: `2px solid ${T.accent}` }}>
+                  <div className="text-[10px] mb-1" style={{ color: T.accent, letterSpacing: '0.25em' }}>汝 之 抉 择</div>
+                  <div className="text-[14px] font-semibold" style={{ color: T.ink }}>
+                    {replayCard.choice.icon || ''} {replayCard.choice.label}
+                  </div>
+                </div>
+              )}
+
+              {/* 演之总结 */}
+              {replayCard.yanSummary && (
+                <div className="mb-4 p-3" style={{ backgroundColor: '#fff', border: `1px solid ${T.border}` }}>
+                  <div className="text-[10px] mb-2" style={{ color: T.accent, letterSpacing: '0.25em' }}>演 之 总 结</div>
+                  <div className="text-[12px]" style={{ color: T.ink, lineHeight: 1.8, fontStyle: 'italic' }}>
+                    {replayCard.yanSummary}
+                  </div>
+                </div>
+              )}
+
+              {/* 卦辞 */}
+              {replayCard.verse && (
+                <div className="mb-4 text-center">
+                  <div className="text-[10px] mb-2" style={{ color: T.gold, letterSpacing: '0.25em' }}>卦 辞</div>
+                  <div className="text-[14px]" style={{ color: T.ink, fontFamily: '"Ma Shan Zheng", "KaiTi", serif', letterSpacing: '0.1em', fontStyle: 'italic' }}>
+                    「{replayCard.verse}」
+                  </div>
+                </div>
+              )}
+
+              {/* 四柱 */}
+              {replayCard.pillars && (
+                <div className="mb-4 flex justify-between p-3" style={{ backgroundColor: `${T.gold}06` }}>
+                  {[
+                    { label: '年', val: replayCard.pillars.year },
+                    { label: '月', val: replayCard.pillars.month },
+                    { label: '日', val: replayCard.pillars.day },
+                    { label: '时', val: replayCard.pillars.hour },
+                  ].map(p => (
+                    <div key={p.label} className="text-center">
+                      <div className="text-[9px]" style={{ color: T.muted }}>{p.label}</div>
+                      <div className="text-[14px] font-semibold" style={{ color: T.ink }}>{p.val}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* 本心落笔 (承诺) */}
+              {replayCard.commit && replayCard.commit.trim() && (
+                <div className="mb-4 p-3" style={{ backgroundColor: `${T.gold}08`, border: `1px dashed ${T.gold}60` }}>
+                  <div className="text-[10px] mb-2" style={{ color: T.gold, letterSpacing: '0.25em' }}>本 心 落 笔</div>
+                  <div className="text-[12px]" style={{ color: T.inkLight, fontStyle: 'italic', lineHeight: 1.8 }}>
+                    {replayCard.commit.trim()}
+                  </div>
+                </div>
+              )}
+
+              {/* 终局 */}
+              {replayCard.summary && (
+                <div className="mb-4">
+                  <div className="text-[10px] mb-2" style={{ color: T.accent, letterSpacing: '0.25em' }}>终 局</div>
+                  <div className="text-[12px]" style={{ color: T.ink, lineHeight: 1.8 }}>
+                    {replayCard.summary}
+                  </div>
+                </div>
+              )}
+
+              {/* 底部 AI 标识 */}
+              <div className="text-center pt-3 mt-3 text-[9px]" style={{ color: T.muted, borderTop: `1px solid ${T.border}`, letterSpacing: '0.25em' }}>
+                AI 生成内容，仅供参考 · 演策
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
