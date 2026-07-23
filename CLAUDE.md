@@ -20,6 +20,8 @@
 3. ❌ 流程卡住（branch_select阶段不存在）
 4. ❌ API路径问题（部分接口404）
 5. ❌ 用户体验不稳定（mock内容过多）
+6. ❌ 循环依赖导致白页（apiClient.js ↔ auth.js 相互导入）
+7. ❌ 登录入口不明显，用户难以发现
 
 ---
 
@@ -221,3 +223,6 @@ GET /api/yan/memories          (获取记忆上下文)
 | 2026-07-23 | 记忆接口401 | 修改yan/memories支持未登录 | `server/src/routes/yan.js` |
 | 2026-07-23 | sync/migrate 404 | 添加sync路由 | `server/src/routes/sync.js` |
 | 2026-07-23 | 签名验证失败 | optionalAuth签名失败时允许匿名访问 | `server/src/middleware/auth.js` |
+| 2026-07-23 | 循环依赖导致白页 | auth.js延迟导入apiClient，避免循环 | `src/services/auth.js` |
+| 2026-07-23 | 析问阶段白页 | Game.jsx添加try-catch和默认配置fallback | `src/pages/Game.jsx` |
+| 2026-07-23 | AgentDialogueOverlay白页 | 添加yan_analyze阶段加载状态显示 | `src/components/board/AgentDialogueOverlay.jsx` |

@@ -95,8 +95,6 @@ export default function Dictionary() {
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}>
-      <AppNav variant="light" />
-      <Navbar activeIndex={6} />
 
       <div className="pt-14 max-w-[1000px] mx-auto px-6 py-12">
         <motion.div

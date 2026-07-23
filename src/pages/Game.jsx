@@ -7,9 +7,11 @@ import AgentDialogueOverlay from '../components/board/AgentDialogueOverlay';
 import ProcessStepper from '../components/board/ProcessStepper';
 import { getAgentsForQuestion, detectQuestionType, QUESTION_TYPES } from '../data/agents';
 import { COLORS } from '../components/board/layoutConfig';
-import { generateInferenceContent, generateDialoguesForAgents, judgeContinueAsking, isLlmAvailable } from '../services/inferenceEngine';
-import { getCustomAgents } from '../utils/customAgent';
+import { generateInferenceContent, generateDialoguesForAgents, generateYanSummary, judgeContinueAsking, isLlmAvailable, generatePersonalizedCardContent } from '../services/inferenceEngine';
+import { detectConvergenceFromBlackboard } from '../services/multiAgentFramework';
+import { getCustomAgents, recommendSubscribedAgents } from '../utils/customAgent';
 import { streamYanChat, addYanMemory, getYanMemories } from '../services/apiClient';
+import { recallRelevantMemories, formatMemoriesForPrompt, saveWorkingMemory, saveEpisode, inferFactsFromSession, saveAgentFeedback, detectChoicePattern } from '../services/memoryStore';
 
 const BORDER_COLOR = '#C8A850';
 const GLOW_COLOR = '#F0D890';
@@ -47,6 +49,11 @@ export default function Game() {
   const [floatTip, setFloatTip] = useState(null);
   const [selectedAgentIds, setSelectedAgentIds] = useState(new Set());
   const [agentCallResults, setAgentCallResults] = useState({});
+  // D3 DebateConvergence - 自适应收敛
+  const MAX_DEBATE_ROUNDS = 3;
+  const [debateRound, setDebateRound] = useState(1);
+  const [debateConvergence, setDebateConvergence] = useState(null);
+  const debateBlackboardRef = useRef(null);
   const [showAgentErrorModal, setShowAgentErrorModal] = useState(false);
   const [agentErrors, setAgentErrors] = useState({});
   const [yanMemories, setYanMemories] = useState([]);
@@ -57,7 +64,9 @@ export default function Game() {
   const activeAgents = useMemo(() => {
     try {
       if (!userInput) return [];
-      const allAgents = getAgentsForQuestion(userInput) || [];
+      const presetAgents = getAgentsForQuestion(userInput) || [];
+      const customAgentsList = getCustomAgents();
+      const allAgents = [...presetAgents, ...customAgentsList];
       if ((phase === 'agent_debate' || phase === 'reflecting' || phase === 'summary' || phase === 'committing' || phase === 'final') && inference?.agents) {
         return inference.agents;
       }
@@ -86,96 +95,213 @@ export default function Game() {
     if (floatTipTimer.current) { clearTimeout(floatTipTimer.current); floatTipTimer.current = null; }
   }, []);
 
-  const handleStart = useCallback(async () => {
-    if (!inputValue.trim()) return;
-    const question = inputValue.trim();
-    setUserInput(question);
-    setShowInput(false);
-    setShowQuestion(true);
-    setPhase('casting');
+  // handleRestart 必须在 handleStart 之前定义，避免 TDZ 错误
+  const handleRestart = useCallback(() => {
+    clearTimers();
+    setPhase('input');
+    setShowInput(true);
+    setShowQuestion(false);
+    setUserInput('');
     setActiveAgentIdx(-1);
     setSelectedChoice(null);
     setAgentDialogues({ history: {} });
+    setShowHistoryPanel(false);
     setAwaitingUser(false);
     setCurrentResponse('');
+    setInference(null);
+    setDebateRound(1);
+    setDebateConvergence(null);
+    debateBlackboardRef.current = null;
+  }, [clearTimers]);
 
-    const inf = await generateInferenceContent(question);
-    setInference(inf);
-    const agents = inf.agents;
-
-    clearTimers();
-
-    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-    await delay(4000);
-    setPhase('analyzing');
-
-    await delay(3000);
-    setPhase('summoning');
-
-    await delay(2500);
-    setPhase('yan_analyze');
-    
-    let yanText = '';
-    let source = 'preset';
-    
+  const handleStart = useCallback(async () => {
     try {
-      const memories = await getYanMemories(question.slice(0, 20));
-      setYanMemories(memories);
+      if (!inputValue.trim()) return;
+      const question = inputValue.trim();
+      setUserInput(question);
+      setShowInput(false);
+      setShowQuestion(true);
+      setPhase('casting');
+      setActiveAgentIdx(-1);
+      setSelectedChoice(null);
+      setAgentDialogues({ history: {} });
+      setAwaitingUser(false);
+      setCurrentResponse('');
+
+      let inf = null;
+      try {
+        inf = await generateInferenceContent(question);
+      } catch (e) {
+        console.error('[handleStart] 生成推演内容异常:', e);
+        inf = null;
+      }
       
-      const memoryContext = memories.slice(0, 5).map(m => `【记忆】${m.title}: ${m.content.slice(0, 50)}`).join('\n');
-      const fullQuestion = memoryContext ? `${question}\n\n用户过往相关信息:\n${memoryContext}` : question;
+      if (!inf || !inf.agents || inf.agents.length === 0) {
+        console.warn('[handleStart] 生成推演内容失败，使用默认配置');
+        inf = {
+          agents: [
+            { id: 'fengyan', name: '风眼', stance: '风险视角', role: 'permanent', trigram: '☵', color: '#A84848', glow: '#E88080' },
+            { id: 'jingyuan', name: '镜渊', stance: '反思视角', role: 'permanent', trigram: '☶', color: '#685888', glow: '#A898C8' },
+            { id: 'qiangu', name: '钱谷', stance: '财务视角', role: 'dynamic', trigram: '☰', color: '#C88848', glow: '#E8B880' },
+            { id: 'luxiang', name: '路向', stance: '职业视角', role: 'dynamic', trigram: '☴', color: '#508870', glow: '#80C8A8' },
+          ],
+          agentDialogues: {},
+          powerfulQuestion: '细细思索，你最在意的是什么？',
+        };
+      }
+      setInference(inf);
 
-      if (isLlmAvailable()) {
-        setFloatTip('演 · 正在思考分析...');
-        const result = await streamYanChat({ 
-          message: `请分析用户的问题，并提出一个关键的追问来帮助深入了解用户的真实情况。\n\n用户问题：${fullQuestion}`,
-          conversationId: yanConversationId 
-        }, (chunk, fullText, convId) => {
-          setYanConversationId(convId);
-        });
-        
-        if (result && result.text && result.text.length > 5) {
-          yanText = result.text;
-          source = 'llm';
-          setYanConversationId(result.conversationId);
+      clearTimers();
+
+      const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+      await delay(4000);
+      setPhase('analyzing');
+
+      await delay(3000);
+      setPhase('summoning');
+
+      await delay(2500);
+      setPhase('yan_analyze');
+      
+      // 立即设置演的初始对话，防止白页
+      setAgentDialogues(prev => ({
+        ...prev,
+        yan: '演 · 正在思索……',
+        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), '演 · 正在思索……'] },
+      }));
+      
+      let yanText = '';
+      let source = 'preset';
+      
+      try {
+        let backendMemories = [];
+        try {
+          backendMemories = await getYanMemories(question.slice(0, 20));
+          setYanMemories(backendMemories || []);
+        } catch (e) {
+          console.warn('[演分析] 后端记忆失败:', e);
         }
-      }
-    } catch (e) {
-      console.warn('[演分析] LLM调用失败，降级本地', e);
-    }
 
-    if (!yanText || yanText.length <= 5) {
-      if (inf.reasoning && inf.analysis) {
-        yanText = `${inf.analysis}\n\n${inf.reasoning}\n\n${inf.powerfulQuestion || '细细思索，你最在意的是什么？'}`;
-      } else if (inf.reasoning) {
-        yanText = `${inf.reasoning}\n\n${inf.powerfulQuestion || '细细思索，你最在意的是什么？'}`;
-      } else if (inf.analysis) {
-        yanText = `${inf.analysis}\n\n${inf.powerfulQuestion || '细细思索，你最在意的是什么？'}`;
-      } else {
-        yanText = inf.powerfulQuestion || '此问关乎抉择，让我细细思索……';
+        // 本地分层记忆召回（工作/事实/情景/语义四类）
+        const localMemories = recallRelevantMemories(question);
+        const localMemoryContext = formatMemoriesForPrompt(localMemories);
+        const backendMemoryContext = (backendMemories || []).slice(0, 5)
+          .map(m => `【记忆】${m.title}: ${m.content.slice(0, 50)}`).join('\n');
+        const memoryContext = [localMemoryContext, backendMemoryContext].filter(Boolean).join('\n\n');
+        const fullQuestion = memoryContext ? `${question}\n\n用户过往相关信息:\n${memoryContext}` : question;
+
+        if (isLlmAvailable()) {
+          setFloatTip('演 · 正在思考分析...');
+          try {
+            const result = await streamYanChat({ 
+              message: `请分析用户的问题，并提出一个关键的追问来帮助深入了解用户的真实情况。\n\n用户问题：${fullQuestion}`,
+              conversationId: yanConversationId 
+            }, (chunk, fullText, convId) => {
+              setYanConversationId(convId);
+            });
+            
+            if (result && result.text && result.text.length > 5) {
+              yanText = result.text;
+              source = 'llm';
+              if (result.conversationId) {
+                setYanConversationId(result.conversationId);
+              }
+            }
+          } catch (e) {
+            console.warn('[演分析] streamYanChat失败:', e);
+          }
+        }
+      } catch (e) {
+        console.warn('[演分析] 整体处理失败，降级本地:', e);
       }
-      source = 'preset';
+
+      if (!yanText || yanText.length <= 5) {
+        const currentInf = inf || {};
+        if (currentInf.reasoning && currentInf.analysis) {
+          yanText = `${currentInf.analysis}\n\n${currentInf.reasoning}\n\n${currentInf.powerfulQuestion || '细细思索，你最在意的是什么？'}`;
+        } else if (currentInf.reasoning) {
+          yanText = `${currentInf.reasoning}\n\n${currentInf.powerfulQuestion || '细细思索，你最在意的是什么？'}`;
+        } else if (currentInf.analysis) {
+          yanText = `${currentInf.analysis}\n\n${currentInf.powerfulQuestion || '细细思索，你最在意的是什么？'}`;
+        } else {
+          yanText = currentInf.powerfulQuestion || '此问关乎抉择，让我细细思索……';
+        }
+        source = 'preset';
+      }
+      
+      setFloatTip(null);
+      
+      setAgentDialogues(prev => ({
+        ...prev,
+        yan: yanText,
+        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), { text: yanText, source }] },
+      }));
+      setAwaitingUser(true);
+    } catch (e) {
+      console.error('[handleStart] 推演启动失败:', e);
+      setFloatTip('推演启动失败，请重试');
+      setTimeout(() => {
+        handleRestart();
+      }, 2000);
     }
-    
-    setFloatTip(null);
-    
-    setAgentDialogues(prev => ({
-      ...prev,
-      yan: yanText,
-      history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), { text: yanText, source }] },
-    }));
-    setAwaitingUser(true);
-  }, [inputValue, clearTimers, yanConversationId]);
+  }, [inputValue, clearTimers, yanConversationId, handleRestart]);
 
   // 用户点击"继续" - 推进到下一位 Agent 或下一阶段
   const handleUserAdvance = useCallback(async () => {
     if (!inference) return;
-    
+
     if (phase === 'yan_analyze') {
+      // 保存用户对演追问的回答
+      const yanAnswer = currentResponse.trim();
+      if (yanAnswer) {
+        setAgentDialogues(prev => {
+          const history = { ...(prev.history || {}) };
+          const arr = history.yan || [];
+          history.yan = [...arr, `【你】${yanAnswer}`];
+          return { ...prev, yan: `【你】${yanAnswer}`, history };
+        });
+        setCurrentResponse('');
+
+        // 将用户回答发送给演，获取提炼后的分析
+        try {
+          setFloatTip('演 · 正在消化你的回答...');
+          const result = await streamYanChat({
+            message: `用户对你的追问回答如下：\n"${yanAnswer}"\n\n请基于这个回答，用2-3句话提炼关键信息，这些信息将传递给智囊团作为分析背景。直接输出提炼结果，不要寒暄。`,
+            conversationId: yanConversationId
+          }, (chunk, fullText, convId) => {
+            setYanConversationId(convId);
+          });
+
+          if (result && result.text && result.text.length > 5) {
+            setYanConversationId(result.conversationId);
+            // 将提炼的信息保存，供Agent使用
+            setInference(prev => prev ? { ...prev, userContext: result.text } : prev);
+            // 更新演的发言
+            setAgentDialogues(prev => ({
+              ...prev,
+              yan: result.text,
+              history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), { text: result.text, source: 'llm' }] },
+            }));
+          }
+        } catch (e) {
+          console.warn('[演追问] 处理用户回答失败:', e);
+        }
+        setFloatTip(null);
+      }
+
       setPhase('agent_select');
       const agents = inference.agents || [];
-      setSelectedAgentIds(new Set(agents.slice(0, 2).map(a => a.id)));
+      // 演·推荐：基于问题关键词匹配订阅智囊，自动预选中（最多1个，避免过多）
+      const recommended = recommendSubscribedAgents(userInput);
+      const preSelected = new Set(agents.slice(0, 2).map(a => a.id));
+      if (recommended.length > 0) {
+        preSelected.add(recommended[0].id);
+        // 推荐提示
+        setFloatTip(`演荐 · ${recommended[0].name} 或可参议`);
+        setTimeout(() => setFloatTip(null), 3000);
+      }
+      setSelectedAgentIds(preSelected);
       setAwaitingUser(true);
       return;
     }
@@ -244,14 +370,21 @@ export default function Game() {
     } else {
       setAwaitingUser(false);
       
-      const yanSummary = await generateYanSummary(userInput, inference.agentDialogues || {}, agents);
+      const yanSummary = await generateYanSummary(userInput, agentDialogues || {}, agents);
       setInference(prev => ({ ...(prev || {}), summary: yanSummary.summary || '诸位各抒己见,皆有道理。' }));
-      
+
+      // 动态分支：基于分歧度调整反思时长（分歧大→反思久，文案强调分歧）
+      const consensusScore = debateConvergence?.consensusScore ?? 0.6;
+      const isDivergent = !debateConvergence?.converged || consensusScore < 0.6;
+      const reflectDelay = isDivergent ? 6500 : 4300;
+      const reflectingText = isDivergent
+        ? `诸位的分歧颇大,各执一词。\n${yanSummary.keyPoints?.join('、') || '各方视角,碰撞激烈'}\n分歧之中,常藏真意。让我再细加梳理……`
+        : `诸位所议,皆有道理。\n${yanSummary.keyPoints?.join('、') || '各方视角,各有见地'}\n听罢,让我再思量一卦……`;
+
       const t1 = setTimeout(() => {
         setPhase('reflecting');
         setActiveAgentIdx(-1);
         setShowQuestion(false);
-        const reflectingText = `诸位所议,皆有道理。\n${yanSummary.keyPoints?.join('、') || '各方视角,各有见地'}\n听罢,让我再思量一卦……`;
         setAgentDialogues(prev => ({
           ...prev,
           yan: reflectingText,
@@ -260,17 +393,24 @@ export default function Game() {
       }, 800);
       const t2 = setTimeout(() => {
         setPhase('summary');
-        const summaryText = yanSummary.summary || `诸位各抒己见,我已梳理完毕。\n此局无定论,关键在你自己。\n请做出你的抉择。`;
+        let summaryText = yanSummary.summary || `诸位各抒己见,我已梳理完毕。\n此局无定论,关键在你自己。\n请做出你的抉择。`;
+        // 演·点出模式：检测用户历史选择模式，连续≥3次同倾向时演主动提醒
+        try {
+          const pattern = detectChoicePattern();
+          if (pattern.hint) {
+            summaryText = `${summaryText}\n\n——\n${pattern.hint}`;
+          }
+        } catch (e) { /* ignore */ }
         setAgentDialogues(prev => ({
           ...prev,
           yan: summaryText,
           history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), summaryText] },
         }));
         setAwaitingUser(true);
-      }, 4300);
+      }, reflectDelay);
       stageTimersRef.current.push(t1, t2);
     }
-  }, [activeAgentIdx, inference, currentResponse, userInput, agentDialogues]);
+  }, [activeAgentIdx, inference, currentResponse, userInput, agentDialogues, debateConvergence]);
 
   const handleConfirmAgents = useCallback(async () => {
     if (!inference) return;
@@ -296,9 +436,9 @@ export default function Game() {
     let hasErrors = false;
     let allErrors = {};
     
-    const onAgentComplete = (agentId, text, success, error, source) => {
+    const onAgentComplete = (agentId, text, success, error, source, collaboration) => {
       newDialogues[agentId] = text;
-      callResults[agentId] = { success, error, source };
+      callResults[agentId] = { success, error, source, collaboration };
       if (!success) {
         hasErrors = true;
         allErrors[agentId] = { agentName: selected.find(a => a.id === agentId)?.name || agentId, error: error || '未知错误' };
@@ -311,8 +451,16 @@ export default function Game() {
       setShowAgentErrorModal(true);
     };
     
-    const result = await generateDialoguesForAgents(question, selected, qType, onAgentComplete, onError);
+    const result = await generateDialoguesForAgents(question, selected, qType, onAgentComplete, onError, inference.userContext, { round: 1 });
     setAgentCallResults(callResults);
+
+    // D3 收敛检测 - 决定是否提示用户「再辩一轮」
+    if (result.blackboard) {
+      debateBlackboardRef.current = result.blackboard;
+      const convergence = detectConvergenceFromBlackboard(result.blackboard, { currentRound: 1 });
+      setDebateRound(1);
+      setDebateConvergence(convergence);
+    }
     
     if (hasErrors && Object.keys(allErrors).length > 0) {
       setAgentErrors(allErrors);
@@ -331,6 +479,62 @@ export default function Game() {
     });
     setAwaitingUser(true);
   }, [inference, selectedAgentIds, userInput, clearTimers]);
+
+  // D3: 再辩一轮 - 复用 blackboard 上下文，让智囊基于前轮分歧深入
+  const handleRunAnotherRound = useCallback(async () => {
+    if (!inference || !inference.agents) return;
+    const selected = inference.agents;
+    const nextRound = debateRound + 1;
+    if (nextRound > MAX_DEBATE_ROUNDS) return;
+
+    setAwaitingUser(false);
+    setActiveAgentIdx(0);
+    setFloatTip(`第 ${nextRound} 轮辩论中…`);
+
+    const question = userInput;
+    const qType = detectQuestionType(question);
+    const newDialogues = {};
+    const callResults = {};
+    const existingBlackboard = debateBlackboardRef.current;
+
+    const onAgentComplete = (agentId, text, success, error, source, collaboration) => {
+      newDialogues[agentId] = text;
+      callResults[agentId] = { success, error, source, collaboration };
+      setInference(prev => prev ? { ...prev, agentDialogues: { ...(prev.agentDialogues || {}), [agentId]: text } } : prev);
+    };
+
+    const result = await generateDialoguesForAgents(
+      question, selected, qType, onAgentComplete, undefined, inference.userContext,
+      { existingBlackboard, round: nextRound }
+    );
+    setAgentCallResults(prev => ({ ...prev, ...callResults }));
+
+    if (result.blackboard) {
+      debateBlackboardRef.current = result.blackboard;
+      const convergence = detectConvergenceFromBlackboard(result.blackboard, { currentRound: nextRound });
+      setDebateRound(nextRound);
+      setDebateConvergence(convergence);
+    }
+
+    // 把本轮新发言追加到 history，并显示第一位智囊的新发言
+    const firstId = selected[0]?.id;
+    if (firstId && newDialogues[firstId]) {
+      setAgentDialogues(prev => {
+        const history = { ...(prev.history || {}) };
+        for (const a of selected) {
+          const t = newDialogues[a.id];
+          if (t) {
+            const arr = history[a.id] || [];
+            history[a.id] = [...arr, { text: t, source: callResults[a.id]?.source || 'preset', round: nextRound }];
+          }
+        }
+        return { ...prev, [firstId]: newDialogues[firstId], history };
+      });
+    }
+
+    setFloatTip(null);
+    setAwaitingUser(true);
+  }, [inference, userInput, debateRound]);
 
   useEffect(() => () => clearTimers(), [clearTimers]);
 
@@ -460,23 +664,10 @@ export default function Game() {
     setShowHistoryPanel(true);
   }, []);
 
-  const handleRestart = useCallback(() => {
-    clearTimers();
-    setPhase('input');
-    setShowInput(true);
-    setShowQuestion(false);
-    setUserInput('');
-    setActiveAgentIdx(-1);
-    setSelectedChoice(null);
-    setAgentDialogues({ history: {} });
-    setShowHistoryPanel(false);
-    setAwaitingUser(false);
-    setCurrentResponse('');
-    setInference(null);
-  }, [clearTimers]);
+  // handleRestart 已在前面定义
 
   // 保存到卡牌册 - 用 inference 真实数据,3 件实用品随卡入册
-  const handleSaveToCollection = useCallback(() => {
+  const handleSaveToCollection = useCallback(async () => {
     try {
       // 兜底卦象映射
       const fallbackMap = {
@@ -489,21 +680,35 @@ export default function Game() {
       // 优先使用 inference 生成的真实数据
       const realGua = inference?.gua;
       const advisors = (activeAgents || []).filter(a => a && a.role !== 'master').map(a => a.name).filter(Boolean);
+      const guaName = realGua?.gua || fb.gua;
+      const trigram = realGua?.trigram || fb.trigram;
+      const choiceLabel = selectedChoice?.label || '抓住机会';
+
+      // 命签生成深化：LLM 根据卦象+智囊发言+抉择生成个性化 verse/summary
+      const personalized = await generatePersonalizedCardContent({
+        question: userInput,
+        guaName,
+        choiceLabel,
+        agentDialogues: inference?.agentDialogues || {},
+        trigram,
+      });
+
       const card = {
         id: `card-${Date.now()}`,
-        gua: realGua?.gua || fb.gua,
-        trigram: realGua?.trigram || fb.trigram,
+        gua: guaName,
+        trigram,
         element: realGua?.element || fb.element,
-        title: selectedChoice?.label || '推演',
+        title: choiceLabel,
         question: userInput,
-        decision: selectedChoice?.label || '抓住机会',
+        decision: choiceLabel,
         style: realGua?.element ? `${realGua.element}行` : fb.style,
         advisors: advisors.length > 0 ? advisors : ['演'],
-        // 3 件实用品 - 推演成果随卡保存
-        verse: inference?.verse || fb.verse,
+        // 3 件实用品 - 推演成果随卡保存（verse/summary 用 LLM 个性化生成）
+        verse: personalized.verse || inference?.verse || fb.verse,
         powerfulQuestion: inference?.powerfulQuestion || '',
         framework: inference?.framework || '',
-        summary: inference?.summary || '此卦已入卡牌册,留作后日之镜。',
+        summary: personalized.summary || inference?.summary || '此卦已入卡牌册,留作后日之镜。',
+        cardSource: personalized.source,
         // 卦象元素
         guaElement: realGua?.element || fb.element,
         // 时间
@@ -533,6 +738,25 @@ export default function Game() {
         source: '推演台',
         confidence: 0.8,
       }).catch(e => console.warn('[记忆保存] 失败', e));
+
+      // 本地分层记忆：保存情景记忆 + 提取事实记忆
+      try {
+        saveEpisode({
+          question: userInput,
+          decision: selectedChoice?.label || '未选择',
+          hexagram: card.gua || '',
+          guaName: card.title || '',
+          agents: (inference?.agents || []).map(a => a.id),
+          choice: selectedChoice?.id || '',
+        });
+        inferFactsFromSession({
+          question: userInput,
+          choice: selectedChoice?.id,
+          agents: inference?.agents || [],
+        });
+      } catch (e) {
+        console.warn('[情景记忆保存] 失败', e);
+      }
       
       setFloatTip(`命签「${card.gua} · ${card.title}」已入卡牌册`);
       if (floatTipTimer.current) clearTimeout(floatTipTimer.current);
@@ -671,6 +895,7 @@ export default function Game() {
         {/* Agent 对话 - 无框浮动文字 */}
         <AgentDialogueOverlay
           phase={phase}
+          question={userInput}
           activeAgentIdx={activeAgentIdx}
           activeAgents={activeAgents}
           agentDialogues={agentDialogues}
@@ -682,7 +907,37 @@ export default function Game() {
             return next;
           })}
           onConfirmAgents={handleConfirmAgents}
+          awaitingUser={awaitingUser}
+          currentResponse={currentResponse}
+          setCurrentResponse={setCurrentResponse}
+          onUserAdvance={handleUserAdvance}
+          agentCallResults={agentCallResults}
+          onFeedback={(agentId, feedbackType, dialogue) => {
+            saveAgentFeedback(agentId, feedbackType, userInput, dialogue);
+          }}
+          debateConvergence={debateConvergence}
         />
+
+        {/* D3 收敛状态徽标 */}
+        {phase === 'agent_debate' && debateConvergence && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            style={{
+              position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)',
+              padding: '4px 14px', background: 'rgba(10,10,15,0.6)', borderRadius: '14px',
+              border: '1px solid #C8A85030', zIndex: 25,
+            }}
+          >
+            <span style={{ color: debateConvergence.converged ? '#80C8A8' : '#F0D890', fontSize: '11px', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.15em' }}>
+              {debateConvergence.converged
+                ? `第${debateRound}轮已收敛 · ${debateConvergence.reason === 'consensus' ? '共识达成' : '循环停止'}`
+                : `第${debateRound}轮 · 共识度 ${(debateConvergence.consensusScore ?? 0.5).toFixed(2)}`}
+            </span>
+          </motion.div>
+        )}
+
+        {/* D3 再辩一轮入口 - 已移至底部输入框下方，临近继续按钮 */}
 
         {/* 选择项 HUD - 浮在屏幕下方 */}
         <ChoiceHud
@@ -815,21 +1070,21 @@ export default function Game() {
               exit={{ opacity: 0, y: 16 }}
               transition={{ duration: 0.6, ease: 'easeOut' }}
             >
-              {/* 用户回应输入(可空,直接点继续则不记录) */}
-              {phase === 'agent_debate' && (
+              {/* 用户回应输入 - yan_analyze 和 agent_debate 阶段都有 */}
+              {(phase === 'yan_analyze' || phase === 'agent_debate') && (
                 <div className="w-full mb-2 flex items-center gap-2">
                   <input
                     type="text"
                     value={currentResponse}
-                    onChange={(e) => setCurrentResponse(e.target.value.slice(0, 80))}
+                    onChange={(e) => setCurrentResponse(e.target.value.slice(0, 120))}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         handleUserAdvance();
                       }
                     }}
-                    placeholder="可以补充信息,也可留空直接翻牌"
-                    maxLength={80}
+                    placeholder={phase === 'yan_analyze' ? '回答演的问题，帮助智囊团更好分析...' : '可以补充信息,也可留空直接翻牌'}
+                    maxLength={120}
                     style={{
                       flex: 1,
                       padding: '8px 12px',
@@ -874,6 +1129,34 @@ export default function Game() {
                 {phase === 'yan_analyze' ? '召唤智囊' : phase === 'summary' ? '看分岔 · 抉择' : (activeAgentIdx < activeAgents.filter(a => a.role !== 'master').length - 1 ? '下一位发言' : '请演总结')}
                 <span style={{ marginLeft: '12px', opacity: 0.6, fontSize: '11px' }}>·  ENTER</span>
               </button>
+
+              {/* D3 再辩一轮 - 仅当所有智囊发言完毕且未收敛时显示，紧贴"请演总结"按钮下方 */}
+              {phase === 'agent_debate' && debateConvergence && !debateConvergence.converged && debateRound < MAX_DEBATE_ROUNDS && activeAgentIdx >= activeAgents.filter(a => a.role !== 'master').length - 1 && (
+                <motion.button
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.4, duration: 0.5 }}
+                  onClick={handleRunAnotherRound}
+                  style={{
+                    marginTop: '12px',
+                    padding: '6px 18px',
+                    background: 'transparent',
+                    color: '#F0D890',
+                    fontSize: '11px',
+                    fontFamily: '"Ma Shan Zheng", serif',
+                    letterSpacing: '0.25em',
+                    border: `1px solid ${BORDER_COLOR}60`,
+                    borderRadius: '2px',
+                    cursor: 'pointer',
+                    opacity: 0.85,
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.borderColor = GLOW_COLOR; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.85'; e.currentTarget.style.borderColor = `${BORDER_COLOR}60`; }}
+                  title={`共识度 ${(debateConvergence.consensusScore ?? 0.5).toFixed(2)}，可让智囊再深入辩一轮`}
+                >
+                  ⟳ 再辩一轮 · 第 {debateRound + 1} 轮
+                </motion.button>
+              )}
             </motion.div>
           )}
         </AnimatePresence>

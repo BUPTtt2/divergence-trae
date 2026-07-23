@@ -470,9 +470,28 @@ export default function YanChat() {
     );
   };
 
-  // 接收来自悬浮配件的"问演"指令
+  // 接收来自悬浮配件/大管家浮标的"问演"指令，打开时主动发起到期回访
   useEffect(() => {
-    const onOpen = () => setIsOpen(true);
+    const onOpen = () => {
+      setIsOpen(true);
+      // 检测到期回访，主动发起对话
+      try {
+        const pending = getPendingFollowUps();
+        if (pending.length > 0) {
+          const ep = pending[0];
+          const promptedKey = `yance_followup_prompted_${ep.id}`;
+          if (localStorage.getItem(promptedKey)) return; // 已提示过
+          const days = Math.round((Date.now() - (ep.createdAt || Date.now())) / 86400000);
+          const followUpMsg = {
+            id: `followup-${Date.now()}`,
+            role: 'assistant',
+            content: `客官，${days > 0 ? `${days}日前` : '近日'}你曾问「${ep.question}」，当时抉择「${ep.decision || '—'}」${ep.guaName ? `，卦得${ep.guaName}` : ''}。\n如今实际如何？不妨道来，演为你记入命签册，供日后回望。`,
+          };
+          setMessages(prev => [...prev, followUpMsg]);
+          localStorage.setItem(promptedKey, '1');
+        }
+      } catch (e) { /* ignore */ }
+    };
     window.addEventListener('yance:open-yanchat', onOpen);
     return () => window.removeEventListener('yance:open-yanchat', onOpen);
   }, []);

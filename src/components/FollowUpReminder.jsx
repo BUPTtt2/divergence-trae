@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getFollowUps, completeFollowUp } from '../services/apiClient';
+import { getPendingFollowUps, updateEpisodeOutcome } from '../services/memoryStore';
 import { useNavigate } from 'react-router-dom';
 import './FollowUpReminder.css';
 
@@ -31,11 +32,28 @@ export default function FollowUpReminder() {
   const loadFollowUps = useCallback(async () => {
     try {
       const data = await getFollowUps('pending');
-      if (data && data.items) {
+      if (data && data.items && data.items.length > 0) {
         setFollowUps(data.items);
+        return;
       }
     } catch (e) {
-      console.warn('[FollowUpReminder] 加载回访列表失败:', e.message);
+      console.warn('[FollowUpReminder] 后端回访失败，降级本地:', e.message);
+    }
+    // 本地降级：从分层记忆系统获取到期回访
+    try {
+      const localPending = getPendingFollowUps();
+      if (localPending.length > 0) {
+        setFollowUps(localPending.map(ep => ({
+          id: ep.id,
+          question: ep.question,
+          decision: ep.decision,
+          hexagram: ep.guaName || ep.hexagram,
+          createdAt: ep.createdAt,
+          source: 'local',
+        })));
+      }
+    } catch (e) {
+      console.warn('[FollowUpReminder] 本地回访加载失败:', e.message);
     }
   }, []);
 
@@ -47,16 +65,38 @@ export default function FollowUpReminder() {
     if (!resultText.trim()) return;
     try {
       setCompletingId(id);
-      await completeFollowUp(id, resultText.trim());
+      // 判断是本地还是后端
+      const item = followUps.find(f => f.id === id);
+      if (item?.source === 'local') {
+        // 本地分层记忆更新
+        const status = /好|顺|成|对|满意|开心|升|涨/.test(resultText) ? 'positive'
+          : /坏|糟|败|错|失|后悔|亏|跌/.test(resultText) ? 'negative'
+          : 'neutral';
+        updateEpisodeOutcome(id, resultText.trim(), status);
+      } else {
+        await completeFollowUp(id, resultText.trim());
+      }
       setFollowUps(prev => prev.filter(item => item.id !== id));
       setShowResultInput(null);
       setResultText('');
     } catch (e) {
       console.warn('[FollowUpReminder] 完成回访失败:', e.message);
+      // 失败时也尝试本地降级
+      try {
+        const status = /好|顺|成|对|满意|开心|升|涨/.test(resultText) ? 'positive'
+          : /坏|糟|败|错|失|后悔|亏|跌/.test(resultText) ? 'negative'
+          : 'neutral';
+        updateEpisodeOutcome(id, resultText.trim(), status);
+        setFollowUps(prev => prev.filter(item => item.id !== id));
+        setShowResultInput(null);
+        setResultText('');
+      } catch (e2) {
+        console.warn('[FollowUpReminder] 本地降级也失败:', e2.message);
+      }
     } finally {
       setCompletingId(null);
     }
-  }, [resultText]);
+  }, [resultText, followUps]);
 
   const handleGoToCard = useCallback((cardId) => {
     if (cardId) {
