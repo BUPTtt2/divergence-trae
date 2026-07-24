@@ -45,9 +45,12 @@ export default defineConfig({
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
-        // 第三方库分包：three/framer-motion/react 各自独立 chunk
+        // 第三方库分包：three 生态拆细, 并行下载, 避免单 chunk 过大
         manualChunks(id) {
           if (id.includes('node_modules')) {
+            if (id.includes('@react-three/drei')) return 'vendor-drei';
+            if (id.includes('@react-three/fiber')) return 'vendor-fiber';
+            if (id.includes('three-stdlib')) return 'vendor-three-stdlib';
             if (id.includes('three')) return 'vendor-three';
             if (id.includes('framer-motion')) return 'vendor-motion';
             if (id.includes('react')) return 'vendor-react';

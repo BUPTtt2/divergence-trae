@@ -1094,6 +1094,12 @@ export default function Collection() {
                   const statusColor = ep.outcomeStatus === 'positive' ? '#80A880' : ep.outcomeStatus === 'negative' ? '#C87060' : T.muted;
                   const statusLabel = ep.outcomeStatus === 'positive' ? '如愿' : ep.outcomeStatus === 'negative' ? '未如' : '中性';
                   const days = Math.round(((ep.outcomeAt || Date.now()) - (ep.createdAt || Date.now())) / 86400000);
+                  // 卦象命中判断：正向卦象(乾/离/兑/震/大有/泰/益/升)对应positive算命中
+                  const positiveGuas = ['乾', '离', '兑', '震', '大有', '泰', '益', '升'];
+                  const isPositiveGua = positiveGuas.some(g => (ep.guaName || '').includes(g));
+                  const isHit = ep.outcomeStatus !== 'neutral' && ((isPositiveGua && ep.outcomeStatus === 'positive') || (!isPositiveGua && ep.outcomeStatus === 'negative'));
+                  const hitLabel = ep.outcomeStatus === 'neutral' ? '中性' : (isHit ? '卦中' : '卦偏');
+                  const hitColor = ep.outcomeStatus === 'neutral' ? T.muted : (isHit ? T.gold : T.accent);
                   return (
                     <motion.div
                       key={ep.id}
@@ -1108,6 +1114,9 @@ export default function Collection() {
                         <div className="flex items-center gap-2 mb-2">
                           <span className="text-[9px] font-mono tracking-[0.2em] px-1.5 py-0.5 rounded" style={{ color: T.gold, background: `${T.gold}15` }}>演之预言</span>
                           {ep.guaName && <span className="text-[11px]" style={{ color: T.ink }}>{ep.guaName}</span>}
+                          <span className="inline-flex items-center text-[9px] px-1.5 py-0.5 rounded" style={{ color: hitColor, border: `1px solid ${hitColor}40` }}>
+                            {isHit ? '✦' : '○'} {hitLabel}
+                          </span>
                         </div>
                         <div className="text-[12px] mb-1" style={{ color: T.ink }}>
                           <span style={{ color: T.muted }}>曾问：</span>{ep.question}
