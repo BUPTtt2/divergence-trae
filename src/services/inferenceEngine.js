@@ -640,19 +640,37 @@ export async function generateDialoguesForAgents(question, agents, questionType,
     const isFirstSpeaker = blackboardCtx === '（你是第一个发言的智囊）';
 
     // 构建完整的问题上下文（包含用户回答和前面 Agent 的发言）
+    // 预算控制：后端 /api/agent/dialogue 限制 question ≤ 500 字。
+    // 策略：原始问题保底完整；上下文按优先级截断压缩（辩论摘要 > 用户补充 > 反馈 > 黑板）。
+    const MAX_Q = 480; // 留 20 字余量防边界
+    const clamp = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s);
+    // 前面智囊观点逐条截断，控制总膨胀
+    const prevBrief = previousDialogues.map(d => clamp(d, 90));
+
     const contextParts = [];
-    if (userContext) contextParts.push(`【用户补充信息】${userContext}`);
-    if (previousDialogues.length > 0) {
-      contextParts.push(`【前面智囊的观点】\n${previousDialogues.join('\n')}`);
-      if (!isFirstSpeaker) {
-        contextParts.push(`【结构化协作上下文】\n${blackboardCtx}`);
+    if (userContext) contextParts.push(`【用户补充】${clamp(userContext, 80)}`);
+    if (prevBrief.length > 0) {
+      contextParts.push(`【前面智囊】${prevBrief.join(' | ')}`);
+      if (!isFirstSpeaker && blackboardCtx) {
+        contextParts.push(`【协作】${clamp(blackboardCtx, 60)}`);
       }
-      contextParts.push(`请你基于自己的视角，可以引用、反驳或补充前面智囊的观点，形成真正的辩论。`);
+      contextParts.push(`请引用、反驳或补充前面智囊的观点，形成辩论。`);
     }
-    // 智囊调校：注入历史反馈（你上次被赞/踩过XX，请据此微调）
+    // 智囊调校：注入历史反馈
     const feedbackCtx = formatFeedbackForPrompt(agent.id);
     if (feedbackCtx) contextParts.push(feedbackCtx);
-    const contextStr = contextParts.length > 0 ? `\n\n${contextParts.join('\n\n')}` : '';
+
+    // 计算剩余预算，溢出时从最长项开始逐段缩减
+    let contextStr = contextParts.length > 0 ? `\n\n${contextParts.join('\n\n')}` : '';
+    const baseLen = question.length;
+    if (baseLen + contextStr.length > MAX_Q) {
+      const budget = Math.max(0, MAX_Q - baseLen);
+      if (budget <= 0) {
+        contextStr = ''; // 问题本身就接近上限，放弃上下文
+      } else {
+        contextStr = `\n\n${clamp(contextParts.join('\n\n'), budget)}`;
+      }
+    }
 
     if (isLlmAvailable()) {
       let attempt = 0;
@@ -688,6 +706,29 @@ export async function generateDialoguesForAgents(question, agents, questionType,
         } catch (e) {
           errorInfo = e.message;
           console.warn(`[发言] Agent ${agent.id} 第${attempt}次尝试失败`, e);
+          // 兜底：若因「问题过长」被拒，去掉上下文用纯问题重试一次
+          if (/问题过长|500/.test(e.message || '') && contextStr) {
+            try {
+              console.warn(`[发言] Agent ${agent.id} 上下文超限, 降级为纯问题重试`);
+              text = await getAgentDialogueWithTimeout(agent, question, previousDialogues);
+              if (text && text.length > 5) {
+                dialogues[agent.id] = text;
+                const collaboration = inferCollaboration(text, nonMasterAgents);
+                blackboard.publish({
+                  agentId: agent.id, role: agent.role || 'dynamic', round,
+                  content: text, confidence: 0.8, references: [],
+                  msgType: collaboration.msgType, targetAgentId: collaboration.targetAgentId,
+                });
+                apiSuccess = true;
+                source = 'llm';
+                results[agent.id] = { text, success: true, error: null, source, collaboration };
+                if (onAgentComplete) onAgentComplete(agent.id, text, true, null, source, collaboration);
+                break;
+              }
+            } catch (e2) {
+              errorInfo = e2.message;
+            }
+          }
         }
       }
     }

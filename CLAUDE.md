@@ -1,5 +1,7 @@
 # 演策 - 产品梳理文档
 
+> **权威设计文档**：[`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md) —— Agent 架构 + 工作流可视化 + prompt配置中心 + 五视角商业蓝图 + 技术债 + ADR 决策记录。**改任何 Agent 行为/prompt/工作流，先读它。** 本文档（CLAUDE.md）是产品梳理与 API 对照，AGENT_DESIGN.md 是架构与商业地图。
+
 ## 一、当前状态总结
 
 ### 核心功能（AI决策推演沙盘）
