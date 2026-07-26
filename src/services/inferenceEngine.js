@@ -966,7 +966,10 @@ export async function generateYanSummary(question, agentDialogues, agents) {
 
   if (isLlmAvailable()) {
     try {
-      const result = await apiClient.generateSummary(question, nonMasterAgents.map(a => a.id), formattedDialogues);
+      const result = await Promise.race([
+        apiClient.generateSummary(question, nonMasterAgents.map(a => a.id), formattedDialogues),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('summary timeout')), 8000)),
+      ]);
       if (result && result.options) return result;
     } catch (e) {
       console.warn('[演总结] 后端失败，降级本地', e);
