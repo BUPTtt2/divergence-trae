@@ -1,9 +1,11 @@
 # 演策项目交接文档 · 给新 Trae 的第一封信
 
 > **你是新接手的 Trae。这份文档让你在 10 分钟内理顺整个项目，不用从头翻代码。**
-> 最后更新：2026-07-25
+> 最后更新：2026-07-27
 > 仓库：https://github.com/BUPTtt2/divergence-trae.git
 > 克隆后读 `main` 分支即可拿到最新代码
+> 最新 commit：`f0ab395 fix: 最后一位智囊跳过追问判断+judgeContinueAsking超时控制`
+> 生产验证：前端 https://yance-bagua.surge.sh 200 ✅ ｜ 后端 https://yance-bagua-engine-production.up.railway.app/health 200 ✅
 
 ---
 
