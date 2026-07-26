@@ -13,12 +13,43 @@
 ```bash
 git clone https://github.com/BUPTtt2/divergence-trae.git
 cd divergence-trae
-npm install
+npm install        # 前端依赖
+cd server
+npm install        # 后端依赖（单独的 package.json）
+cd ..
 ```
 
-### 1.2 你的 Trae 工作区规则配置
+### 1.2 创建 .env 文件（必做，否则本地后端跑不起来）
 
-克隆后，你（新 Trae）需要确保以下配置就位：
+.env 文件被 .gitignore 忽略，不会随仓库提交。你需要手动创建：
+
+**前端 `.env.development`**（从 `.env.example` 复制后修改）：
+```bash
+# Windows PowerShell
+Copy-Item .env.example .env.development
+```
+内容改为：
+```
+VITE_API_BASE=http://localhost:3001
+VITE_SIGNING_SECRET=dev_secret_key
+VITE_APP_VERSION=1.3.0
+```
+
+**后端 `server/.env`**（从 `server/.env.example` 复制后填入）：
+```bash
+cd server
+Copy-Item .env.example .env
+```
+必填项：
+```
+ZHIPU_API_KEY=你的智谱API Key  # 去 https://open.bigmodel.cn/ 申请
+ZHIPU_MODEL=glm-4-flash
+PORT=3001
+CORS_ORIGIN=http://localhost:5173
+```
+> 如果没有智谱 API Key，后端不跑也行——前端有 localStorage 降级，核心推演流程照样能走通（只是智囊发言用本地预设模板）。
+
+### 1.3 你的 Trae 工作区规则配置
 
 #### CLAUDE.md（已随仓库提交，自动生效）
 项目根目录的 `CLAUDE.md` 是产品梳理文档，Trae 会自动读取。**不需要额外配置**。
@@ -26,35 +57,20 @@ npm install
 #### 用户偏好规则（已随仓库提交）
 `CLAUDE.md` 和 `docs/AGENT_DESIGN.md` 里包含了所有硬约束（视觉风格、动效、智囊呈现等）。Trae 会自动遵守。
 
-#### MCP 工具（可选）
-当前项目用到的 MCP：
+#### MCP 工具（可选，本项目不强依赖任何 MCP）
 - `mcp_Figma_AI_Bridge` — Figma 设计稿转代码（如需从 Figma 导入设计时用）
 - `mcp_Sequential_Thinking` — 复杂推理链（可选）
-- `mcp_amap-maps` — 地图（本项目不用）
 - `mcp_memory` — 跨会话记忆（可选）
-- `mcp_paper-research-assistant` — 论文检索（不用）
 
-**本项目不强依赖任何 MCP**，开箱即用。
+**本项目开箱即用，无需安装额外 MCP/Skill/Hook。**
 
-#### Skill（可选）
-项目无需安装额外 Skill。Trae 内置的 `brainstorming`、`debug`、`skeleton`、`build`、`qa`、`security` 等足够用。
-
-#### Hook / 规则总结
-无需额外配置 hook。所有规则已固化在以下文档中（随仓库提交）：
-- `CLAUDE.md` — 产品梳理 + API 对照 + 修复记录
-- `docs/AGENT_DESIGN.md` — Agent 架构权威文档 + 硬约束
-- `PROJECT_STATUS.md` — 当前状态 + 待办
-- `.gitignore` — 已配置（.env / node_modules / dist 不提交）
-
-### 1.3 跑起来
+### 1.4 跑起来
 ```bash
+# 前端（必须）
 npm run dev    # → http://localhost:5173
-```
 
-后端（可选，前端有 localStorage 降级，无后端也能跑核心流程）：
-```bash
+# 后端（可选，无后端前端也能跑核心流程）
 cd server
-npm install
 npm run dev    # → http://localhost:3001
 ```
 
@@ -318,6 +334,130 @@ git push origin main
 6. **文档更新纪律**：改了架构/prompt/工作流，先改 `docs/AGENT_DESIGN.md`；完成了任务，更新 `PROJECT_STATUS.md`。
 7. **用户沟通语言**：中文。所有直接沟通用中文。
 8. **用户技术背景**：熟悉 Phaser 框架，本地服务器测试，偏好"简洁高效"的沟通。
+
+---
+
+## 第十步：首次验证清单（确认"能跑了"）
+
+新 Trae 接手后，完成以下验证，确认环境 OK：
+
+```bash
+# 1. 前端能启动
+npm run dev
+# → 访问 http://localhost:5173 能看到首页引导动画
+
+# 2. 后端能启动（可选）
+cd server && npm run dev
+# → 访问 http://localhost:3001/health 返回 {"status":"ok"}
+
+# 3. 推演流程能走通
+# → 点"立卦开演" → 输入"要不要接那个新 Offer？"
+# → 看到演析问 → 选智囊 → 看到智囊辩论 → 演总结
+# → 占卜 → 命牌浮层 → 抉择 → 命签收藏
+
+# 4. 命签收藏能打开
+# → 访问 /cards 页面能看到刚收藏的命签
+
+# 5. 每日卦签能打开
+# → 访问 /daily 页面能看到今日卦象
+```
+
+**如果 1、3、4、5 都 OK，环境就通了。** 后端（2）可选。
+
+---
+
+## 第十一步：分支策略与开发规范
+
+### 分支策略
+```bash
+# 新 Trae 在 main 基础上新建开发分支
+git checkout main
+git checkout -b feat/你的任务名
+
+# 开发完成后合并回 main
+git checkout main
+git merge feat/你的任务名 --no-edit
+git push origin main
+
+# 不要直接在 main 上改代码
+```
+
+### PowerShell 注意事项（Windows 用户）
+```bash
+# ❌ 不要用 heredoc（PowerShell 不支持）
+git commit -m "$(cat <<'EOF'
+消息
+EOF
+)"
+
+# ✅ 用简单 -m
+git commit -m "docs: 项目文档沉淀"
+
+# 多行消息用多个 -m
+git commit -m "feat: 标题" -m "详细描述"
+```
+
+### CRLF/LF 警告
+Windows 上 git 会警告 `LF will be replaced by CRLF`，这是正常的，不影响功能。
+
+---
+
+## 第十二步：防断保障（怎么保证在我这里不会断）
+
+> 这是专门回答"怎么保证在另一台电脑不会断"的章节。
+
+### 1. 文档自包含（不依赖对话历史）
+所有信息都在文档里，不依赖任何对话上下文：
+- **项目全貌** → `HANDOVER_TO_NEW_TRAE.md` 第三~五步
+- **当前状态** → `PROJECT_STATUS.md`
+- **架构决策** → `docs/AGENT_DESIGN.md`
+- **API 对照** → `CLAUDE.md`
+- **部署状态** → `HANDOVER_TO_NEW_TRAE.md` 第二步
+- **待办任务** → `HANDOVER_TO_NEW_TRAE.md` 第六步（详细到文件级别）
+- **硬约束** → `HANDOVER_TO_NEW_TRAE.md` 第七步
+
+**新 Trae 不需要任何对话历史，只读文档就能理顺。**
+
+### 2. 每步都有验证标准
+- 环境配置 → 第十步验证清单
+- 每个待办任务 → 都有"涉及文件"和"验证方法"
+- 部署 → `DEPLOYMENT_GUIDE.md` 有检查清单
+
+### 3. 本地降级兜底（永不白屏）
+- 无后端 → 前端 localStorage 降级，核心推演流程照样走通
+- 无 LLM → 本地预设模板发言（`inferenceEngine.js` 的 `SMART_PRESETS`）
+- 无网络 → 所有核心功能离线可用
+
+### 4. 用户偏好完整传递
+用户的所有偏好已固化在以下位置（随仓库提交）：
+- `CLAUDE.md` — 产品梳理 + 约束
+- `docs/AGENT_DESIGN.md` — 硬约束 + ADR 决策记录
+- `HANDOVER_TO_NEW_TRAE.md` 第七步 — 10 条硬约束清单
+
+**关键用户偏好**（新 Trae 必须遵守）：
+1. 沟通语言：中文
+2. 视觉风格：水墨八卦虚空，动效克制（0.8-1.5s，无弹跳/爆炸/震屏）
+3. 智囊呈现：半透明虚影方块/符号（不是塔楼/建筑）
+4. 智囊对话：纯浮动文字（无气泡框），4.5s 自动消失
+5. 每个环节等待用户点击继续
+6. Agent 提问递进式，简短有力
+7. 部署用 Railway + Surge（不用 Cloudflare）
+8. 所有 LLM 调用有本地降级
+9. 全站「AI生成内容，仅供参考」标识
+10. 做到哪一步就用选择题工具问后续，不要停
+
+### 5. 代码可追溯
+- 所有改动都有 git commit
+- 重大决策有 ADR 记录（`docs/AGENT_DESIGN.md` §6）
+- 修复记录在 `CLAUDE.md` 的修复记录表
+
+### 6. 如果新 Trae 遇到问题
+- **白屏** → 检查浏览器控制台，大概率是 MIME type 问题，硬刷新
+- **智囊不发言** → 检查后端是否启动，或检查 `inferenceEngine.js` 本地降级
+- **API 404** → 查 `CLAUDE.md` 的前后端 API 对照表
+- **400 问题过长** → 已修复，检查 `inferenceEngine.js` 的 MAX_Q=480
+- **智囊阁加载失败** → lazyRetry 自动重试，或硬刷新
+- **Git 推送失败** → 国内网络问题，开代理后重试
 
 ---
 
