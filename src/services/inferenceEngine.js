@@ -930,7 +930,10 @@ export async function judgeContinueAsking(agent, question, dialogueHistory, last
   
   if (isLlmAvailable()) {
     try {
-      const result = await apiClient.continueAsking(agent.id, question, dialogueHistory, lastAnswer);
+      const result = await Promise.race([
+        apiClient.continueAsking(agent.id, question, dialogueHistory, lastAnswer),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('continue-asking timeout')), 8000)),
+      ]);
       return result;
     } catch (e) {
       console.warn('[追问判断] 后端失败，降级本地', e);

@@ -336,8 +336,8 @@ export default function Game() {
       dialogueHistory.push(...agentHistory);
     }
 
-    // 判断当前Agent是否需要继续追问
-    if (currentIdx >= 0) {
+    // 判断当前Agent是否需要继续追问（最后一位智囊跳过，直接进总结）
+    if (currentIdx >= 0 && currentIdx < agents.length - 1) {
       const continueResult = await judgeContinueAsking(currentAgent, userInput, dialogueHistory, userAnswer);
       if (continueResult.continueAsking && continueResult.nextQuestion) {
         const nextQuestion = continueResult.nextQuestion;
