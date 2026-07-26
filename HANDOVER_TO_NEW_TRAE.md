@@ -3,54 +3,109 @@
 > **你是新接手的 Trae。这份文档让你在 10 分钟内理顺整个项目，不用从头翻代码。**
 > 最后更新：2026-07-25
 > 仓库：https://github.com/BUPTtt2/divergence-trae.git
-> 当前分支：`feat/p0-fix-fate-deepen`（主分支 `main`）
+> 克隆后读 `main` 分支即可拿到最新代码
 
 ---
 
-## 第一步：克隆并跑起来（3 分钟）
+## 第一步：新 Trae 环境配置（你必读，先做这个）
 
+### 1.1 克隆项目
 ```bash
 git clone https://github.com/BUPTtt2/divergence-trae.git
 cd divergence-trae
 npm install
+```
+
+### 1.2 你的 Trae 工作区规则配置
+
+克隆后，你（新 Trae）需要确保以下配置就位：
+
+#### CLAUDE.md（已随仓库提交，自动生效）
+项目根目录的 `CLAUDE.md` 是产品梳理文档，Trae 会自动读取。**不需要额外配置**。
+
+#### 用户偏好规则（已随仓库提交）
+`CLAUDE.md` 和 `docs/AGENT_DESIGN.md` 里包含了所有硬约束（视觉风格、动效、智囊呈现等）。Trae 会自动遵守。
+
+#### MCP 工具（可选）
+当前项目用到的 MCP：
+- `mcp_Figma_AI_Bridge` — Figma 设计稿转代码（如需从 Figma 导入设计时用）
+- `mcp_Sequential_Thinking` — 复杂推理链（可选）
+- `mcp_amap-maps` — 地图（本项目不用）
+- `mcp_memory` — 跨会话记忆（可选）
+- `mcp_paper-research-assistant` — 论文检索（不用）
+
+**本项目不强依赖任何 MCP**，开箱即用。
+
+#### Skill（可选）
+项目无需安装额外 Skill。Trae 内置的 `brainstorming`、`debug`、`skeleton`、`build`、`qa`、`security` 等足够用。
+
+#### Hook / 规则总结
+无需额外配置 hook。所有规则已固化在以下文档中（随仓库提交）：
+- `CLAUDE.md` — 产品梳理 + API 对照 + 修复记录
+- `docs/AGENT_DESIGN.md` — Agent 架构权威文档 + 硬约束
+- `PROJECT_STATUS.md` — 当前状态 + 待办
+- `.gitignore` — 已配置（.env / node_modules / dist 不提交）
+
+### 1.3 跑起来
+```bash
 npm run dev    # → http://localhost:5173
 ```
 
-**后端**（本地可选，前端有 localStorage 降级，无后端也能跑核心流程）：
+后端（可选，前端有 localStorage 降级，无后端也能跑核心流程）：
 ```bash
 cd server
 npm install
 npm run dev    # → http://localhost:3001
 ```
 
-**生产后端**（已部署，前端默认连这个）：
-```
-https://yance-bagua-engine-production.up.railway.app
-```
+---
 
-**前端生产**（已部署）：
-```
-https://yance-bagua.surge.sh
-```
+## 第二步：当前已部署状态（不是让你部署，是告诉你现在跑了什么）
+
+### 生产环境（已部署，运行中）
+
+| 组件 | 平台 | 地址 | 状态 | 说明 |
+|------|------|------|------|------|
+| 前端 | Surge | https://yance-bagua.surge.sh | ✅ 运行中 | `npm run build` + `npx surge dist yance-bagua.surge.sh` 部署 |
+| 后端 | Railway | https://yance-bagua-engine-production.up.railway.app | ✅ 运行中 | `cd server && railway up` 部署 |
+| LLM | 智谱 GLM-4-Flash | 后端 `llmRouter.js` 调用 | ✅ 正常 | API Key 在 Railway 环境变量里 |
+
+### 前端环境变量（已配置）
+- `.env.production`：`VITE_API_BASE=https://yance-bagua-engine-production.up.railway.app`
+- `public/api-config.js`：`window.__API_BASE__ = 'https://yance-bagua-engine-production.up.railway.app'`
+
+### 后端环境变量（在 Railway Dashboard，**不提交到 git**）
+- `LLM_API_KEY` — 智谱 API Key
+- `LLM_MODEL` — `glm-4-flash`
+- `JWT_SECRET` — JWT 签名密钥
+- `NODE_ENV` — `production`
+
+### Git 分支状态
+| 分支 | 用途 | 状态 |
+|------|------|------|
+| `main` | 主分支 | ✅ 已合并最新代码 |
+| `cloudflare-workers` | Cloudflare Workers 后端（备用） | 不启用，保留代码 |
+
+**新 Trae 克隆 main 分支即可拿到全部最新代码和文档。**
 
 ---
 
-## 第二步：先读这 3 个文档（必读，按顺序）
+## 第三步：先读这 4 个文档（必读，按顺序）
 
 | 顺序 | 文档 | 作用 | 什么时候读 |
 |------|------|------|-----------|
 | 1 | **`docs/AGENT_DESIGN.md`** | Agent 架构 + 工作流可视化 + prompt配置中心 + 五视角商业蓝图 + 技术债 + ADR | **改任何 Agent 行为/prompt/工作流前必读** |
 | 2 | **`CLAUDE.md`** | 产品梳理 + 前后端 API 对照表 + 修复记录 | 查 API 路径/认证策略/排查问题时读 |
 | 3 | **`PROJECT_STATUS.md`** | 当前功能完成度 + 待办任务 + 已知问题 | 接手时读，了解"现在在哪、要去哪" |
+| 4 | **`DEPLOYMENT_GUIDE.md`** | 部署完整指南（Railway/Surge） | 需要重新部署时读 |
 
 **其他文档**（按需读）：
-- `DEPLOYMENT_GUIDE.md` — 部署到 Railway/Surge/Cloudflare 的完整步骤
 - `最新任务.md` — 历史任务追踪（较旧，最新状态看 PROJECT_STATUS.md）
 - `docs/` 目录 — 设计方案、需求沉淀、补充材料等历史文档
 
 ---
 
-## 第三步：理解项目全貌（5 分钟）
+## 第四步：理解项目全貌（5 分钟）
 
 ### 这是什么产品
 **演策** = AI 决策推演沙盘。用户抛出真实纠结（辞职/Offer/创业/感情）→ 演（主Agent）析问 → 召唤多视角智囊辩论 → 占卜立卦 → 用户抉择 → 生成可收藏可分享的命签。
@@ -94,7 +149,7 @@ sandbox-app/
 
 ---
 
-## 第四步：理解 Agent 架构（核心壁垒）
+## 第五步：理解 Agent 架构（核心壁垒）
 
 > 详见 `docs/AGENT_DESIGN.md`，这里是要点。
 
@@ -123,31 +178,62 @@ sandbox-app/
 
 ---
 
-## 第五步：知道当前状态和待办
+## 第六步：当前已完成什么 + 要做什么
 
-> 详见 `PROJECT_STATUS.md`，这里是要点。
+### 已完成（✅ 全部已上线）
+1. ✅ 11 阶段推演全流程可走通（input → final）
+2. ✅ 多智囊辩论 + Blackboard 协作 + Wald SPRT 收敛检测
+3. ✅ 智囊调校迭代（受用/失言反馈 → 下次发言注入）
+4. ✅ 决策回顾闭环（30天回访 + 结局对照 + 卦中/卦偏命中标识）
+5. ✅ 智囊市集（发布/订阅他人智囊）
+6. ✅ 命签深化（Canvas 分享 PNG + 翻卦交互 + 推演路径回看）
+7. ✅ 演思考过程可视化（4步流：读问题→召回记忆→匹配智囊→预判分歧）
+8. ✅ Agent 对话 400 问题过长修复（上下文预算控制≤480字 + 降级重试）
+9. ✅ 5步智囊铸造向导（赐名→关系→审问→封印→入营）
+10. ✅ 每日卦签（日期hash固定一卦+连续签到）
+11. ✅ 成就系统（6级：初入卦门→大衍之数）
+12. ✅ 法律合规（用户协议+隐私政策+AI生成标识）
+13. ✅ 首访引导（5.8s惊艳序列）
+14. ✅ 悬浮配件4模式（☯罗盘/外铜钱/书演字/笔笔锋）
 
-### 已完成（✅）
-- 11 阶段推演全流程可走通
-- 多智囊辩论 + Blackboard 协作 + 收敛检测
-- 智囊调校迭代（受用/失言反馈）
-- 决策回顾闭环（30天回访 + 结局对照 + 卦中/卦偏标识）
-- 智囊市集（发布/订阅他人智囊）
-- 命签深化（Canvas 分享 PNG + 翻卦交互 + 推演路径回看）
-- 演思考过程可视化（4步流：读问题→召回记忆→匹配智囊→预判分歧）
-- Agent 对话 400 问题过长修复（上下文预算控制 + 降级重试）
-- 5步智囊铸造向导（赐名→关系→审问→封印→入营）
-- 每日卦签 + 成就系统 + 法律合规页面
+### 待办任务（详细，新 Trae 按此执行）
 
-### 待办（按优先级）
-| 优先级 | 任务 | 说明 |
-|--------|------|------|
-| **P0** | persona/prompt 前后端统一收敛到后端 | 现在前端 `inferenceEngine.js` 和后端 `agentPool.js` 双份维护，改 prompt 要改两处 |
-| **P1** | 智囊工具调用（搜索/日历/股价） | 从"prompt限制的LLM"升级为"真Agent"，最大技术壁垒跃迁 |
-| **P1** | 上线埋点 + 错误率告警 | 数据驱动迭代的前提（首签完成率/LLM成功率/分享率/回访回填率）|
-| **P2** | 记忆云端同步 | 已登录用户跨设备留存 |
-| **P2** | 社区智囊生态打磨 | 市集推荐位 + UGC 护城河 |
-| **P3** | Bundle 压缩 | vendor-three 已分包，可再懒加载 |
+#### P0 — 必须做（上线前）
+**任务：persona/prompt 前后端统一收敛到后端**
+- **现状**：前端 `src/services/inferenceEngine.js` 的 `AGENT_PERSONAS` 对象和后端 `server/src/data/agentPool.js` 双份维护智囊人设。改 prompt 要改两处，容易不一致。
+- **目标**：后端 `agentPool.js` 作为单一来源，前端通过 API 获取 persona（或后端在 dialogue 时直接注入 system prompt），前端 `AGENT_PERSONAS` 只做本地降级兜底。
+- **涉及文件**：
+  - `server/src/data/agentPool.js` — 权威 persona 来源
+  - `server/src/routes/agent.js` — dialogue 接口已支持 agentConfig 参数
+  - `src/services/inferenceEngine.js` — 前端 AGENT_PERSONAS 降级为 fallback
+  - `docs/AGENT_DESIGN.md` — 更新配置中心表格
+- **验证**：改一个智囊的 persona（只改后端），前端发言立即生效
+
+#### P1 — 重要（上线后优先）
+**任务1：智囊工具调用（搜索/日历/股价）→ 真 Agent**
+- **现状**：智囊是"prompt 限制的 LLM"，无任何工具调用能力
+- **目标**：智囊可调用搜索（查行业信息）、日历（查时间冲突）、股价等工具
+- **价值**：从"prompt限制的LLM"升级为"真Agent"，最大技术壁垒跃迁
+- **涉及**：`server/src/services/agentEngine.js` + 新增 tool 定义层
+
+**任务2：上线埋点 + 错误率告警**
+- **现状**：无任何埋点，不知道用户在哪流失
+- **目标**：埋点首签完成率 / 辩论LLM成功率 / 400错误率 / 分享率 / 回访回填率
+- **涉及**：前端 `apiClient.js` 加埋点上报 + 后端新增 `/api/metrics` 路由
+
+**任务3：Blackboard 真消息传递**
+- **现状**：单向订阅（后续智囊看前面发言），伪协作
+- **目标**：智囊可互相 @反驳 追问
+- **涉及**：`src/services/multiAgentFramework.js` 升级 publish/observe
+
+#### P2 — 长期
+**任务4：记忆云端同步** — 已登录用户跨设备留存
+**任务5：社区智囊生态打磨** — 市集推荐位 + UGC护城河
+**任务6：移动端适配** — 响应式布局
+
+#### P3 — 优化
+**任务7：Bundle 压缩** — vendor-three已分包，可再懒加载
+**任务8：Prompt注入防护加固** — 用户问题不能直接进入system prompt
 
 ### 已知问题
 1. **MIME type 错误**：Surge 部署后偶现 `Failed to load module script: MIME type "text/html"`，硬刷新或重新部署可解
@@ -156,7 +242,7 @@ sandbox-app/
 
 ---
 
-## 第六步：改代码前必须遵守的规则
+## 第七步：改代码前必须遵守的规则
 
 ### 硬约束（来自用户偏好，不可违反）
 1. **视觉风格**：水墨八卦虚空，底色 `#FAF8F0`，动效克制（0.8-1.5s 缓入缓出，**无弹跳/爆炸/震屏**）
@@ -177,7 +263,7 @@ sandbox-app/
 
 ---
 
-## 第七步：常用命令
+## 第八步：常用命令
 
 ```bash
 # 开发
@@ -199,12 +285,12 @@ railway up
 # Git
 git status
 git log --oneline -10
-git push origin feat/p0-fix-fate-deepen
+git push origin main
 ```
 
 ---
 
-## 第八步：关键文件速查
+## 第九步：关键文件速查
 
 | 要改什么 | 看哪个文件 |
 |----------|-----------|
@@ -228,8 +314,10 @@ git push origin feat/p0-fix-fate-deepen
 2. **改 prompt 前先读 `docs/AGENT_DESIGN.md` 的 §1.3 三层提示词结构**。
 3. **前端改动后本地测一次完整推演流程**（输入问题→辩论→占卜→命签→收藏→回看）。
 4. **用户偏好"做到哪一步就用选择题工具问后续，不要停"**——每完成一个里程碑就问下一步。
-5. **部署相关**：用户明确说"不要部署 Cloudflare，用 Railway"，worker 目录代码保留在 github 分支但不启用。
+5. **部署相关**：用户明确说"不要部署 Cloudflare，用 Railway"，worker 目录代码保留在 github 但不启用。
 6. **文档更新纪律**：改了架构/prompt/工作流，先改 `docs/AGENT_DESIGN.md`；完成了任务，更新 `PROJECT_STATUS.md`。
+7. **用户沟通语言**：中文。所有直接沟通用中文。
+8. **用户技术背景**：熟悉 Phaser 框架，本地服务器测试，偏好"简洁高效"的沟通。
 
 ---
 
