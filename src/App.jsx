@@ -225,9 +225,9 @@ function AnimatedRoutes() {
         >
           <Suspense fallback={<InkLoading />}>
             <Routes location={location}>
-              <Route path="/" element={<Landing />} />
-              <Route path="/daily" element={<Daily />} />
-              <Route path="/scenarios" element={<Scenarios />} />
+              <Route path="/" element={<ErrorBoundary><Landing /></ErrorBoundary>} />
+              <Route path="/daily" element={<ErrorBoundary><Daily /></ErrorBoundary>} />
+              <Route path="/scenarios" element={<ErrorBoundary><Scenarios /></ErrorBoundary>} />
               <Route path="/sandbox" element={
                 <ErrorBoundary>
                   <Game />
@@ -238,12 +238,12 @@ function AnimatedRoutes() {
                   <Agents />
                 </ErrorBoundary>
               } />
-              <Route path="/cards" element={<Collection />} />
-              <Route path="/community" element={<Community />} />
-              <Route path="/calendar" element={<Calendar />} />
-              <Route path="/dictionary" element={<Dictionary />} />
-              <Route path="/legal" element={<Legal />} />
-              <Route path="/privacy" element={<Privacy />} />
+              <Route path="/cards" element={<ErrorBoundary><Collection /></ErrorBoundary>} />
+              <Route path="/community" element={<ErrorBoundary><Community /></ErrorBoundary>} />
+              <Route path="/calendar" element={<ErrorBoundary><Calendar /></ErrorBoundary>} />
+              <Route path="/dictionary" element={<ErrorBoundary><Dictionary /></ErrorBoundary>} />
+              <Route path="/legal" element={<ErrorBoundary><Legal /></ErrorBoundary>} />
+              <Route path="/privacy" element={<ErrorBoundary><Privacy /></ErrorBoundary>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>

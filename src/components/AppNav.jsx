@@ -59,7 +59,8 @@ export default function AppNav({ variant = 'light' }) {
     >
       <div className="max-w-[1200px] mx-auto px-6 h-14 flex items-center justify-between">
         {/* Logo */}
-        <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/')}>
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/')} role="link" aria-label="返回首页" tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/'); } }}>
           <div
             className="w-8 h-8 flex items-center justify-center text-[12px] font-serif font-bold"
             style={{
@@ -130,6 +131,8 @@ export default function AppNav({ variant = 'light' }) {
             className="md:hidden w-8 h-8 flex items-center justify-center"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             style={{ color: textColor }}
+            aria-label={mobileMenuOpen ? '关闭菜单' : '打开菜单'}
+            aria-expanded={mobileMenuOpen}
           >
             <span style={{ fontSize: 16 }}>{mobileMenuOpen ? '☰' : '☷'}</span>
           </button>

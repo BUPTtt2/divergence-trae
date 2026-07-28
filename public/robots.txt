@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# 演策 - AI决策推演沙盘
+Sitemap: https://yance-bagua.surge.sh/sitemap.xml

@@ -1095,7 +1095,7 @@ export default function Game() {
         <AnimatePresence>
           {showHistoryPanel && (
             <motion.div
-              className="absolute top-0 right-0 h-full w-[280px] z-30"
+              className="absolute top-0 right-0 h-full w-[min(280px,85vw)] z-30"
               initial={{ x: 280, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               exit={{ x: 280, opacity: 0 }}
@@ -1873,10 +1873,11 @@ function FateCardPanel({ choice, inference, userInput, agentDialogues, activeAge
       transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
       style={{
         position: 'absolute',
-        right: '24px',
+        right: 'max(12px, 2vw)',
         top: '50%',
         transform: 'translateY(-50%)',
-        width: 'min(340px, 32vw)',
+        width: 'min(340px, 92vw)',
+        maxWidth: '340px',
         zIndex: 18,
         pointerEvents: 'auto',
       }}
