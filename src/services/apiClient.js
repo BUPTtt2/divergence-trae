@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 后端 API 封装模块
  * 统一管理所有后端接口调用，包含 SSE 流式处理
  *
@@ -1021,4 +1021,12 @@ export async function getSyncStatus() {
  */
 export async function exportCloudData() {
   return request('/api/sync/export');
+}
+
+/**
+ * 从云端拉取全部数据（合并到本地）
+ * POST /api/sync/pull → { success, pulledAt, cards, user_memories, custom_advisors, achievements }
+ */
+export async function pullCloudData() {
+  return request('/api/sync/pull', { method: 'POST' });
 }

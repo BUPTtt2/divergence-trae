@@ -25,7 +25,7 @@ import {
   getAuthState,
   clearAuth,
 } from '../services/auth.js';
-import { autoMigrateIfNeeded } from '../services/dataSync.js';
+import { autoMigrateIfNeeded, autoPullIfNeeded } from '../services/dataSync.js';
 
 const AuthContext = createContext(null);
 
@@ -132,10 +132,17 @@ export function AuthProvider({ children }) {
     return () => { cancelled = true; };
   }, []);
 
-  // 自动迁移本地数据到云端（非离线模式时触发，仅一次）
+  // 双向同步：先从云端拉取合并到本地，再把本地新增上行到云端（非离线模式时触发）
   useEffect(() => {
     if (state.status === 'registered' || state.status === 'anonymous') {
-      autoMigrateIfNeeded().catch(() => { /* 静默降级 */ });
+      (async () => {
+        try {
+          // 先下行：拉取云端数据合并到本地
+          await autoPullIfNeeded();
+          // 再上行：把本地新增数据迁移到云端
+          await autoMigrateIfNeeded();
+        } catch { /* 静默降级 */ }
+      })();
     }
   }, [state.status]);
 
