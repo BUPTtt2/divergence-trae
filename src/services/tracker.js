@@ -192,4 +192,64 @@ class Tracker {
 }
 
 export const tracker = new Tracker();
+
+/**
+ * Web Vitals 性能监控（LCP/CLS/INP）
+ * 使用浏览器原生 PerformanceObserver，无额外依赖
+ * 采集后通过 tracker.track 上报，用于上线后性能优化决策
+ */
+export function initWebVitals() {
+  if (typeof window === 'undefined' || typeof PerformanceObserver === 'undefined') return;
+
+  try {
+    // LCP (Largest Contentful Paint) - 最大内容绘制时间
+    let lcpValue = 0;
+    const lcpObserver = new PerformanceObserver((entryList) => {
+      const entries = entryList.getEntries();
+      const lastEntry = entries[entries.length - 1];
+      lcpValue = lastEntry.startTime;
+    });
+    lcpObserver.observe({ type: 'largest-contentful-paint', buffered: true });
+    // 页面隐藏时上报 LCP
+    window.addEventListener('pagehide', () => {
+      if (lcpValue > 0) {
+        tracker.track('web_vital_lcp', { value: Math.round(lcpValue), page: location.pathname });
+      }
+    }, { once: true });
+
+    // CLS (Cumulative Layout Shift) - 累积布局偏移
+    let clsValue = 0;
+    const clsObserver = new PerformanceObserver((entryList) => {
+      for (const entry of entryList.getEntries()) {
+        if (!entry.hadRecentInput) {
+          clsValue += entry.value;
+        }
+      }
+    });
+    clsObserver.observe({ type: 'layout-shift', buffered: true });
+    window.addEventListener('pagehide', () => {
+      if (clsValue > 0) {
+        tracker.track('web_vital_cls', { value: Number(clsValue.toFixed(4)), page: location.pathname });
+      }
+    }, { once: true });
+
+    // INP (Interaction to Next Paint) - 交互到下次绘制
+    let maxInp = 0;
+    const inpObserver = new PerformanceObserver((entryList) => {
+      for (const entry of entryList.getEntries()) {
+        const duration = entry.duration;
+        if (duration > maxInp) maxInp = duration;
+      }
+    });
+    inpObserver.observe({ type: 'event', buffered: true });
+    window.addEventListener('pagehide', () => {
+      if (maxInp > 0) {
+        tracker.track('web_vital_inp', { value: Math.round(maxInp), page: location.pathname });
+      }
+    }, { once: true });
+  } catch (e) {
+    console.warn('[tracker] Web Vitals init failed', e);
+  }
+}
+
 export default tracker;

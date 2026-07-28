@@ -12,7 +12,7 @@ import FollowUpReminder from './components/FollowUpReminder';
 import YanChat from './components/YanChat';
 import AppNav from './components/AppNav';
 import { fetchAgentPersonas } from './services/inferenceEngine';
-import { tracker } from './services/tracker';
+import { tracker, initWebVitals } from './services/tracker';
 
 /* lazy import 重试：浏览器缓存旧 chunk hash 时自动刷新 */
 function lazyRetry(fn, retries = 2) {
@@ -272,6 +272,8 @@ export default function App() {
   // P0: 应用启动时从后端加载权威 persona（后端 agentPool.js 为单一来源）
   useEffect(() => {
     fetchAgentPersonas();
+    // 初始化 Web Vitals 性能监控
+    initWebVitals();
   }, []);
 
   return (
