@@ -674,6 +674,9 @@ export default function YanChat() {
 
                   {activeTab === 'chat' && (
                     <div className="yan-chat-input">
+                      <div style={{ fontSize: 10, color: 'rgba(168,138,90,0.6)', textAlign: 'center', marginBottom: 4 }}>
+                        AI 生成内容，仅供参考
+                      </div>
                       <textarea
                         ref={inputRef}
                         value={input}
