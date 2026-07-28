@@ -95,10 +95,10 @@
 | 移动端适配 | 响应式布局 |
 
 ### P3 — 优化
-| 任务 | 说明 |
-|------|------|
-| Bundle压缩 | vendor-three已分包，可再懒加载 |
-| Prompt注入防护加固 | 用户问题不能直接进入system prompt |
+| 任务 | 说明 | 状态 |
+|------|------|------|
+| Bundle压缩 | vendor-three已分包，可再懒加载 | 待办 |
+| Prompt注入防护加固 | sanitizeUserInput清洗XML标签+注入关键词 + `<user_input>`标签包裹 + identity角色锚定 | ✅ 完成（2026-07-28） |
 
 ---
 

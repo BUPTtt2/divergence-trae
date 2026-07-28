@@ -216,6 +216,7 @@ flowchart TD
 | P2 | 记忆云端同步（已登录用户）| 跨设备留存 | 待办 |
 | P2 | 社区智囊生态打磨（市集推荐位）| UGC 护城河 | 待办 |
 | P3 | Bundle 压缩（vendor-three 已分包，可再懒加载）| 首屏速度 | 待办 |
+| ✅ P3已完成 | Prompt 注入防护加固（sanitizeUserInput + `<user_input>`包裹 + 角色锚定）| 安全防护 | ✅ 完成（2026-07-28）|
 
 ### P0 完成说明（2026-07-27）
 - 后端 `server/src/data/agentPool.js` 为**单一来源**（12 个智囊，含三层提示词 identity/methodology/deliverable + persona 向后兼容字段）

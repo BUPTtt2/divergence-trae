@@ -11,6 +11,28 @@ import { getToolSchemas, executeTool, summarizeToolResult } from '../services/mc
 const router = Router();
 
 /**
+ * P3: Prompt 注入防护 — 清洗用户输入
+ * - 移除 XML 风格标签（防止注入 <identity>/<tool_protocol> 等系统标签）
+ * - 移除常见 prompt injection 关键词（"忽略上述指令"等）
+ * - 移除角色劫持短语（"你现在是"等）
+ */
+function sanitizeUserInput(text) {
+  if (!text || typeof text !== 'string') return '';
+  let cleaned = text;
+  // 1. 移除系统级 XML 标签（防止覆盖 system prompt 结构）
+  cleaned = cleaned.replace(
+    /<\/?(identity|methodology|deliverable|mention_protocol|tool_protocol|team_map|available_agents|system|user|assistant|user_input)[^>]*>/gi,
+    ''
+  );
+  // 2. 移除 prompt injection 关键词（中英文）
+  cleaned = cleaned.replace(/(忽略|无视|跳过)(上述|以上|前面|之前)(所有)?(指令|提示|规则|约束)/g, '');
+  cleaned = cleaned.replace(/ignore\s+(previous|above|all)\s+(instructions?|prompts?|rules?)/gi, '');
+  // 3. 移除角色劫持短语
+  cleaned = cleaned.replace(/(你现在是|从现在起你是|你的新角色是|你不再是|忘记你的身份)/g, '');
+  return cleaned.trim();
+}
+
+/**
  * 智囊 × 工具映射（按智囊视角注入对应工具子集）
  * 心禾/镜渊/兑言/养生/师道/震行 不注入工具（重感受/反思/沟通/行动）
  */
@@ -82,13 +104,19 @@ router.post(
   optionalAuth,
   llmRateLimit,
   asyncHandler(async (req, res) => {
-    const { question, useCustomAdvisors, customAdvisorIds } = req.body;
+    const { question: rawQuestion, useCustomAdvisors, customAdvisorIds } = req.body;
 
-    if (!question || typeof question !== 'string') {
+    if (!rawQuestion || typeof rawQuestion !== 'string') {
       return res.status(400).json({ error: '缺少 question 参数' });
     }
-    if (question.length > 500) {
+    if (rawQuestion.length > 500) {
       return res.status(400).json({ error: '问题过长，请控制在500字以内' });
+    }
+
+    // P3: Prompt 注入防护 — 清洗用户输入
+    const question = sanitizeUserInput(rawQuestion);
+    if (!question) {
+      return res.status(400).json({ error: '输入内容无效' });
     }
 
     const result = await analyzeQuestion(question, req.userId, {
@@ -145,14 +173,20 @@ router.post(
   optionalAuth,
   llmRateLimit,
   asyncHandler(async (req, res) => {
-    const { agentId, question, previousDialogues = [], agentConfig, pendingMentions, availableAgents } = req.body;
+    const { agentId, question: rawQuestion, previousDialogues = [], agentConfig, pendingMentions, availableAgents } = req.body;
     const userId = req.userId;
 
-    if (!agentId || !question) {
+    if (!agentId || !rawQuestion) {
       return res.status(400).json({ error: '缺少 agentId 或 question 参数' });
     }
-    if (question.length > 500) {
+    if (rawQuestion.length > 500) {
       return res.status(400).json({ error: '问题过长，请控制在500字以内' });
+    }
+
+    // P3: Prompt 注入防护 — 清洗用户输入
+    const question = sanitizeUserInput(rawQuestion);
+    if (!question) {
+      return res.status(400).json({ error: '输入内容无效' });
     }
 
     let agent = AGENT_POOL_MAP[agentId];
@@ -252,7 +286,9 @@ router.post(
       finalSystemPrompt += `\n\n<tool_protocol>\n【工具调用协议】你被授权使用以下工具获取实时数据：${toolNames}\n\n调用原则：\n- 仅当问题涉及实时数据（股价/汇率/天气/公司信息/宏观数据等）时才调用工具\n- 一次发言最多调用 1 个工具，避免拖慢响应\n- 工具返回的数据必须自然融入发言，标注来源（如"据新浪财经"）\n- 若工具调用失败或返回错误，基于你的专业经验直接发言，不要提及"工具失败"或"数据获取异常"\n- 不允许编造未通过工具获取的具体数字\n</tool_protocol>`;
     }
 
-    const userPrompt = `${mentionPrefix}用户问：「${question}」${contextText}
+    const userPrompt = `${mentionPrefix}<user_input>
+${question}
+</user_input>${contextText}
 
 请以 ${agent.name}（${agent.stance}）的身份，说 1-3 句话回应。不要复述用户问题。${toolSchemas.length > 0 ? '\n\n【工具提示】若有可用工具且问题涉及实时数据（股价/汇率/天气/公司信息等），请优先调用工具获取真实数据后再发言；工具返回的数据请自然融入回答并标注来源。' : ''}`;
 
