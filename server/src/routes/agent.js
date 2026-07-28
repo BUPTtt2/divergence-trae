@@ -1,13 +1,58 @@
 import { Router } from 'express';
 import { analyzeQuestion, generateAgentDialogue, generateAgentQuestion, shouldContinueAsking, generateMasterSummary } from '../services/agentEngine.js';
-import { callLLMStream } from '../services/llmRouter.js';
+import { callLLMStream, callLLMWithTools } from '../services/llmRouter.js';
 import { AGENT_POOL, AGENT_POOL_MAP, buildAgentSystemPrompt } from '../data/agentPool.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { llmRateLimit } from '../middleware/rateLimit.js';
 import { optionalAuth } from '../middleware/auth.js';
 import { listAdvisors, formatAdvisorForAgentPool } from '../services/customAdvisorService.js';
+import { getToolSchemas, executeTool, summarizeToolResult } from '../services/mcpService.js';
 
 const router = Router();
+
+/**
+ * 智囊 × 工具映射（按智囊视角注入对应工具子集）
+ * 心禾/镜渊/兑言/养生/师道/震行 不注入工具（重感受/反思/沟通/行动）
+ */
+const AGENT_TOOL_MAP = {
+  qiangu: ['stock_query', 'exchange_rate', 'salary_calc'],
+  fengyan: ['web_search', 'company_info'],
+  luxiang: ['web_search'],
+  yuntu: ['macro_data', 'web_search'],
+  falv: ['web_search'],
+  jishu: ['web_search'],
+};
+
+/**
+ * 按智囊选择工具 schema（≤3 个）
+ */
+function selectToolsForAgent(agent) {
+  const ids = AGENT_TOOL_MAP[agent.id] || [];
+  return getToolSchemas(ids);
+}
+
+/**
+ * 设置 SSE headers
+ */
+function setupSSEHeaders(res) {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+}
+
+/**
+ * 模拟流式推送（把已生成的文本逐字推给前端）
+ */
+async function streamPrecomputedText(res, text, delay = 15) {
+  for (const char of text) {
+    res.write(`data: ${JSON.stringify({ content: char })}\n\n`);
+    await new Promise(r => setTimeout(r, delay));
+  }
+  res.write(`event: done\ndata: ${JSON.stringify({ full: text })}\n\n`);
+  res.end();
+}
 
 // GET /api/agent/personas — 返回全部智囊的完整 persona 数据（单一来源）
 // 前端通过此接口获取 persona，不再本地维护一份
@@ -196,15 +241,125 @@ router.post(
       }
     }
 
+    // ===== 工具调用流程（方案 A：原生 function calling）=====
+    // 1. 按智囊选择工具子集（在 userPrompt 组装前，以便注入工具提示）
+    const toolSchemas = selectToolsForAgent(agent);
+
     const userPrompt = `${mentionPrefix}用户问：「${question}」${contextText}
 
-请以 ${agent.name}（${agent.stance}）的身份，说 1-3 句话回应。不要复述用户问题。`;
+请以 ${agent.name}（${agent.stance}）的身份，说 1-3 句话回应。不要复述用户问题。${toolSchemas.length > 0 ? '\n\n【工具提示】若有可用工具且问题涉及实时数据（股价/汇率/天气/公司信息等），请优先调用工具获取真实数据后再发言；工具返回的数据请自然融入回答并标注来源。' : ''}`;
+
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ];
+
+    let toolCallTriggered = false;
+
+    if (toolSchemas.length > 0) {
+      try {
+        const t0 = Date.now();
+        // 2. 第一次调 LLM（带 tools，非流式，10s 超时）
+        //    用低 temperature（0.3）让 LLM 更倾向于遵循指令调用工具；
+        //    最终发言流式调用仍用 0.9 保持人设创造力。
+        const toolResult = await callLLMWithTools({
+          messages,
+          tools: toolSchemas,
+          maxTokens: 200,
+          temperature: 0.3,
+          timeout: 10000,
+        });
+        console.log(`[agent][tools] ${agentId} 首轮 ${Date.now() - t0}ms, tool_calls=${!!toolResult.tool_calls}`);
+
+        // 3. 若 LLM 返回 tool_calls：执行工具，把结果喂回 LLM 流式生成最终发言
+        if (toolResult.tool_calls && toolResult.tool_calls.length > 0 && !res.headersSent) {
+          toolCallTriggered = true;
+          setupSSEHeaders(res);
+          res.write(`event: start\ndata: ${JSON.stringify({ ok: true, tools: toolResult.tool_calls.map(t => t.function?.name) })}\n\n`);
+
+          // 组装多轮消息：原 messages + assistant(tool_calls) + 每个 tool 结果
+          const finalMessages = [
+            ...messages,
+            {
+              role: 'assistant',
+              content: toolResult.content || '',
+              tool_calls: toolResult.tool_calls,
+            },
+          ];
+
+          // 顺序执行每个工具调用（总时长 ≤10s，每个工具 5s 超时）
+          for (const tc of toolResult.tool_calls) {
+            const tName = tc.function?.name || '';
+            let tArgs = {};
+            try { tArgs = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+
+            res.write(`event: tool_call\ndata: ${JSON.stringify({ tool: tName, params: tArgs, status: 'running' })}\n\n`);
+
+            let execResult;
+            try {
+              execResult = await executeTool(tName, tArgs);
+            } catch (e) {
+              console.warn(`[agent][tools] ${agentId} 工具 ${tName} 执行失败:`, e.message);
+              execResult = { error: e.message };
+            }
+
+            const summary = summarizeToolResult(tName, execResult);
+            res.write(`event: tool_result\ndata: ${JSON.stringify({ tool: tName, summary, status: execResult?.error ? 'failed' : 'ok' })}\n\n`);
+
+            // 喂回 LLM（role:tool，限制长度防 token 爆炸，≤800 字符 ≈ 200 token）
+            finalMessages.push({
+              role: 'tool',
+              tool_call_id: tc.id,
+              content: JSON.stringify(execResult).slice(0, 800),
+            });
+          }
+
+          // 4. 第二轮流式生成最终发言（带工具结果上下文）
+          const finalText = await callLLMStream(finalMessages, {
+            maxTokens: 200,
+            temperature: 0.9,
+            alreadyStreaming: true,
+          }, res);
+
+          if (finalText === null && !res.writableEnded) {
+            // 工具流程下降级：直接基于经验生成
+            const fallbackText = await generateAgentDialogue(agent, question, previousDialogues);
+            res.write(`event: fallback\ndata: ${JSON.stringify({ text: fallbackText, reason: 'final_stream_failed' })}\n\n`);
+            res.write(`event: done\ndata: ${JSON.stringify({ full: fallbackText, fallback: true })}\n\n`);
+            res.end();
+          }
+          return;
+        }
+
+        // 5. LLM 未返回 tool_calls 但返回了 content：直接流式推送已有内容
+        if (toolResult.content && !res.headersSent) {
+          setupSSEHeaders(res);
+          res.write(`event: start\ndata: ${JSON.stringify({ ok: true, tools: [] })}\n\n`);
+          await streamPrecomputedText(res, toolResult.content);
+          console.log(`[agent][tools] ${agentId} 首轮直接返回（无工具调用）`);
+          return;
+        }
+
+        // 无 content 无 tool_calls：降级到无工具流式
+        if (!res.headersSent) {
+          console.warn(`[agent][tools] ${agentId} 首轮无内容无 tool_calls，降级流式`);
+        } else {
+          // headers 已发送但没内容，降级走不下去，直接 fallback
+          const fallbackText = await generateAgentDialogue(agent, question, previousDialogues);
+          await streamPrecomputedText(res, fallbackText);
+          return;
+        }
+      } catch (e) {
+        console.warn(`[agent][tools] ${agentId} 工具调用流程异常，降级为无工具:`, e.message);
+        // 降级：继续走下面的无工具流式
+      }
+    }
+
+    // ===== 默认流程：无工具流式（或工具降级）=====
+    if (toolCallTriggered) return; // 上面已处理
 
     const fullText = await callLLMStream(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
+      messages,
       { maxTokens: 200, temperature: 0.9 },
       res
     );

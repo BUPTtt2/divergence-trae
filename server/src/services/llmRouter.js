@@ -74,14 +74,17 @@ function fetchWithTimeout(url, options, timeoutMs = DEFAULT_TIMEOUT_MS) {
  * 调用单个提供商（非流式）
  * @param {object} provider 提供商配置
  * @param {Array} messages 消息数组
- * @param {object} options { maxTokens, temperature, timeout }
- * @returns {Promise<string>} 完整文本
+ * @param {object} options { maxTokens, temperature, timeout, tools, tool_choice, returnRaw }
+ * @returns {Promise<string|object>} 默认返回完整文本；returnRaw=true 返回原始 message 对象
  */
 async function callProvider(provider, messages, options = {}) {
   const {
     maxTokens = 400,
     temperature = 0.85,
     timeout = DEFAULT_TIMEOUT_MS,
+    tools,
+    tool_choice,
+    returnRaw = false,
   } = options;
 
   const body = {
@@ -90,6 +93,11 @@ async function callProvider(provider, messages, options = {}) {
     max_tokens: maxTokens,
     temperature,
   };
+  // 注入 tools 参数（OpenAI 兼容 function calling）
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+    body.tool_choice = tool_choice || 'auto';
+  }
 
   const resp = await fetchWithTimeout(provider.endpoint, {
     method: 'POST',
@@ -106,8 +114,15 @@ async function callProvider(provider, messages, options = {}) {
   }
 
   const data = await resp.json();
-  const text = data.choices?.[0]?.message?.content?.trim() || '';
-  return text;
+  const msg = data.choices?.[0]?.message || {};
+  if (returnRaw) {
+    return {
+      content: (msg.content || '').trim(),
+      tool_calls: msg.tool_calls || null,
+      finish_reason: data.choices?.[0]?.finish_reason || null,
+    };
+  }
+  return (msg.content || '').trim();
 }
 
 /**
@@ -115,7 +130,7 @@ async function callProvider(provider, messages, options = {}) {
  * 按优先级依次尝试所有提供商，全部失败返回 null
  *
  * @param {Array} messages OpenAI 格式消息数组
- * @param {object} options { maxTokens, temperature, timeout }
+ * @param {object} options { maxTokens, temperature, timeout, tools, tool_choice }
  * @returns {Promise<string|null>} 完整文本，全部失败返回 null
  */
 export async function callLLM(messages, options = {}) {
@@ -138,12 +153,55 @@ export async function callLLM(messages, options = {}) {
 }
 
 /**
+ * 带 tools 的非流式调用（function calling 第一轮）
+ * 返回 content + tool_calls，供调用方决定是否进入工具执行循环。
+ *
+ * @param {object} params { messages, tools, tool_choice, maxTokens, temperature, timeout }
+ * @returns {Promise<{content:string, tool_calls:Array|null, provider:string, error?:string}>}
+ */
+export async function callLLMWithTools({
+  messages,
+  tools,
+  tool_choice = 'auto',
+  maxTokens = 200,
+  temperature = 0.85,
+  timeout = 10000,
+}) {
+  const providers = getProviders();
+  if (providers.length === 0) {
+    return { content: '', tool_calls: null, provider: null, error: 'no_provider' };
+  }
+
+  for (const provider of providers) {
+    try {
+      const result = await callProvider(provider, messages, {
+        maxTokens,
+        temperature,
+        timeout,
+        tools,
+        tool_choice,
+        returnRaw: true,
+      });
+      console.log(`[LLM][tools] ${provider.name} 调用成功, tool_calls=${!!result.tool_calls}`);
+      return { ...result, provider: provider.name };
+    } catch (e) {
+      console.warn(`[LLM][tools] ${provider.name} 调用失败:`, e.message);
+    }
+  }
+
+  return { content: '', tool_calls: null, provider: null, error: 'all_providers_failed' };
+}
+
+/**
  * SSE 流式调用 LLM，逐字推送到前端
  *
  * @param {Array} messages OpenAI 格式消息数组
- * @param {object} options { maxTokens, temperature, timeout }
+ * @param {object} options { maxTokens, temperature, timeout, alreadyStreaming }
  * @param {object} res Express response 对象
  * @returns {Promise<string|null>} 完整文本，失败返回 null
+ *
+ * alreadyStreaming=true 时跳过 SSE headers + start 事件（用于工具调用流程中，
+ * 调用方已设置 headers 并发送 start 事件后，直接进入流式推送）。
  */
 export async function callLLMStream(messages, options = {}, res) {
   const providers = getProviders();
@@ -151,17 +209,18 @@ export async function callLLMStream(messages, options = {}, res) {
     maxTokens = 400,
     temperature = 0.85,
     timeout = DEFAULT_TIMEOUT_MS * 2, // 流式超时放宽到 16s
+    alreadyStreaming = false,
   } = options;
 
-  // 设置 SSE headers
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders?.();
-
-  // 发送开始事件
-  res.write(`event: start\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+  // 设置 SSE headers + 发送 start 事件（工具流程下跳过）
+  if (!alreadyStreaming) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    res.write(`event: start\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+  }
 
   for (const provider of providers) {
     try {
@@ -269,4 +328,4 @@ export async function callLLMStream(messages, options = {}, res) {
   return null;
 }
 
-export default { callLLM, callLLMStream, isLLMAvailable };
+export default { callLLM, callLLMStream, callLLMWithTools, isLLMAvailable };
