@@ -588,7 +588,6 @@ async function getFullAgentDialogue(agent, question, previousDialogues, dialogue
   // 智囊调校：把该 Agent 的历史反馈摘要附加到 question, 让 LLM 据此微调发言
   let enrichedQuestion = question;
   try {
-    const { formatFeedbackForPrompt } = await import('./memoryStore.js');
     const hint = formatFeedbackForPrompt(agent?.id);
     if (hint) {
       enrichedQuestion = `${question}${hint}`;

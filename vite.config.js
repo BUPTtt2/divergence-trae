@@ -42,18 +42,23 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: false,
-    chunkSizeWarningLimit: 600,
+    chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
-        // 第三方库分包：three 生态拆细, 并行下载, 避免单 chunk 过大
+        // 第三方库分包：three 生态合并(减少跨chunk开销), 其余拆细
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('@react-three/drei')) return 'vendor-drei';
-            if (id.includes('@react-three/fiber')) return 'vendor-fiber';
-            if (id.includes('three-stdlib')) return 'vendor-three-stdlib';
-            if (id.includes('three')) return 'vendor-three';
+            // three 生态全部合并成 vendor-three, 避免 drei/fiber/stdlib 互相引用导致重复
+            if (id.includes('@react-three/drei') ||
+                id.includes('@react-three/fiber') ||
+                id.includes('three-stdlib') ||
+                id.includes('/three/') ||
+                id.includes('/three\\')) return 'vendor-three';
             if (id.includes('framer-motion')) return 'vendor-motion';
-            if (id.includes('react')) return 'vendor-react';
+            if (id.includes('/react-router') || id.includes('\\react-router')) return 'vendor-router';
+            if (id.includes('/react-dom') || id.includes('\\react-dom') ||
+                id.includes('/react/') || id.includes('\\react\\') ||
+                id.includes('/scheduler/')) return 'vendor-react';
           }
         },
       },
