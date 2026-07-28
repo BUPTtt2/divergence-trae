@@ -352,12 +352,38 @@ export default function Community() {
   const [marketAgents, setMarketAgents] = useState([]);
   const [publishedIds, setPublishedIds] = useState(new Set());
   const [subscribedTip, setSubscribedTip] = useState('');
+  const [marketSort, setMarketSort] = useState('hot'); // hot | new
+  const [marketSearch, setMarketSearch] = useState('');
   const [profile, setProfile] = useState(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [editNickname, setEditNickname] = useState('');
   const [editBio, setEditBio] = useState('');
   const [editAvatar, setEditAvatar] = useState('');
   const [editColor, setEditColor] = useState('');
+
+  // 市集推荐位：本周精选（订阅数最高3个）
+  const featuredAgents = useMemo(() => {
+    return [...marketAgents]
+      .sort((a, b) => (b.subs || 0) - (a.subs || 0))
+      .slice(0, 3);
+  }, [marketAgents]);
+
+  // 市集列表：搜索 + 排序
+  const filteredMarketAgents = useMemo(() => {
+    let list = marketAgents;
+    if (marketSearch.trim()) {
+      const q = marketSearch.trim().toLowerCase();
+      list = list.filter(a =>
+        (a.name || '').toLowerCase().includes(q) ||
+        (a.desc || '').toLowerCase().includes(q) ||
+        (a.stance || '').toLowerCase().includes(q)
+      );
+    }
+    if (marketSort === 'hot') {
+      return [...list].sort((a, b) => (b.subs || 0) - (a.subs || 0));
+    }
+    return [...list].sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
+  }, [marketAgents, marketSort, marketSearch]);
 
   const agents = useMemo(() => Object.values(AGENT_MAP).filter(a => a.role !== 'master'), []);
 
@@ -645,15 +671,99 @@ export default function Community() {
             <section>
               <SectionTitle kicker="AGENT MARKET / 智囊市集" title="众人之智" accent="可取可用" />
               <p className="text-[11px] mb-5" style={{ color: T.muted }}>此处陈列众人发布的智囊,订阅后可在推演台召唤。</p>
+
+              {/* 推荐位：本周精选 */}
+              {featuredAgents.length > 0 && !marketSearch && (
+                <div className="mb-8">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span style={{ fontSize: 14, color: T.gold }}>✦</span>
+                    <span className="text-[12px] font-semibold" style={{ color: T.ink }}>本周精选</span>
+                    <span className="text-[10px]" style={{ color: T.muted }}>· 订阅最多</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {featuredAgents.map((agent, i) => {
+                      const subscribed = customAgents.some(a => a.originMarketId === (agent.marketId || agent.id));
+                      return (
+                        <motion.div
+                          key={'feat_' + (agent.marketId || agent.id)}
+                          initial={{ opacity: 0, y: 8 }}
+                          whileInView={{ opacity: 1, y: 0 }}
+                          viewport={{ once: true }}
+                          transition={{ delay: i * 0.08, duration: 0.5 }}
+                          whileHover={{ y: -2 }}
+                          style={{ borderRadius: 5, background: `linear-gradient(135deg, ${T.paperLight}, ${(agent.color || T.gold)}10)`, border: '1px solid ' + (agent.color || T.gold) + '40' }}
+                        >
+                          <div className="p-4">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span style={{ fontSize: 10, color: T.gold, fontWeight: 700 }}>No.{i + 1}</span>
+                              <span className="text-[9px] font-mono px-1 py-0.5" style={{ color: T.gold, border: '1px solid ' + T.gold + '40', borderRadius: 2 }}>{agent.subs || 0} 订阅</span>
+                            </div>
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className="w-10 h-10 flex items-center justify-center text-lg font-serif font-bold" style={{ color: agent.glow, backgroundColor: (agent.color || T.gold) + '20', border: '1px solid ' + (agent.color || T.gold) + '60', borderRadius: 3 }}>
+                                {agent.icon || '☯'}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[13px] font-semibold" style={{ color: T.ink }}>{agent.name}</div>
+                                <div className="text-[9px] font-mono" style={{ color: agent.color || T.gold }}>{agent.stance}</div>
+                              </div>
+                            </div>
+                            <p className="text-[10px] leading-relaxed mb-2" style={{ color: T.muted, minHeight: 28 }}>{agent.desc || '匿名智囊,视角独到'}</p>
+                            <button
+                              onClick={() => handleSubscribe(agent)}
+                              disabled={subscribed}
+                              className="w-full py-1 text-[10px] font-medium"
+                              style={{ color: subscribed ? T.muted : T.paperLight, backgroundColor: subscribed ? T.border : T.ink, borderRadius: 2, cursor: subscribed ? 'default' : 'pointer' }}
+                            >
+                              {subscribed ? '已订阅' : '+ 订阅'}
+                            </button>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 排序 + 搜索控件 */}
+              {marketAgents.length > 0 && (
+                <div className="flex items-center gap-3 mb-4 flex-wrap">
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setMarketSort('hot')}
+                      className="px-3 py-1 text-[11px]"
+                      style={{ color: marketSort === 'hot' ? T.paperLight : T.muted, backgroundColor: marketSort === 'hot' ? T.ink : 'transparent', border: '1px solid ' + (marketSort === 'hot' ? T.ink : T.border), borderRadius: 2, cursor: 'pointer' }}
+                    >热门</button>
+                    <button
+                      onClick={() => setMarketSort('new')}
+                      className="px-3 py-1 text-[11px]"
+                      style={{ color: marketSort === 'new' ? T.paperLight : T.muted, backgroundColor: marketSort === 'new' ? T.ink : 'transparent', border: '1px solid ' + (marketSort === 'new' ? T.ink : T.border), borderRadius: 2, cursor: 'pointer' }}
+                    >最新</button>
+                  </div>
+                  <input
+                    type="text"
+                    value={marketSearch}
+                    onChange={(e) => setMarketSearch(e.target.value)}
+                    placeholder="搜索智囊名称/视角…"
+                    className="flex-1 min-w-[160px] px-3 py-1 text-[11px]"
+                    style={{ color: T.ink, backgroundColor: T.paperLight, border: '1px solid ' + T.border, borderRadius: 2, outline: 'none' }}
+                  />
+                  <span className="text-[10px]" style={{ color: T.muted }}>{filteredMarketAgents.length} 个</span>
+                </div>
+              )}
+
+              {/* 市集列表 */}
               {marketAgents.length === 0 ? (
                 <div className="text-center py-16" style={{ backgroundColor: T.paperLight, border: '1px dashed ' + T.border, borderRadius: 6 }}>
                   <div style={{ fontSize: 40, color: T.muted, marginBottom: 16, opacity: 0.5 }}>☱</div>
                   <p className="text-[13px]" style={{ color: T.muted }}>市集尚空,去发布你的第一个智囊</p>
                 </div>
+              ) : filteredMarketAgents.length === 0 ? (
+                <div className="text-center py-12" style={{ color: T.muted }}>
+                  <p className="text-[12px]">未找到匹配的智囊</p>
+                </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {marketAgents.map((agent, i) => {
-                    const alreadySubscribed = subscribedTip && customAgents.some(a => a.originMarketId === (agent.marketId || agent.id));
+                  {filteredMarketAgents.map((agent, i) => {
                     const subscribed = customAgents.some(a => a.originMarketId === (agent.marketId || agent.id));
                     return (
                       <motion.div
