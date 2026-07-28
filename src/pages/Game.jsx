@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
+import tracker from '../services/tracker';
 import Board from '../components/board/GameBoard';
 import ChoiceHud from '../components/board/ChoiceHud';
 import AgentDialogueOverlay from '../components/board/AgentDialogueOverlay';
@@ -98,6 +99,24 @@ export default function Game() {
     stageTimersRef.current.forEach(t => clearTimeout(t));
     stageTimersRef.current = [];
     if (floatTipTimer.current) { clearTimeout(floatTipTimer.current); floatTipTimer.current = null; }
+  }, []);
+
+  // 阶段埋点：监听 phase 变化，触发 phase_exit / phase_enter
+  const prevPhaseRef = useRef(phase);
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    if (prev !== phase) {
+      try {
+        tracker.track('phase_exit', { phase: prev });
+        tracker.track('phase_enter', { phase });
+      } catch (e) { /* 埋点失败不影响主流程 */ }
+      prevPhaseRef.current = phase;
+    }
+  }, [phase]);
+
+  // 挂载时记录初始 input 阶段的 phase_enter
+  useEffect(() => {
+    tracker.track('phase_enter', { phase: 'input' });
   }, []);
 
   // handleRestart 必须在 handleStart 之前定义，避免 TDZ 错误
@@ -2009,6 +2028,7 @@ function FateCardPanel({ choice, inference, userInput, agentDialogues, activeAge
               });
               downloadShareCard(dataUrl, `${guaName}-命签.png`);
               setShareTip('命签已下载, 可分享');
+              try { tracker.track('share', { cardId: guaName, shareChannel: 'image_download' }); } catch (e2) { /* ignore */ }
             } catch (e) {
               console.warn('[分享卡] 生成失败', e);
               setShareTip('生成失败, 稍后再试');

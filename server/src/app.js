@@ -21,6 +21,8 @@ import levelRoutes from './routes/level.js';
 import sessionRoutes from './routes/session.js';
 import authRoutes from './routes/auth.js';
 import syncRoutes from './routes/sync.js';
+import trackRoutes from './routes/track.js';
+import { startErrorMonitor } from './middleware/errorMonitor.js';
 
 // 初始化数据库（内存模式时安全，PostgreSQL时连接池）
 initDB();
@@ -111,6 +113,10 @@ app.use('/api/follow-up', followUpRoutes);
 app.use('/api/level', levelRoutes);
 app.use('/api/agent/session', sessionRoutes);
 app.use('/api/sync', syncRoutes);
+app.use('/api/track', trackRoutes);
+
+// 启动 LLM 错误率监控（每 5 分钟检查）
+startErrorMonitor();
 
 // 错误处理
 app.use(notFound);

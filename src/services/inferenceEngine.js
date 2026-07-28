@@ -10,6 +10,7 @@ import { API_BASE_URL } from './baseConfig.js';
 import { Blackboard } from './multiAgentFramework';
 import { parseMentions } from './mentionProtocol';
 import { formatFeedbackForPrompt } from './memoryStore';
+import tracker from './tracker';
 
 export const DEFAULT_CHOICES = [
   { id: 'opportunity', label: '抓住机会', color: COLORS.choice.opportunity, glowColor: '#E8B880', icon: '☰' },
@@ -601,13 +602,42 @@ async function getFullAgentDialogue(agent, question, previousDialogues, dialogue
 
 /**
  * 带超时的单个 Agent 对话请求（10秒）
+ * 含 LLM 调用埋点：llm_call（调用前）+ llm_result（调用后，含成功/失败/超时/耗时）
  */
 async function getAgentDialogueWithTimeout(agent, question, previousDialogues, dialogueOptions = {}) {
+  const agentId = agent?.id || 'unknown';
+  const startTime = Date.now();
+  try { tracker.track('llm_call', { agentId }); } catch (e) { /* ignore */ }
+
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error('单个 Agent 对话超时')), 20000)
   );
   const dialoguePromise = getFullAgentDialogue(agent, question, previousDialogues, dialogueOptions);
-  return Promise.race([dialoguePromise, timeoutPromise]);
+  try {
+    const result = await Promise.race([dialoguePromise, timeoutPromise]);
+    const duration = Date.now() - startTime;
+    try {
+      tracker.track('llm_result', {
+        agentId,
+        success: true,
+        duration,
+        errorType: null,
+      });
+    } catch (e) { /* ignore */ }
+    return result;
+  } catch (e) {
+    const duration = Date.now() - startTime;
+    const isTimeout = /超时|timeout/i.test(e.message || '');
+    try {
+      tracker.track('llm_result', {
+        agentId,
+        success: false,
+        duration,
+        errorType: isTimeout ? 'timeout' : 'error',
+      });
+    } catch (e2) { /* ignore */ }
+    throw e;
+  }
 }
 
 /**

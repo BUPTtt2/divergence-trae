@@ -5,6 +5,7 @@ import Bagua from '../components/fx/Bagua';
 import NoteModal from '../components/NoteModal';
 import { getCards, updateCard, deleteCard, shareCard, getUserId, getCardNotes } from '../services/apiClient';
 import { getPendingFollowUps, updateEpisodeOutcome } from '../services/memoryStore';
+import tracker from '../services/tracker';
 import AppNav from '../components/AppNav';
 
 const T = {
@@ -242,6 +243,7 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
     const updated = { ...card, reviewOutcome: reviewText.trim(), reviewed: true, reviewedAt: todayStr };
     if (onSave) onSave(updated);
     setIsReviewing(false);
+    try { tracker.track('revisit', { cardId: card.id, withOutcome: !!reviewText.trim() }); } catch (e) { /* ignore */ }
   };
 
   // 分享：调用后端 shareCard
@@ -935,6 +937,7 @@ export default function Collection() {
   const handleShareCard = useCallback(async (id) => {
     try {
       await shareCard(id);
+      try { tracker.track('share', { cardId: id, shareChannel: 'backend' }); } catch (e) { /* ignore */ }
     } catch (e) {
       console.warn('[Collection] shareCard 后端失败:', e.message);
     }

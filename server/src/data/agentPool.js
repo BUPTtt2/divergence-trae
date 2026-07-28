@@ -384,7 +384,7 @@ export function buildAgentSystemPrompt(agent, teamAgents = []) {
   // 三层结构优先
   if (agent.identity && agent.methodology && agent.deliverable) {
     // mention_protocol 段：@ 协议的输出格式与约束（始终注入，deliverable 之后）
-    const mentionProtocol = `\n\n<mention_protocol>\n协作增强：当其他智囊的观点有盲点、错误或可补充时，可用 <mention> 标签定向 @ 对方。\n输出格式：<mention to="agentId" type="rebuttal|support|question" snippet="≤20字被引用原文">你的追问/反驳</mention>\n- type: rebuttal=反驳, support=补充, question=追问\n- to: 填对方 agentId（如 fengyan/jingyuan 等）\n- snippet: 被引用的原文片段≤20字\n- 一条发言最多 1 个 mention，避免分散\n- 同一智囊最多被 @ 2 次，@ 链最多 3 跳\n- 被 @ 的智囊下一轮必须先回应 @，再发表自己观点\n- 不需要 @ 时不要强行 @，普通发言不要加 mention 标签\n</mention_protocol>`;
+    const mentionProtocol = `\n\n<mention_protocol>\n【@ 协议】当其他智囊的观点有盲点、错误或可补充时，必须用 <mention> 标签定向 @ 对方。\n\n输出格式（严格遵守XML，必须完整闭合）：\n<mention to="agentId" type="rebuttal|support|question" snippet="≤20字被引用原文">你的追问/反驳内容</mention>\n\n示例（钱谷说完"涨薪40%是净收益"后，风眼发言）：\n<mention to="qiangu" type="rebuttal" snippet="涨薪40%是净收益">40%没算搬迁隐性成本和机会成本，你的净收益怎么算的？</mention>\n\n规则：\n- type: rebuttal=反驳, support=补充, question=追问\n- to: 填对方 agentId（见上方 available_agents 列表）\n- snippet: 被引用的原文片段≤20字\n- 一条发言最多 1 个 mention 标签\n- 同一智囊最多被 @ 2 次，@ 链最多 3 跳\n- 被 @ 的智囊下一轮必须先回应 @，再发表自己观点\n- 只有需要反驳/补充/追问时才用 <mention> 标签，普通发言不加\n- 标签必须完整闭合 </mention>，不要遗漏\n</mention_protocol>`;
 
     // 参与智囊列表：让 LLM 知道可以 @ 谁（仅当有队友时注入）
     const others = teamAgents.filter(a => a.id !== agent.id);
