@@ -1,0 +1,281 @@
+## Hard Constraints
+- Background must be 水墨八卦虚空 with 底色 #FAF8F0, 远景 水墨山峦轮廓 (模糊处理), 中景 八卦卦象纹理 (浅灰色, 缓慢旋转), 近景 薄雾粒子 (淡墨色)
+- 核心视觉元素 must be 1024×1024 高清 Canvas 2D 水墨太极游鱼 (S形+反向色鱼眼+贝塞尔尾鳍+墨点晕染), Sprite 始终面向相机, 0.12 rad/s 旋转, 0.18 透明度水墨晕光
+- Agent must be 半透明虚影方块/符号/头像 (非塔楼/建筑/复杂角色), 悬浮, 半透明, 有对应颜色光晕, 按问题类型动态加载 (不全出现), 围绕用户八卦式环绕, 顺序浮现 (淡入+旋转15°+上浮+光晕亮起), 发言时上浮+头顶气泡, 完成后回环绕位置+小勾
+- 选择方块 must be 从用户脚下依次浮起, 半透明, 有对应颜色, 顶部图标, 标题文字, 底部光晕, 围绕用户两侧展开, 无阶梯, 用特效动效
+- Agent 对话 must be 纯浮动文字 (无气泡框), 浮在 Agent 上方, 4.5s 后自动消失, 点击 Agent 可查看历史对话
+- 侧边栏 must be 默认收起, 右上角 '历史对话(N)' 按钮展开; 顶栏中央显示阶段提示 (e.g., '演·分析中', 'XX发言中', '演·梳理总结', '请选择你的路径')
+- All animations must be slow, light, and restrained (0.8-1.5s duration, soft easing), no bouncing, shaking, or explosions
+- 八卦图 must always face the screen
+- 命运卡需移至更靠上靠左位置 (y=2.4, x=-2.4), 避免遮挡底部八卦阵
+- 铜钱特效需采用水墨风格 (宣纸底色+朱砂方孔+水墨斑驳纹理+乾坤卦文), 动画柔和克制
+- 符文特效不得出现在卡片附近
+- 首页首访需有惊艳引导 (全屏暗化→暖金光束→中央'演'字浮现→8卦象圆周出现→引导文字+CTA按钮) 
+- 部署需兼容 GitHub Pages/Surge, 产物使用相对路径
+- 三枚铜钱需放置于右上角悬浮位置([1.4, 0.85, 0.4]), 采用sprite始终面向屏幕
+- 命运卡需显示卦名、卦辞、四柱、智囊及终局内容
+- 悬浮配件菜单需从6仪精简为4仪(投卦/落笔/镇纸/隐)
+- 日签玩法需根据当天日期hash算出固定一卦并存入localStorage.yance:compass:daily
+- 解卦玩法需智能匹配8组关键词, 命中显示'命中关键词: XX', 未命中随机配卦并返回完整卦辞
+- 成就系统需包含6个等级: 初入卦门→三卦成局→七星连珠→十卦归一→太乙归元→大衍之数, 推演次数自动追踪
+- 分享卡片功能需使用Canvas生成800×1100图片, 包含卦象、卦辞、四柱、智囊、决策信息
+- 每日运势入口需在导航栏新增, 根据日期生成专属运势, 包含连续签到计数机制
+- 决策对比功能支持最多3张卡牌对比, 底部固定对比面板实时展示差异
+- 推演记录需去重处理
+- 按钮组z-index需设为z-40, 高于推演记录面板z-30并跟随侧栏展开向左偏移
+- 八卦阵图案不得被其他元素遮挡
+- 铜钱翻滚动画持续1.5s后改为轻轻呼吸效果
+- 首次访问首页需通过localStorage.yance:visited标记跳过引导
+- vite.config.js需设置base: './'确保相对路径
+- 命运卡右侧不得显示OrbitTrigrams符文特效
+- 悬浮配件提示条字号9px, 减小padding
+- 引导序列持续5.8s, 任意点击或CTA按钮可结束并跳转推演台
+- 铜钱贴图需重绘为暖金渐变+内方孔朱砂红+暖金边
+- 悬浮小配件点击外部需自动关闭
+- 落笔功能需显示小红点笔记数量和近记预览
+- 悬浮配件需支持4模式切换(☯罗盘/外铜钱/书演字/笔笔锋)
+- 悬停1.8s需显示随机卦辞
+- 镇纸状态需显示红角标和提示条, 点击主件可解锁; 隐状态5秒后自动召回并显示气泡
+- 解锁镇纸后菜单需恢复正常
+- 部署产物需包含1.5MB JS和28KB CSS
+- 引导文字需为'立卦开演'并搭配朱砂CTA按钮
+- 8卦象沿圆周出现时需各自明灭
+- 悬浮配件位置、笔记、投卦状态需通过localStorage持久化
+- 菜单中'镇纸'项在锁定状态需变为红字'解镇纸'按钮
+- 解锁镇纸提示气泡内容为'再点下方「解」按钮可解锁'
+- 镇纸状态提示条内容为'镇纸中 · 点主件看解法'
+- 引导序列使用5步动画(0s全屏暗化→0.8s暖金光束→2.4s中央'演'字浮现→4s8卦象圆周出现→5.8s引导文字+CTA)
+- 8卦象动画需使用lerp平滑插值器, 每帧向target渐变
+- 悬浮配件菜单需包含返回上一界面按钮
+- 隐状态需保留Shift+H快捷键
+- 日签同一天重复点击需显示同一卦
+- 解卦输入框限制60字内
+- 提示条需位于主件下方64px居中位置, 带箭头视觉引导
+- 粒子系统: 120 golden star points with AdditiveBlending发光
+- Agent color coding: 钱谷金/路向绿/风眼红/心禾粉紫/镜渊紫/云图蓝
+- Implementation must use hybrid approach (preset script tree with LLM interface预留)
+- Camera controls: OrbitControls enabled for rotation/zooming
+- 铜钱使用sprite而非立体cylinder
+- 解卦8组关键词: 辞职/创业→乾、买房/稳→艮、感情→兑、投资→坎、学习→巽、钱→离、健康→坤、愤怒→震
+- 推演记录需使用includes方法去重
+- 8卦象符号为☰☱☲☳☴☵☶☷
+- CTA按钮颜色为朱砂色
+- 命运卡位置坐标为(x=-2.4, y=2.4)
+- 铜钱位置坐标为[1.4, 0.85, 0.4]
+- 三连彩蛋发光时长2.4s
+- 隐状态自动召回延迟5s
+- 引导序列总时长5.8s
+- 悬浮配件提示条字号9px
+- 部署产物JS大小1.5MB
+- 部署产物CSS大小28KB
+- 水墨太极游鱼尺寸1024×1024
+- 水墨太极游鱼旋转速度0.12 rad/s
+- 水墨太极游鱼透明度0.18
+- Agent浮现动画包含淡入+旋转15°+上浮+光晕亮起
+- Agent发言时状态为上浮+头顶气泡
+- Agent完成后状态为回环绕位置+小勾
+- 选择方块动画为从用户脚下依次浮起
+- Agent对话自动消失时间4.5s
+- 粒子系统数量120个
+- 粒子系统颜色金色
+- 粒子系统混合模式AdditiveBlending
+- 侧边栏默认状态收起
+- 顶栏阶段提示示例: '演·分析中', 'XX发言中', '演·梳理总结', '请选择你的路径'
+- 动画时长范围0.8-1.5s
+- 远景水墨山峦轮廓模糊处理
+- 中景八卦卦象纹理颜色浅灰色, 状态缓慢旋转
+- 近景薄雾粒子颜色淡墨色
+- 水墨太极游鱼特征S形+反向色鱼眼+贝塞尔尾鳍+墨点晕染
+- 水墨太极游鱼Sprite始终面向相机
+- 悬浮配件4模式: ☯罗盘/外铜钱/书演字/笔笔锋
+- 命运卡显示内容: 卦名、卦辞、四柱、智囊、终局
+- 按钮组z-index值z-40
+- 推演记录面板z-index值z-30
+- 悬浮小配件点击外部自动关闭
+- 落笔功能显示: 小红点笔记数量、近记预览
+- 悬停卦辞时长1.8s
+- 日签存储键localStorage.yance:compass:daily
+- 首访标记键localStorage.yance:visited
+- 镇纸状态显示红角标
+- 隐状态显示归气泡
+- 三连彩蛋角标颜色朱砂色
+- 铜钱贴图特征: 暖金渐变+内方孔朱砂红+暖金边
+- 引导序列步骤: 全屏暗化→暖金光束→中央'演'字浮现→8卦象圆周出现→引导文字+CTA按钮
+- 解锁后菜单状态正常
+- 命运卡符文状态不显示OrbitTrigrams
+- 八卦阵显示状态不被遮挡
+- 环绕卦象状态保留, 金色圆环删除
+- 卦象明灭状态各自明灭
+- CTA按钮文字'立卦开演'
+- 部署配置vite.config.js base: './'
+- 提示条箭头有视觉引导
+- 铜钱动画状态1.5s翻滚后呼吸
+- 悬浮配件仪数量4个
+- 状态持久化项位置/笔记/投卦
+- 引导结束行为跳转推演台
+- 解卦配卦规则未命中随机
+- 解卦返回内容完整卦辞
+- 日签更新规则隔天换新
+- 三连彩蛋效果边框脉冲发光
+- 提示条padding减小
+- 命运卡移动方向上左
+- 铜钱放置方位右上角
+- 符文特效位置远离卡片
+- 返回按钮位置菜单第一个
+- 引导惊艳要求有
+- 镇纸解锁方式点主件
+- 隐状态召回方式5秒自动
+- 新增玩法数量3个
+- 每个环节必须等待用户点击继续后才能进入下一环节
+- 天/地/雷/风悬浮助手必须删除
+- Agent 提问必须递进式, 基于历史对话问更深层次问题
+- 金色背景圆环必须删除
+- '演'字周围4个悬浮水墨卦象小符(☰☷☳☴)必须删除
+- Agent 反问必须具体, 针对用户真实情况, 简短有力
+- 侧边栏历史对话栏默认收起
+- 世界线需明确区分当前线、初始线和走过的线, 并通过颜色区分
+- 不要屏幕震动或摇晃特效
+- 不要天/地/雷/风悬浮助手
+- 不要金色背景圆环
+- Agent 提问需递进式
+- 每个环节需等待用户点击继续
+- 环绕'演'的卦象需保留
+- 八卦阵图案不得被其他元素遮挡
+- 符文特效不得出现在卡片附近
+- 全局Agent '演'需作为网站大管家, 协调各功能模块, 触达所有页面
+- 智囊区Agent需支持动态添加: 当现有Agent分析不足时,'演'需询问用户是否添加新Agent, 设定后参与讨论并同步至社区页展示
+- 用户可动态选择参与讨论的Agent
+- '演'的思考过程需可视化
+- 右下角固定'演'浮窗需整合至动态Agent区域, 避免重复
+- 每日任务页面需优化动效和细节, 提升精致度
+- 修复TypeError: (intermediate value).trim is not a function错误, 确保功能正常打开
+- 新增Agent需持久化, 避免重复添加
+- 用户可与'演'共同创建新Agent, 系统需过滤异常/不合理要求并美化适配
+- 所有 middleware 必须使用 async/await, 不允许回调风格
+- 路由文件在 middleware 重构期间不得修改
+- 用户认证必须使用签名机制 (JWT 或 HMAC), 防止身份伪造
+- 对话历史必须设置长度限制, 防止 Token 成本失控
+- 数据库必须实现迁移机制, 不能仅依赖 CREATE TABLE IF NOT EXISTS
+- LLM 输出必须进行严格校验, 不能仅依赖正则提取 JSON
+- 必须防范 Prompt 注入风险, 用户问题不能直接进入 system prompt
+- 限流机制必须支持多实例部署, 不能仅依赖内存 Map
+- 必须添加结构化日志系统 (如 pino/winston), 不能仅使用 console.log
+- 必须实现基础监控和错误率告警机制
+- 前端所有 JSON.parse 调用必须添加 try-catch 保护
+- JSX 内不允许直接使用 JSON.parse
+- 上线前必须完成用户服务协议(/legal)和隐私政策(/privacy)页面, 包含免责声明、AI生成标识、未成年人保护、信息收集使用说明
+- 全站页脚必须添加法律链接: 「用户协议|隐私政策|京ICP备XXXXXXXX号」(需替换为真实备案号)
+- Agent发言必须在浮层底部自动显示「AI生成内容，仅供参考」标识
+- 硬编码API密钥必须清除
+- 敏感词列表(SENSITIVE_WORDS in src/utils/customAgent.js)必须扩展完善
+- 后端部署必须通过Railway执行'railway login'和'railway up'命令, 部署后需将生成的域名更新至前端.env的VITE_API_BASE_URL
+- 需修复Community崩溃、trim报错、JSON.parse保护等已知问题
+- 需实现数据库迁移脚本、API超时控制、JWT用户认证、Bundle体积优化
+- 流程需实现动态分支 — 基于分歧度计算 + 反思时长动态调整
+- 智囊需展示情绪态度 — 立场强度三段条
+- 智囊需支持调校迭代 — 反馈chip + 据反馈微调发言
+- 需实现智囊社区共享 — 发布/订阅 + 智囊市集tab
+- 需实现决策回顾闭环 — 30天到期回访 + 实际结局对照
+- 前端需支持localStorage降级方案, 确保核心推演/智囊发言/命签收藏/市集(本机可见)在无后端时正常运行
+- Cloudflare API Token must include 'D1 Databases: Edit' permission for backend deployment
+- Backend deployment requires executing .eploy-cf-workers.ps1 in local PowerShell, which automates wrangler login, D1/KV creation, database migration, secrets setup, deployment, and frontend config update
+- Frontend redeployment requires 'npm run build' followed by 'npx surge dist yance-bagua.surge.sh'
+- Cloudflare API Token must include Account → D1 Databases → Edit permission
+- Cloudflare API Token editing steps: Go to https://dash.cloudflare.com/profile/api-tokens, find the token, click 'Edit', add 'Account → D1 Databases → Edit' permission, then save
+- Cloudflare API Token does not need regeneration after permission update
+- Backend deployment script (.eploy-cf-workers.ps1) handles wrangler login, D1 database creation, KV namespace creation, database migration, secrets setup, deployment, and frontend config update
+- Frontend deployment uses 'npx surge dist yance-bagua.surge.sh' after 'npm run build'
+- Cloudflare API Token requires 'D1 Databases: Edit' permission in addition to existing Workers KV Storage, Workers Scripts, etc.
+- Token permission update steps: Edit token → Add more → Account → D1 Databases → Edit → Save
+- Token remains valid after permission update, no need to regenerate
+- Backend deployment automation includes D1 database creation with 20 tables, KV namespace creation, JWT_SECRET generation, Workers deployment, frontend API address configuration, and data migration from localStorage to cloud
+- Frontend deployment to Cloudflare Pages is part of the automated process after obtaining Cloudflare API Token
+- Surge login for frontend deployment is optional and can be done via 'npx surge login'
+- Cloudflare API Token must have 'D1 Databases: Edit' permission to create and manage D1 databases during deployment
+- Backend deployment script automates all steps from login to deployment, requiring only the Cloudflare API Token from the user
+- Frontend deployment to Surge is a separate step after building with 'npm run build'
+- Cloudflare API Token editing involves adding the 'D1 Databases: Edit' permission under Account resources
+- Token permission issues prevent deployment script from creating D1 databases, requiring manual permission addition
+- After permission update, deployment can proceed without regenerating the token
+- Backend deployment includes automatic data migration from localStorage to cloud upon user login
+- Frontend API base URL is automatically updated to the new backend domain after deployment
+- Cloudflare API Token permissions must include Workers KV Storage:Edit, Workers Scripts:Edit, D1 Databases:Edit, and other specified permissions for full deployment functionality
+- Deployment process requires user to provide Cloudflare API Token and optionally complete Surge login for frontend deployment
+- Backend deployment script handles database migration, ensuring 20 tables are created in D1
+- JWT_SECRET is automatically generated and set as a secret during backend deployment
+- KV namespace is created for rate limiting functionality during backend deployment
+- Frontend config is updated to point to the newly deployed backend automatically
+- Cloudflare Pages deployment for frontend is part of the automated process after backend deployment
+- Surge deployment is an alternative frontend deployment method, requiring 'npx surge dist yance-bagua.surge.sh'
+- Cloudflare API Token permission check: Ensure 'Account → D1 Databases → Edit' is present in the token's permissions
+- Token permission addition: Use the 'Add more' button in the token edit interface to add the required D1 Databases permission
+- No token regeneration needed after permission update; existing token remains valid
+- Backend deployment fails without D1 Databases permission, as the script cannot create the required database
+- User must save the token after editing permissions to apply the changes
+- Cloudflare API Token is the only user-provided input needed for automated backend deployment
+- Surge login is required only if the user chooses to deploy frontend via Surge instead of Cloudflare Pages
+- Backend deployment script is located at .eploy-cf-workers.ps1 and must be run in PowerShell
+- Frontend build command is 'npm run build', producing files in the 'dist' directory
+- Surge deployment deploys the 'dist' directory to the 'yance-bagua.surge.sh' subdomain
+- Cloudflare Workers deployment results in a backend domain like 'yance-bagua-engine.<username>.workers.dev'
+- Data migration from localStorage to cloud is triggered automatically upon user login after deployment
+- Backend deployment includes setting up refresh tokens with 30-day validity and access tokens with 15-minute validity
+- KV is used for distributed rate limiting, with different limits for anonymous and logged-in users
+- D1 database contains tables for users, refresh tokens, inference sessions, cards, agent market, community posts, audit logs, etc.
+- Backend uses Hono framework with JWT authentication, Zod for validation, and Cloudflare D1/KV for storage
+- Frontend AuthContext manages access and refresh tokens, with offline fallback to localStorage
+- Deployment documentation is available in docs/06-Cloudflare-Workers部署.md
+- Railway deployment is no longer used due to connectivity issues; Cloudflare Workers is the current backend architecture
+- Backend directory structure includes worker/ with routes, services, middleware, and utilities
+- Frontend services and context are updated to use Bearer token authentication instead of HMAC
+- Data sync service handles migration of existing localStorage data to the cloud upon first login
+- Deployment process is fully automated after obtaining the Cloudflare API Token, with no manual steps required
+- Cloudflare API Token must have permissions for Workers, D1, KV, Pages, and other specified resources to ensure deployment success
+- User must ensure the token has all required permissions before running the deployment script
+- Permission errors during deployment are resolved by editing the token and adding the missing permissions
+- Backend deployment script logs each step, including database creation, migration, and deployment
+- Frontend deployment to Cloudflare Pages is integrated into the backend deployment script
+- Surge deployment is a manual alternative for frontend hosting
+- Cloudflare API Token is sensitive and should be kept secure; it provides access to manage Workers, D1, KV, and other Cloudflare resources
+- User is guided to create the API Token using the 'Edit Cloudflare Workers' template and then add the D1 Databases permission
+- Token creation involves selecting the 'Edit Cloudflare Workers' template, which provides base permissions, then adding Dl Databases: Edit
+- All deployment steps are designed to be automated, requiring minimal user intervention beyond providing the API Token
+- Backend and frontend deployment processes are documented in detail in the project documentation
+- Cloudflare Workers deployment offers better reliability and performance compared to the previous Railway deployment
+- The project uses a hybrid approach with preset script trees and LLM interfaces for dynamic functionality
+- All animations and visual elements adhere to the specified aesthetic and performance constraints
+- Security measures include JWT authentication, password hashing, input validation, and protection against common vulnerabilities
+- Error handling includes try-catch for JSON.parse, structured logging, and monitoring for critical issues
+- User data is migrated from localStorage to the cloud database to enable multi-device access and persistence
+- The deployment script ensures all necessary resources (D1, KV, secrets) are created and configured correctly
+- Frontend is built with vite, configured to use relative paths for compatibility with various hosting services
+- The project includes various game-like features such as achievements, daily运势, 命运卡, and 智囊社区 to enhance user engagement
+- All visual and interaction elements are designed to maintain the specified aesthetic and user experience constraints
+- The backend architecture is optimized for serverless deployment on Cloudflare Workers, with efficient use of D1 and KV for data storage
+- The frontend is optimized for performance, with bundle size constraints and efficient state management
+- The project includes legal compliance features such as user agreements, privacy policies, and AI content disclaimers
+- Continuous improvement is supported through features like 智囊调校, 社区共享, and 决策回顾闭环
+- The deployment process is designed to be accessible to users with limited technical knowledge, with automated scripts and clear guidance
+- Cloudflare API Token permissions are critical for successful deployment, and the user must ensure all required permissions are present
+- The transition from Railway to Cloudflare Workers was driven by reliability issues with the previous hosting provider
+- The project's technical stack includes modern web technologies such as React, Vite, Hono, JWT, Zod, and Cloudflare's serverless offerings
+- Data persistence is achieved through a combination of localStorage (for offline use) and cloud storage (for online sync)
+- The user interface is designed to be intuitive and engaging, with clear visual feedback and guided interactions
+- The project includes comprehensive error handling and logging to ensure stability and facilitate debugging
+- Deployment automation reduces the risk of human error and ensures consistent environment setup
+- The use of Cloudflare's services (Workers, D1, KV, Pages) provides a scalable and reliable infrastructure for the application
+- The project's game design elements are integrated with technical features to create a cohesive user experience
+- All aspects of the project, from visual design to technical implementation, adhere to the specified constraints and requirements
+- The user is provided with clear instructions for token creation and permission setup to ensure successful deployment
+- The deployment script handles all complex setup steps, allowing the user to deploy the application with minimal effort
+- The project continues to evolve with new features and improvements, supported by a robust deployment and development process
+- Cloudflare API Token is the key credential required for deploying and managing the backend infrastructure
+- Proper token permissions are essential for the deployment script to function correctly and create all necessary resources
+- The user is guided through the token creation and permission setup process to ensure they can successfully deploy the application
+- The project's documentation provides detailed information on the deployment process, technical architecture, and user features
+- The transition to Cloudflare Workers has improved the application's reliability and accessibility for users
+- The automated deployment process ensures that the application can be deployed quickly and consistently across different environments
+- The project's technical and design constraints are carefully enforced to maintain a consistent and high-quality user experience
+- The use of serverless technologies reduces operational overhead and allows the application to scale dynamically
+- The project includes features to support user engagement and retention, such as daily tasks, achievements, and community sharing
+- All security best practices are followed to protect user data and ensure the application's integrity

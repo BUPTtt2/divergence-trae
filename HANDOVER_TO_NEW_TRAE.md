@@ -404,6 +404,29 @@ Windows 上 git 会警告 `LF will be replaced by CRLF`，这是正常的，不�
 
 > 这是专门回答"怎么保证在另一台电脑不会断"的章节。
 
+### 0. 跨设备 Trae 记忆同步（NEW！2026-07-27）
+
+Trae 的 memory 文件（user_profile.md / project_memory.md）默认存在 `~/.trae-cn/memory/`，**不会随项目 git 同步**。本项目已把这两个文件复制到 `.trae-memory/` 目录随 git 提交。
+
+**新 Trae 接手后必做（恢复记忆）**：
+```bash
+# 1. 克隆项目
+git clone https://github.com/BUPTtt2/divergence-trae.git
+cd divergence-trae
+
+# 2. 把 .trae-memory/ 复制回 Trae memory 目录（Windows PowerShell）
+Copy-Item .trae-memory\user_profile.md "$env:USERPROFILE\.trae-cn\memory\user_profile.md" -Force
+# project_memory.md 复制到对应项目目录（目录名是项目路径编码，因电脑而异）
+# 查看：Get-ChildItem "$env:USERPROFILE\.trae-cn\memory\projects\"
+```
+
+**本 Trae 做了重要决策后必做（同步给其他 Trae）**：
+1. 决策写进 `CLAUDE.md` 或 `docs/AGENT_DESIGN.md`
+2. 同步更新 `.trae-memory/project_memory.md`
+3. `git add .trae-memory/ CLAUDE.md docs/AGENT_DESIGN.md && git commit && git push`
+
+详见 `.trae-memory/README.md`。
+
 ### 1. 文档自包含（不依赖对话历史）
 所有信息都在文档里，不依赖任何对话上下文：
 - **项目全貌** → `HANDOVER_TO_NEW_TRAE.md` 第三~五步
@@ -412,6 +435,8 @@ Windows 上 git 会警告 `LF will be replaced by CRLF`，这是正常的，不�
 - **API 对照** → `CLAUDE.md`
 - **部署状态** → `HANDOVER_TO_NEW_TRAE.md` 第二步
 - **待办任务** → `HANDOVER_TO_NEW_TRAE.md` 第六步（详细到文件级别）
+- **用户偏好** → `.trae-memory/user_profile.md`（跨项目偏好）
+- **项目历史决策** → `.trae-memory/project_memory.md`（本项目硬约束/规范）
 - **硬约束** → `HANDOVER_TO_NEW_TRAE.md` 第七步
 
 **新 Trae 不需要任何对话历史，只读文档就能理顺。**
