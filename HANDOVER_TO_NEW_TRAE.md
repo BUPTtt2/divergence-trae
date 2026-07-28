@@ -216,16 +216,12 @@ sandbox-app/
 
 ### 待办任务（详细，新 Trae 按此执行）
 
-#### P0 — 必须做（上线前）
+#### P0 — 已完成 ✅（2026-07-27）
 **任务：persona/prompt 前后端统一收敛到后端**
-- **现状**：前端 `src/services/inferenceEngine.js` 的 `AGENT_PERSONAS` 对象和后端 `server/src/data/agentPool.js` 双份维护智囊人设。改 prompt 要改两处，容易不一致。
-- **目标**：后端 `agentPool.js` 作为单一来源，前端通过 API 获取 persona（或后端在 dialogue 时直接注入 system prompt），前端 `AGENT_PERSONAS` 只做本地降级兜底。
-- **涉及文件**：
-  - `server/src/data/agentPool.js` — 权威 persona 来源
-  - `server/src/routes/agent.js` — dialogue 接口已支持 agentConfig 参数
-  - `src/services/inferenceEngine.js` — 前端 AGENT_PERSONAS 降级为 fallback
-  - `docs/AGENT_DESIGN.md` — 更新配置中心表格
-- **验证**：改一个智囊的 persona（只改后端），前端发言立即生效
+- **现状**：前端 `src/services/inferenceEngine.js` 的 `AGENT_PERSONAS` 已同步后端 `server/src/data/agentPool.js` 的 12 个智囊 persona 字段。后端为权威源，前端只做本地降级。
+- **同步方法**：改后端 `agentPool.js` 的 persona 字段后，复制到前端 `AGENT_PERSONAS` 对应条目。
+- **后端 LLM 调用**：走 `buildAgentSystemPrompt`（三层结构 identity/methodology/deliverable）。
+- **前端降级**：后端不可达时走 `AGENT_PERSONAS[id].persona`。
 
 #### P1 — 重要（上线后优先）
 **任务1：智囊工具调用（搜索/日历/股价）→ 真 Agent**

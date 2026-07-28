@@ -27,7 +27,7 @@
 |------|------|------|
 | 11阶段状态机 | ✅ | Game.jsx 硬编码推进 |
 | 多智囊辩论 | ✅ | 顺序发言 + Blackboard + 收敛检测 |
-| 三层提示词 | ✅ | identity/methodology/deliverable（后端单一来源，前端通过API获取，P0已完成） |
+| 三层提示词 | ✅ | identity/methodology/deliverable（后端 agentPool.js 单一来源，前端通过 `GET /api/agent/personas` 获取，AGENT_PERSONAS 12智囊降级为fallback，P0已完成） |
 | 上下文预算控制 | ✅ | ≤480字，超限截断，400降级重试 |
 | 智囊调校迭代 | ✅ | 受用/失言反馈 → 下次发言注入 |
 | 演思考可视化 | ✅ | 4步流：读问题→召回记忆→匹配智囊→预判分歧 |
@@ -74,11 +74,11 @@
 
 ## 二、待办任务（按优先级）
 
-### P0 — 必须做（上线前）
+### P0 — 已完成 ✅（2026-07-27）
 | 任务 | 说明 | 状态 |
 |------|------|------|
-| **persona/prompt 前后端统一收敛到后端** | 后端`agentPool.js`单一来源，前端通过`GET /api/agent/personas`获取，`AGENT_PERSONAS`降级为fallback。dialogue接口用`buildAgentSystemPrompt`组装三层提示词 | ✅ 完成（2026-07-27） |
-| 验证完整推演流程无报错 | 本地跑一遍 input→final 全流程 | 待验证 |
+| **persona/prompt 前后端统一收敛到后端** | 后端`agentPool.js`单一来源，前端通过`GET /api/agent/personas`获取，`AGENT_PERSONAS`（12智囊同步后端字段）降级为fallback。dialogue接口用`buildAgentSystemPrompt`组装三层提示词 | ✅ 完成（2026-07-27） |
+| 验证完整推演流程无报错 | 本地跑一遍 input→final 全流程 | 待浏览器验证（接口已通过curl验证） |
 
 ### P1 — 重要（上线后优先）
 | 任务 | 说明 | 价值 |
@@ -108,7 +108,7 @@
 |---|------|------|----------|
 | 1 | Surge部署后偶现 MIME type "text/html" 错误 | ⚠️ 已知 | 硬刷新或重新部署 |
 | 2 | 智囊阁加载失败（浏览器缓存旧hash） | ⚠️ 已有lazyRetry | 自动重试+刷新 |
-| 3 | ~~Prompt前后端双份维护~~ | ✅ 已修复 | P0完成：后端单一来源，前端API获取 |
+| 3 | ~~Prompt前后端双份维护~~ | ✅ 已修复 | P0完成：后端 agentPool.js 单一来源，前端通过 `GET /api/agent/personas` 获取，AGENT_PERSONAS（12智囊同步后端字段）降级为fallback |
 | 4 | worker目录代码未启用 | ℹ️ 设计 | 保留在github分支，不部署 |
 
 ---

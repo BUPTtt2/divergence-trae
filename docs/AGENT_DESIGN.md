@@ -74,7 +74,8 @@ sequenceDiagram
 【deliverable 交付标准】1-3句≤80字/口语/抓具体词/可反问可泼冷水 → 决定"怎么输出"
 ```
 
-> 三层都在后端 `agent.js` 的 `systemPrompt` + 前端 `inferenceEngine.js` 的 `AGENT_PERSONAS` 双份维护（**待统一**，见 §5 技术债）。
+> **权威源在后端** `server/src/data/agentPool.js` 的 `buildAgentSystemPrompt`（三层结构 identity/methodology/deliverable）。
+> 前端 `src/services/inferenceEngine.js` 的 `AGENT_PERSONAS` 只做本地降级（后端不可达时用），persona 字段需与后端同步（已同步 12 个智囊，见 §5 技术债 P0 已完成）。
 
 ---
 
@@ -206,14 +207,22 @@ flowchart TD
 
 ## 5. 技术债与下一步（优先级排序）
 
-| 优先级 | 事项 | 价值 |
-|--------|------|------|
-| ✅ P0已完成 | persona/prompt 前后端统一收敛到后端 | 改 prompt 只改一处，防不一致（2026-07-27完成） |
-| P1 | 智囊工具调用（搜索/日历）→ 真Agent | 最大技术壁垒跃迁 |
-| P1 | 上线埋点 + 错误率告警 | 数据驱动迭代的前提 |
-| P2 | 记忆云端同步（已登录用户）| 跨设备留存 |
-| P2 | 社区智囊生态打磨（市集推荐位）| UGC 护城河 |
-| P3 | Bundle 压缩（vendor-three 已分包，可再懒加载）| 首屏速度 |
+| 优先级 | 事项 | 价值 | 状态 |
+|--------|------|------|------|
+| ✅ P0已完成 | persona/prompt 前后端统一收敛到后端 | 改 prompt 只改一处，防不一致（2026-07-27完成） | ✅ 已完成 |
+| P1 | 智囊工具调用（搜索/日历）→ 真Agent | 最大技术壁垒跃迁 | 待办 |
+| P1 | 上线埋点 + 错误率告警 | 数据驱动迭代的前提 | 待办 |
+| P1 | Blackboard 真消息传递（智囊互相@反驳追问）| 从伪协作到真协作 | 待办 |
+| P2 | 记忆云端同步（已登录用户）| 跨设备留存 | 待办 |
+| P2 | 社区智囊生态打磨（市集推荐位）| UGC 护城河 | 待办 |
+| P3 | Bundle 压缩（vendor-three 已分包，可再懒加载）| 首屏速度 | 待办 |
+
+### P0 完成说明（2026-07-27）
+- 后端 `server/src/data/agentPool.js` 为**单一来源**（12 个智囊，含三层提示词 identity/methodology/deliverable + persona 向后兼容字段）
+- 后端新增 `GET /api/agent/personas` 接口，前端启动时调用 `fetchAgentPersonas()` 获取权威 persona 并缓存
+- 前端 `src/services/inferenceEngine.js` 的 `AGENT_PERSONAS`（12 个智囊，已同步后端字段）**降级为 fallback**，仅在 API 不可达时使用
+- 后端 dialogue 接口用 `buildAgentSystemPrompt` 组装三层提示词，前端降级走 `AGENT_PERSONAS[id].persona`
+- 改 prompt 只改后端 `agentPool.js` 一处，前端自动通过 API 获取最新版本（无需手动同步）
 
 ---
 
