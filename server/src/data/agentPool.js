@@ -383,11 +383,16 @@ export function buildAgentSystemPrompt(agent, teamAgents = []) {
 
   // 三层结构优先
   if (agent.identity && agent.methodology && agent.deliverable) {
+    // mention_protocol 段：@ 协议的输出格式与约束（始终注入，deliverable 之后）
+    const mentionProtocol = `\n\n<mention_protocol>\n协作增强：当其他智囊的观点有盲点、错误或可补充时，可用 <mention> 标签定向 @ 对方。\n输出格式：<mention to="agentId" type="rebuttal|support|question" snippet="≤20字被引用原文">你的追问/反驳</mention>\n- type: rebuttal=反驳, support=补充, question=追问\n- to: 填对方 agentId（如 fengyan/jingyuan 等）\n- snippet: 被引用的原文片段≤20字\n- 一条发言最多 1 个 mention，避免分散\n- 同一智囊最多被 @ 2 次，@ 链最多 3 跳\n- 被 @ 的智囊下一轮必须先回应 @，再发表自己观点\n- 不需要 @ 时不要强行 @，普通发言不要加 mention 标签\n</mention_protocol>`;
+
+    // 参与智囊列表：让 LLM 知道可以 @ 谁（仅当有队友时注入）
+    const others = teamAgents.filter(a => a.id !== agent.id);
     const teamMap = teamAgents.length > 0
-      ? `\n\n<team_map>\n本次推演参与的智囊：${teamAgents.map(a => `${a.name}（${a.stance}）`).join('、')}\n协作规则：可用 [反驳@镜渊] / [补充@钱谷] / [追问@用户] 三种消息\n</team_map>`
+      ? `\n\n<team_map>\n本次推演参与的智囊：${teamAgents.map(a => `${a.name}（${a.stance}）`).join('、')}\n</team_map>\n\n<available_agents>\n可 @ 的智囊：${others.map(a => `${a.id}(${a.name})`).join('、')}\n</available_agents>`
       : '';
 
-    return `<identity>\n${agent.identity}\n</identity>\n<methodology>\n${agent.methodology}\n</methodology>\n<deliverable>\n${agent.deliverable}\n</deliverable>${teamMap}`;
+    return `<identity>\n${agent.identity}\n</identity>\n<methodology>\n${agent.methodology}\n</methodology>\n<deliverable>\n${agent.deliverable}\n</deliverable>${mentionProtocol}${teamMap}`;
   }
 
   // 降级：用 persona

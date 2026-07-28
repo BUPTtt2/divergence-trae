@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 后端 API 封装模块
  * 统一管理所有后端接口调用，包含 SSE 流式处理
  *
@@ -279,8 +279,11 @@ export async function analyzeQuestion(question) {
  * @param {string} question - 用户问题
  * @param {Array|Object} previousDialogues - 之前 Agent 的对话，供当前 Agent 参考
  * @param {Function} onChunk - 每收到一段文字时的回调 (text) => void
+ * @param {Object} options - 额外参数（Blackboard mention 协议）
+ *   - pendingMentions: 该 Agent 待回应的 mention 列表 [{from, fromName, to, snippet, question, type, msgId}]
+ *   - availableAgents: 可被 @ 的智囊列表 [{id, name, stance}]
  */
-export async function streamAgentDialogue(agent, question, previousDialogues, onChunk) {
+export async function streamAgentDialogue(agent, question, previousDialogues, onChunk, options = {}) {
   const agentId = typeof agent === 'string' ? agent : agent.id;
   const dialoguesArray = Array.isArray(previousDialogues)
     ? previousDialogues
@@ -290,12 +293,20 @@ export async function streamAgentDialogue(agent, question, previousDialogues, on
   await injectAuthHeader(streamHeaders);
 
   const api = await getActiveApi();
-  
+
   const requestBody = {
     agentId,
     question,
     previousDialogues: dialoguesArray,
   };
+
+  // Blackboard mention 协议：传递待回应 mention 和可用智囊（Step 3 后端会注入 prompt）
+  if (Array.isArray(options.pendingMentions) && options.pendingMentions.length > 0) {
+    requestBody.pendingMentions = options.pendingMentions;
+  }
+  if (Array.isArray(options.availableAgents) && options.availableAgents.length > 0) {
+    requestBody.availableAgents = options.availableAgents;
+  }
   
   if (typeof agent === 'object' && agent !== null) {
     requestBody.agentConfig = {

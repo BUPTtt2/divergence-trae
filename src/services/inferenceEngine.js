@@ -8,6 +8,7 @@ import { detectQuestionType, getAgentsForQuestion, AGENT_MAP } from '../data/age
 import * as apiClient from './apiClient';
 import { API_BASE_URL } from './baseConfig.js';
 import { Blackboard } from './multiAgentFramework';
+import { parseMentions } from './mentionProtocol';
 import { formatFeedbackForPrompt } from './memoryStore';
 
 export const DEFAULT_CHOICES = [
@@ -574,8 +575,14 @@ function normalizeAgent(raw) {
 /**
  * 收集流式对话的完整文本（非流式用法）
  * 调用 apiClient.streamAgentDialogue，通过 onChunk 累积文本，返回完整结果
+ * @param {Object} agent - Agent 对象
+ * @param {string} question - 用户问题（含上下文）
+ * @param {Array|Object} previousDialogues - 前序 Agent 发言
+ * @param {Object} dialogueOptions - Blackboard mention 协议参数
+ *   - pendingMentions: 该 Agent 待回应的 mention 列表
+ *   - availableAgents: 可被 @ 的智囊列表
  */
-async function getFullAgentDialogue(agent, question, previousDialogues) {
+async function getFullAgentDialogue(agent, question, previousDialogues, dialogueOptions = {}) {
   // 智囊调校：把该 Agent 的历史反馈摘要附加到 question, 让 LLM 据此微调发言
   let enrichedQuestion = question;
   try {
@@ -586,20 +593,20 @@ async function getFullAgentDialogue(agent, question, previousDialogues) {
     }
   } catch (e) { /* 降级, 不影响主流程 */ }
   let full = '';
-  await apiClient.streamAgentDialogue(agent, enrichedQuestion, previousDialogues, (chunk) => {
-    full += chunk;
-  });
+  await apiClient.streamAgentDialogue(
+    agent, enrichedQuestion, previousDialogues, (chunk) => { full += chunk; }, dialogueOptions
+  );
   return full.trim();
 }
 
 /**
  * 带超时的单个 Agent 对话请求（10秒）
  */
-async function getAgentDialogueWithTimeout(agent, question, previousDialogues) {
+async function getAgentDialogueWithTimeout(agent, question, previousDialogues, dialogueOptions = {}) {
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error('单个 Agent 对话超时')), 20000)
   );
-  const dialoguePromise = getFullAgentDialogue(agent, question, previousDialogues);
+  const dialoguePromise = getFullAgentDialogue(agent, question, previousDialogues, dialogueOptions);
   return Promise.race([dialoguePromise, timeoutPromise]);
 }
 
@@ -667,24 +674,243 @@ function inferCollaboration(text, allAgents) {
   return { msgType, targetAgentId: null, targetName: null };
 }
 
+/**
+ * 文本指纹：取前 40 字按 2-gram 切分，返回 Set
+ * 用于快速判断两段文本是否表达相同观点
+ */
+function fingerprint(text) {
+  const s = (text || '').slice(0, 40);
+  const grams = new Set();
+  for (let i = 0; i < s.length - 1; i++) {
+    grams.add(s.slice(i, i + 2));
+  }
+  return grams;
+}
+
+/**
+ * 两个文本的 2-gram Jaccard 相似度（取交集 / 最大集合大小）
+ */
+function similarity(text1, text2) {
+  const g1 = fingerprint(text1);
+  const g2 = fingerprint(text2);
+  if (g1.size === 0 || g2.size === 0) return 0;
+  let intersect = 0;
+  for (const g of g1) if (g2.has(g)) intersect++;
+  return intersect / Math.max(g1.size, g2.size);
+}
+
+/**
+ * 判断被 @ 的 Agent 是否应该拒答（Step 5：拒绝回应逻辑）
+ * 三层规则判断（不调 LLM，LLM 自评兜底暂不实现）：
+ *   1. questionTypes 不匹配（仅对 question 类型 mention 生效）→ "视角不符"
+ *      注意：rebuttal/support 类型不拒（因为是回应，不是新问题）
+ *   2. 指纹重复（mention.question 与历史发言相似度 ≥ 0.7）→ "已说过类似观点"
+ *   3. 否则不拒
+ * @param {Object} mention - { from, fromName, to, snippet, question, type }
+ * @param {Object} agent - 被 @ 的智囊对象（含 questionTypes, name, id）
+ * @param {Array} agentHistory - 该智囊的历史发言列表 [{content, round}]
+ * @param {string} questionType - 当前问题类型
+ * @returns {{ refuse: boolean, reason: string|null }}
+ */
+function shouldRefuse(mention, agent, agentHistory, questionType) {
+  // 1. questionTypes 不匹配：mention.type 是 question 且 agent.questionTypes 不含 questionType
+  //    rebuttal/support 类型不拒（因为是回应，不是新问题）
+  if (
+    mention.type === 'question' &&
+    Array.isArray(agent.questionTypes) &&
+    agent.questionTypes.length > 0
+  ) {
+    if (!agent.questionTypes.includes(questionType)) {
+      return { refuse: true, reason: '视角不符' };
+    }
+  }
+
+  // 2. 指纹重复：mention.question 前 40 字指纹与 agentHistory 中某条 content 前 40 字相似度 ≥ 0.7
+  if (mention.question && Array.isArray(agentHistory) && agentHistory.length > 0) {
+    for (const h of agentHistory) {
+      const sim = similarity(mention.question, h.content);
+      if (sim >= 0.7) {
+        return { refuse: true, reason: '已说过类似观点' };
+      }
+    }
+  }
+
+  // 3. 否则不拒（LLM 自评兜底先不实现，规则判断足够）
+  return { refuse: false, reason: null };
+}
+
 export async function generateDialoguesForAgents(question, agents, questionType, onAgentComplete, onError, userContext, options = {}) {
   if (!agents || agents.length === 0) return { dialogues: {}, results: {}, errors: {} };
 
-  const { existingBlackboard, round = 1 } = options;
+  const { existingBlackboard, existingMentionQueue = [], round = 1 } = options;
   const nonMasterAgents = agents.filter(a => a.role !== 'master');
   const dialogues = {};
   const results = {};
   const errors = {};
 
   // 顺序辩论：每个 Agent 依次发言，后续 Agent 通过 Blackboard 订阅前面观点
-  // 多轮辩论时复用同一 blackboard，保留前序轮次上下文
+  // 多轮辩论时复用同一 blackboard + mentionQueue，保留前序轮次上下文与待回应 @
   const blackboard = existingBlackboard || new Blackboard();
-  for (let i = 0; i < nonMasterAgents.length; i++) {
-    const agent = nonMasterAgents[i];
+  // mentionQueue: 待回应的 mention 列表，跨轮次持久化（Step 4 升级）
+  // 条目结构: { from, fromName, to, snippet(≤20), question(≤60), type, msgId }
+  const mentionQueue = Array.isArray(existingMentionQueue) ? [...existingMentionQueue] : [];
+
+  // Step 5: 本轮已拒答的 Agent 集合，主循环跳过其发言（避免浪费 LLM 调用）
+  const refusedAgents = new Set();
+
+  // 预算控制工具
+  const MAX_Q = 480; // 留 20 字余量防边界
+  const clamp = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s);
+
+  // 内部辅助：用 parseMentions 解析发言，发布到 Blackboard 并维护 mentionQueue
+  // 返回 collaboration 对象（与旧 inferCollaboration 同 shape，向后兼容 onAgentComplete 回调）
+  const publishAndEnqueue = (agent, text, confidence) => {
+    // 用 parseMentions 解析 <mention> 标签（替代 inferCollaboration 主路径）
+    const { mentions, body } = parseMentions(text, nonMasterAgents);
+
+    let msgType = 'claim';
+    let targetAgentId = null;
+    let targetName = null;
+    let isMention = false;
+    let replyTo = undefined;
+    let replyToSnippet = undefined;
+
+    if (mentions.length > 0) {
+      // 取第一个 mention 作为 targetAgentId/msgType
+      const first = mentions[0];
+      // canMention 校验：超上限则降级为普通 claim（不加入 mentionQueue）
+      const check = blackboard.canMention(agent.id, first.to);
+      if (check.allowed) {
+        msgType = first.type || 'question';
+        targetAgentId = first.to;
+        const target = nonMasterAgents.find(a => a.id === first.to);
+        targetName = target?.name || first.to;
+        isMention = true;
+        // 任务规定：replyTo = mentions[0].to, replyToSnippet = mentions[0].snippet
+        replyTo = first.to;
+        replyToSnippet = (first.snippet || '').slice(0, 20);
+      } else {
+        // mention 被拒（总/单 Agent 上限），降级为普通 claim + inferCollaboration 兜底
+        console.warn(`[mention] ${agent.id} → ${first.to} 被拒 (${check.reason}), 降级为 claim`);
+        const inferred = inferCollaboration(text, nonMasterAgents);
+        msgType = inferred.msgType;
+        targetAgentId = inferred.targetAgentId;
+        targetName = inferred.targetName;
+      }
+    } else {
+      // 无 <mention> 标签：fallback 到 inferCollaboration 推断反驳/补充语义
+      const inferred = inferCollaboration(text, nonMasterAgents);
+      msgType = inferred.msgType;
+      targetAgentId = inferred.targetAgentId;
+      targetName = inferred.targetName;
+    }
+
+    const published = blackboard.publish({
+      agentId: agent.id,
+      role: agent.role || 'dynamic',
+      round,
+      content: body || text,
+      confidence,
+      references: [],
+      msgType,
+      targetAgentId,
+      isMention,
+      replyTo,
+      replyToSnippet,
+    });
+
+    // mention 入队 + 拒答判断（Step 5：拒绝回应逻辑）
+    // 拒答在 @ 发起时立即判断（A@B 时判断 B 是否拒答），B 本轮不再发言
+    if (isMention && mentions.length > 0) {
+      const first = mentions[0];
+      const mentionObj = {
+        from: agent.id,
+        fromName: agent.name,
+        to: first.to,
+        snippet: (first.snippet || '').slice(0, 20),
+        question: (first.question || '').slice(0, 60),
+        type: first.type || 'question',
+      };
+
+      // 找到被 @ 的智囊，判断是否拒答
+      const targetAgent = nonMasterAgents.find(a => a.id === first.to);
+      if (targetAgent) {
+        // 获取该智囊的历史发言（排除拒答消息，避免指纹干扰）
+        const agentHistory = blackboard.getByAgent(targetAgent.id)
+          .filter(msg => !msg.refusalReason)
+          .map(msg => ({ content: msg.content, round: msg.round }));
+        const refusal = shouldRefuse(mentionObj, targetAgent, agentHistory, questionType);
+        if (refusal.refuse) {
+          // 拒答：由被 @ 的智囊发布一条 refusal 消息，不加入 mentionQueue
+          blackboard.publish({
+            agentId: targetAgent.id,
+            role: targetAgent.role || 'dynamic',
+            round,
+            content: `拒答：${refusal.reason}`,
+            confidence: 0.3,
+            msgType: 'refusal',
+            targetAgentId: agent.id,
+            refusalReason: refusal.reason,
+            refusedMentionId: published.id,
+            isMention: false,
+          });
+          // 标记该智囊本轮已拒答，主循环跳过其发言
+          refusedAgents.add(targetAgent.id);
+          console.log(`[refusal] ${targetAgent.name} 拒答 ${agent.name} 的 @：${refusal.reason}`);
+          return { msgType, targetAgentId, targetName };
+        }
+      }
+
+      // 正常入队（snippet≤20, question≤60，控制上下文预算 ≤80字）
+      mentionQueue.push({
+        ...mentionObj,
+        msgId: published.id,
+      });
+    }
+
+    return { msgType, targetAgentId, targetName };
+  };
+
+  // turnOrder: 可重排的发言顺序副本（mentionQueue 驱动被 @ Agent 提前）
+  const turnOrder = [...nonMasterAgents];
+  for (let i = 0; i < turnOrder.length; i++) {
+    // turnOrder 调整：剩余 Agent 中若有人待回应 mention，提前到当前位置
+    for (let j = i + 1; j < turnOrder.length; j++) {
+      if (mentionQueue.some(m => m.to === turnOrder[j].id)) {
+        if (j !== i) {
+          [turnOrder[i], turnOrder[j]] = [turnOrder[j], turnOrder[i]];
+        }
+        break;
+      }
+    }
+    const agent = turnOrder[i];
+    // Step 5: 已拒答的智囊本轮不再发言（避免浪费 LLM 调用）
+    if (refusedAgents.has(agent.id)) {
+      console.log(`[refusal] ${agent.name} 本轮已拒答，跳过发言`);
+      continue;
+    }
     let text = '';
     let apiSuccess = false;
     let errorInfo = null;
     let source = 'preset';
+
+    // 该 Agent 待回应的 mention 列表（传给后端 dialogue 接口注入 prompt）
+    const pendingMentions = mentionQueue
+      .filter(m => m.to === agent.id)
+      .map(m => ({
+        from: m.from, fromName: m.fromName, to: m.to,
+        snippet: m.snippet, question: m.question, type: m.type, msgId: m.msgId,
+      }));
+
+    // 可被 @ 的智囊列表（排除自己，供 LLM 选择 mention 目标）
+    const availableAgents = nonMasterAgents
+      .filter(a => a.id !== agent.id)
+      .map(a => ({ id: a.id, name: a.name, stance: a.stance || a.perspective }));
+
+    // 传给 dialogue 接口的 Blackboard mention 协议参数
+    const dialogueOptions = {};
+    if (pendingMentions.length > 0) dialogueOptions.pendingMentions = pendingMentions;
+    if (availableAgents.length > 0) dialogueOptions.availableAgents = availableAgents;
 
     // 构建前面 Agent 的发言摘要，供当前 Agent 参考（保留原格式以兼容后端 API）
     const previousDialogues = Object.entries(dialogues).map(([aid, dText]) => {
@@ -699,8 +925,6 @@ export async function generateDialoguesForAgents(question, agents, questionType,
     // 构建完整的问题上下文（包含用户回答和前面 Agent 的发言）
     // 预算控制：后端 /api/agent/dialogue 限制 question ≤ 500 字。
     // 策略：原始问题保底完整；上下文按优先级截断压缩（辩论摘要 > 用户补充 > 反馈 > 黑板）。
-    const MAX_Q = 480; // 留 20 字余量防边界
-    const clamp = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s);
     // 前面智囊观点逐条截断，控制总膨胀
     const prevBrief = previousDialogues.map(d => clamp(d, 90));
 
@@ -738,22 +962,11 @@ export async function generateDialoguesForAgents(question, agents, questionType,
         try {
           // 将上下文注入到问题中
           const questionWithContext = contextStr ? `${question}${contextStr}` : question;
-          text = await getAgentDialogueWithTimeout(agent, questionWithContext, previousDialogues);
+          text = await getAgentDialogueWithTimeout(agent, questionWithContext, previousDialogues, dialogueOptions);
           if (text && text.length > 5) {
             dialogues[agent.id] = text;
-            // 推断协作关系（反驳/补充/同意/追问 + 目标 Agent）
-            const collaboration = inferCollaboration(text, nonMasterAgents);
-            // 发布到 Blackboard（供后续 Agent 结构化订阅 + 收敛检测）
-            blackboard.publish({
-              agentId: agent.id,
-              role: agent.role || 'dynamic',
-              round,
-              content: text,
-              confidence: 0.8,
-              references: [],
-              msgType: collaboration.msgType,
-              targetAgentId: collaboration.targetAgentId,
-            });
+            // 用 parseMentions 解析 mention 标签 + 发布到 Blackboard + 维护 mentionQueue
+            const collaboration = publishAndEnqueue(agent, text, 0.8);
             apiSuccess = true;
             source = 'llm';
             results[agent.id] = { text, success: true, error: null, source, collaboration };
@@ -767,15 +980,10 @@ export async function generateDialoguesForAgents(question, agents, questionType,
           if (/问题过长|500/.test(e.message || '') && contextStr) {
             try {
               console.warn(`[发言] Agent ${agent.id} 上下文超限, 降级为纯问题重试`);
-              text = await getAgentDialogueWithTimeout(agent, question, previousDialogues);
+              text = await getAgentDialogueWithTimeout(agent, question, previousDialogues, dialogueOptions);
               if (text && text.length > 5) {
                 dialogues[agent.id] = text;
-                const collaboration = inferCollaboration(text, nonMasterAgents);
-                blackboard.publish({
-                  agentId: agent.id, role: agent.role || 'dynamic', round,
-                  content: text, confidence: 0.8, references: [],
-                  msgType: collaboration.msgType, targetAgentId: collaboration.targetAgentId,
-                });
+                const collaboration = publishAndEnqueue(agent, text, 0.8);
                 apiSuccess = true;
                 source = 'llm';
                 results[agent.id] = { text, success: true, error: null, source, collaboration };
@@ -794,19 +1002,8 @@ export async function generateDialoguesForAgents(question, agents, questionType,
       const localText = selectSmartDialogue(agent.id, question, questionType, agent, previousDialogues);
       text = localText;
       dialogues[agent.id] = localText;
-      // 推断协作关系（降级发言同样分析）
-      const collaboration = inferCollaboration(localText, nonMasterAgents);
-      // 降级发言也发布到 Blackboard（confidence 较低，标记来源）
-      blackboard.publish({
-        agentId: agent.id,
-        role: agent.role || 'dynamic',
-        round,
-        content: localText,
-        confidence: 0.6,
-        references: [],
-        msgType: collaboration.msgType,
-        targetAgentId: collaboration.targetAgentId,
-      });
+      // 降级发言同样用 parseMentions 解析（confidence 较低，标记来源）
+      const collaboration = publishAndEnqueue(agent, localText, 0.6);
       source = 'preset';
       errors[agent.id] = {
         agentName: agent.name,
@@ -816,13 +1013,18 @@ export async function generateDialoguesForAgents(question, agents, questionType,
       results[agent.id] = { text, success: apiSuccess, error: errorInfo, source, collaboration };
       if (onAgentComplete) onAgentComplete(agent.id, text, apiSuccess, errorInfo, source, collaboration);
     }
+
+    // 消费待回应 mention：该 Agent 已发言，移除其 pendingMentions（避免下轮重复注入）
+    for (let k = mentionQueue.length - 1; k >= 0; k--) {
+      if (mentionQueue[k].to === agent.id) mentionQueue.splice(k, 1);
+    }
   }
-  
+
   if (onError && Object.keys(errors).length > 0) {
     onError(errors);
   }
-  
-  return { dialogues, results, errors, blackboard };
+
+  return { dialogues, results, errors, blackboard, mentionQueue };
 }
 
 /* ============================================================

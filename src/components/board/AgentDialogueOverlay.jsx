@@ -5,13 +5,120 @@ import { getCustomAgents, saveCustomAgent, generateCustomAgent, validateAgentNam
 import { recallRelevantMemories } from '../../services/memoryStore';
 import { detectQuestionType, getAgentsForQuestion } from '../../data/agents';
 
+/* ============================================================
+   Step 6: Mention 标签可视化辅助
+   - preprocessMentionsInText: 把 LLM 输出的 <mention> XML 标签
+     转换为可见短文本 `内容 →@风眼`（保留打字机效果）
+   - renderTextWithMentions: 把 →@风眼 部分用朱砂红 span 包裹
+   - 降级格式 @agentName 也走同样样式
+============================================================ */
+
+// 智囊 id -> name 兜底映射（allAgents 缺失时用）
+const FALLBACK_ID_TO_NAME = {
+  qiangu: '钱谷', fengyan: '风眼', luxiang: '路向', xinhe: '心禾',
+  jingyuan: '镜渊', yuntu: '云图', zhenxing: '震行', duiyan: '兑言',
+  falv: '法度', jiankang: '养生', jiaoyu: '师道', jishu: '匠心',
+};
+
+/**
+ * 把 LLM 输出的 <mention> XML 标签转换为可见短文本
+ * 保留 mention 内容，附加 `→@agentName` 标记
+ * 降级 @agentName 不变（已自然显示）
+ */
+function preprocessMentionsInText(text, agents) {
+  if (!text || typeof text !== 'string') return text || '';
+
+  // 构建 id -> name 映射
+  const idToName = { ...FALLBACK_ID_TO_NAME };
+  if (Array.isArray(agents)) {
+    for (const a of agents) {
+      if (a && a.id && a.name) idToName[a.id] = a.name;
+    }
+  }
+
+  let processed = text;
+  // 1. 严格 XML：<mention to="agentId" type="..." snippet="...">内容</mention>
+  processed = processed.replace(
+    /<mention\s+to="([^"]+)"\s+type="([^"]+)"\s+snippet="([^"]*)"\s*>([^<]+)<\/mention>/g,
+    (full, to, type, snippet, content) => {
+      const name = idToName[to] || to;
+      return `${content.trim()} →@${name}`;
+    }
+  );
+  // 2. 宽松 XML：<mention to="...">内容</mention>
+  processed = processed.replace(
+    /<mention\s+[^>]*to="([^"]+)"[^>]*>([^<]+)<\/mention>/g,
+    (full, to, content) => {
+      const name = idToName[to] || to;
+      return `${content.trim()} →@${name}`;
+    }
+  );
+  // 3. 闭合 <mention .../> 标签（无内容）也清掉，避免显示原文
+  processed = processed.replace(/<mention[^>]*\/>/g, '');
+
+  return processed;
+}
+
+/**
+ * 把字符串渲染为 React 节点，把 →@agentName 部分用朱砂红 span 包裹
+ * 同时处理降级的 @agentName 格式
+ */
+function renderTextWithMentions(str, agents) {
+  if (!str) return str;
+  // 构建 name 集合（用于匹配降级 @name）
+  const nameSet = new Set(Object.values(FALLBACK_ID_TO_NAME));
+  if (Array.isArray(agents)) {
+    for (const a of agents) {
+      if (a && a.name) nameSet.add(a.name);
+    }
+  }
+  const names = Array.from(nameSet).sort((a, b) => b.length - a.length); // 长名优先匹配
+
+  // 匹配 →@agentName 或 @agentName
+  const pattern = new RegExp(`→@([\\u4e00-\\u9fa5]{2,4})|@(${names.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g');
+
+  const parts = [];
+  let lastIdx = 0;
+  let m;
+  let key = 0;
+  while ((m = pattern.exec(str)) !== null) {
+    if (m.index > lastIdx) {
+      parts.push(<span key={key++}>{str.slice(lastIdx, m.index)}</span>);
+    }
+    const targetName = m[1] || m[2];
+    parts.push(
+      <span
+        key={key++}
+        style={{
+          color: '#A84848',
+          textDecoration: 'underline',
+          textDecorationStyle: 'dotted',
+          fontSize: '0.88em',
+          marginLeft: '2px',
+          marginRight: '1px',
+          cursor: 'help',
+          textShadow: '0 0 4px rgba(168,72,72,0.4)',
+        }}
+        title={`反驳/补充/追问 → ${targetName}`}
+      >
+        {m[0]}
+      </span>
+    );
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < str.length) {
+    parts.push(<span key={key++}>{str.slice(lastIdx)}</span>);
+  }
+  return parts.length > 0 ? parts : str;
+}
+
 /**
  * Agent / 演 对话浮层
  * - agent_debate 阶段显示当前发言的 Agent
  * - summary / path_reveal 阶段显示演 的总结
  * - 无框、居中、字距宽松，带打字机效果
  */
-export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, activeAgents, agentDialogues, selectedAgentIds, onAgentToggle, onConfirmAgents, awaitingUser, currentResponse, setCurrentResponse, onUserAdvance, agentCallResults, onFeedback, debateConvergence }) {
+export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, activeAgents, agentDialogues, selectedAgentIds, onAgentToggle, onConfirmAgents, awaitingUser, currentResponse, setCurrentResponse, onUserAdvance, agentCallResults, onFeedback, debateConvergence, mentions }) {
   const [customAgents, setCustomAgents] = useState([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newAgentName, setNewAgentName] = useState('');
@@ -349,8 +456,15 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
     if (isDivergent && collaboration?.msgType !== 'support') {
       stanceStrength = Math.min(3, stanceStrength + 1);
     }
+    // Step 6: 拒答消息检测 — 从 mentions 中找当前 agent 的拒答消息，
+    // 或发言文本含「拒答：」字样（向后兼容 Step 5 拒答格式）
+    const currentMention = Array.isArray(mentions)
+      ? mentions.find(m => m && m.agentId === agent.id)
+      : null;
+    const isRefusal = !!(currentMention?.refusalReason) ||
+      (typeof dialogue === 'string' && dialogue.includes('拒答：'));
     return (
-      <DialogueFrame key={'debate-' + activeAgentIdx} color={color} name={agent.name} stance={agent.stance} progress={`${activeAgentIdx + 1} / ${agents.length}`} stanceStrength={stanceStrength}>
+      <DialogueFrame key={'debate-' + activeAgentIdx} color={color} name={agent.name} stance={agent.stance} progress={`${activeAgentIdx + 1} / ${agents.length}`} stanceStrength={stanceStrength} refused={isRefusal}>
         {collabInfo && (
           <motion.div
             initial={{ opacity: 0, y: -6 }}
@@ -374,7 +488,30 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
             {collabInfo.label} · {collaboration.targetName}
           </motion.div>
         )}
-        <TypewriterText text={dialogue} agentColor={color} />
+        {isRefusal && currentMention?.refusalReason && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '3px 12px',
+              marginBottom: '10px',
+              background: '#6b72801A',
+              border: '1px dashed #6b7280',
+              borderRadius: '12px',
+              color: '#9CA3AF',
+              fontSize: '11px',
+              letterSpacing: '0.15em',
+              fontFamily: '"Ma Shan Zheng", serif',
+            }}
+          >
+            拒答 · {currentMention.refusalReason}
+          </motion.div>
+        )}
+        <TypewriterText text={dialogue} agentColor={color} agents={agents} />
         {/* 智囊调校：反馈 chip（受用/失言 → 存入 memoryStore，下次发言注入） */}
         <div style={{ display: 'flex', gap: '10px', marginTop: '14px', justifyContent: 'center' }}>
           {[
@@ -576,13 +713,13 @@ function UserResponseInput({ value, onChange, onSubmit, placeholder, subtle = fa
    对话外框 - 名字 + 立场 + 进度 + 正文
    增强:水墨晕染背景 + 微浮动 + 墨滴粒子 + 名字滴入
 ============================================================ */
-function DialogueFrame({ color, name, stance, progress, stanceStrength = 0, showAiLabel = true, children }) {
+function DialogueFrame({ color, name, stance, progress, stanceStrength = 0, showAiLabel = true, refused = false, children }) {
   return (
     <AnimatePresence mode="wait">
       <motion.div
         initial={{ opacity: 0, y: 14, scale: 0.98 }}
         animate={{
-          opacity: 1,
+          opacity: refused ? 0.5 : 1,
           y: [0, -4, 0],  // 缓慢呼吸
           scale: 1,
         }}
@@ -603,6 +740,20 @@ function DialogueFrame({ color, name, stance, progress, stanceStrength = 0, show
           pointerEvents: 'none',
         }}
       >
+        {/* Step 6: 拒答消息虚线灰阶边框 - 覆盖在内容外，不破坏水墨布局 */}
+        {refused && (
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              inset: '-16px -20px',
+              border: '1px dashed #6b7280',
+              borderRadius: '6px',
+              pointerEvents: 'none',
+              zIndex: 0,
+            }}
+          />
+        )}
         {/* 水墨晕染背景层 */}
         <div
           aria-hidden
@@ -810,12 +961,20 @@ function DialogueFrame({ color, name, stance, progress, stanceStrength = 0, show
 
 /* ============================================================
    打字机效果 - 字符逐字显示
+   Step 6: 支持 <mention> 标签渲染（朱砂红下划线 + tooltip）
 ============================================================ */
-function TypewriterText({ text, agentColor }) {
+function TypewriterText({ text, agentColor, agents }) {
   const [displayed, setDisplayed] = useState('');
   const [done, setDone] = useState(false);
   const startTimeRef = useRef(null);
   const rafRef = useRef(null);
+
+  // Step 6: 预处理 <mention> XML 标签 → 可见短文本 `内容 →@风眼`
+  // 不破坏打字机效果，渲染时再高亮 →@风眼 部分
+  const processedText = useMemo(
+    () => preprocessMentionsInText(text, agents),
+    [text, agents]
+  );
 
   // 重新开始
   useEffect(() => {
@@ -823,11 +982,11 @@ function TypewriterText({ text, agentColor }) {
     setDone(false);
     startTimeRef.current = null;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  }, [text]);
+  }, [processedText]);
 
   useEffect(() => {
     const speed = 70; // ms per char
-    const total = text.length;
+    const total = processedText.length;
     let mounted = true;
 
     const tick = (now) => {
@@ -835,7 +994,7 @@ function TypewriterText({ text, agentColor }) {
       if (startTimeRef.current === null) startTimeRef.current = now;
       const elapsed = now - startTimeRef.current;
       const charsToShow = Math.min(total, Math.floor(elapsed / speed));
-      setDisplayed(text.slice(0, charsToShow));
+      setDisplayed(processedText.slice(0, charsToShow));
       if (charsToShow < total) {
         rafRef.current = requestAnimationFrame(tick);
       } else {
@@ -848,7 +1007,7 @@ function TypewriterText({ text, agentColor }) {
       mounted = false;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [text]);
+  }, [processedText]);
 
   return (
     <div
@@ -867,7 +1026,7 @@ function TypewriterText({ text, agentColor }) {
         minHeight: '4.4em',
       }}
     >
-      {displayed}
+      {renderTextWithMentions(displayed, agents)}
       {!done && (
         <motion.span
           animate={{ opacity: [1, 0, 1] }}

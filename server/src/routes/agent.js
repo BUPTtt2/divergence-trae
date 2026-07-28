@@ -100,7 +100,7 @@ router.post(
   optionalAuth,
   llmRateLimit,
   asyncHandler(async (req, res) => {
-    const { agentId, question, previousDialogues = [], agentConfig } = req.body;
+    const { agentId, question, previousDialogues = [], agentConfig, pendingMentions, availableAgents } = req.body;
     const userId = req.userId;
 
     if (!agentId || !question) {
@@ -145,7 +145,28 @@ router.post(
 
     // 使用 buildAgentSystemPrompt 组装三层提示词（identity/methodology/deliverable）
     // 三层结构的 deliverable 已包含交付标准（≤80字/口语/抓具体词等），无需重复
-    const systemPrompt = buildAgentSystemPrompt(agent);
+    // 组装参与智囊列表（供 systemPrompt 的 <team_map>/<available_agents> 用，让 LLM 知道可以 @ 谁）
+    let teamAgents = [];
+    if (Array.isArray(availableAgents) && availableAgents.length > 0) {
+      teamAgents = availableAgents.map(a => {
+        const id = a.id || a.agentId;
+        const poolAgent = AGENT_POOL_MAP[id];
+        return { id, name: a.name || poolAgent?.name || id, stance: a.stance || poolAgent?.stance || '智囊' };
+      });
+    } else if (Array.isArray(previousDialogues) && previousDialogues.length > 0) {
+      const seen = new Set();
+      for (const d of previousDialogues) {
+        const id = d.agentId;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const poolAgent = AGENT_POOL_MAP[id];
+        teamAgents.push({ id, name: d.name || poolAgent?.name || id, stance: poolAgent?.stance || '智囊' });
+      }
+    }
+    if (!teamAgents.some(a => a.id === agentId)) {
+      teamAgents.push({ id: agentId, name: agent.name, stance: agent.stance });
+    }
+    const systemPrompt = buildAgentSystemPrompt(agent, teamAgents);
 
     let contextText = '';
     if (Array.isArray(previousDialogues) && previousDialogues.length > 0) {
@@ -158,7 +179,24 @@ router.post(
           .join('\n');
     }
 
-    const userPrompt = `用户问：「${question}」${contextText}
+    // 待回应 mention 注入（来自上一轮其他智囊对本 Agent 的 @，需在 userPrompt 最前面提示）
+    const MENTION_TYPE_ZH = { rebuttal: '反驳', support: '补充', question: '追问' };
+    let mentionPrefix = '';
+    if (Array.isArray(pendingMentions) && pendingMentions.length > 0) {
+      const myMentions = pendingMentions.filter(m => m && m.to === agentId);
+      if (myMentions.length > 0) {
+        const blocks = myMentions.map(m => {
+          const typeZh = MENTION_TYPE_ZH[m.type] || '追问';
+          const fromName = m.fromName || AGENT_POOL_MAP[m.from]?.name || m.from || '某智囊';
+          const snippet = m.snippet || '';
+          const q = m.question || '';
+          return `【待回应】${fromName} @ 你（${typeZh}）：${snippet}\n${q}`;
+        });
+        mentionPrefix = blocks.join('\n') + '\n请先回应上述 @，再发表你的观点。\n\n';
+      }
+    }
+
+    const userPrompt = `${mentionPrefix}用户问：「${question}」${contextText}
 
 请以 ${agent.name}（${agent.stance}）的身份，说 1-3 句话回应。不要复述用户问题。`;
 

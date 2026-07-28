@@ -55,6 +55,8 @@ export default function Game() {
   const [debateRound, setDebateRound] = useState(1);
   const [debateConvergence, setDebateConvergence] = useState(null);
   const debateBlackboardRef = useRef(null);
+  // Step 6: 持久化 mentionQueue — 跨轮次保留待回应 @ 列表
+  const debateMentionQueueRef = useRef([]);
   const [showAgentErrorModal, setShowAgentErrorModal] = useState(false);
   const [agentErrors, setAgentErrors] = useState({});
   const [yanMemories, setYanMemories] = useState([]);
@@ -115,6 +117,7 @@ export default function Game() {
     setDebateRound(1);
     setDebateConvergence(null);
     debateBlackboardRef.current = null;
+    debateMentionQueueRef.current = [];
   }, [clearTimers]);
 
   const handleStart = useCallback(async () => {
@@ -460,6 +463,8 @@ export default function Game() {
     // D3 收敛检测 - 决定是否提示用户「再辩一轮」
     if (result.blackboard) {
       debateBlackboardRef.current = result.blackboard;
+      // Step 6: 持久化 mentionQueue，供多轮辩论复用
+      debateMentionQueueRef.current = result.mentionQueue || [];
       const convergence = detectConvergenceFromBlackboard(result.blackboard, { currentRound: 1 });
       setDebateRound(1);
       setDebateConvergence(convergence);
@@ -499,6 +504,7 @@ export default function Game() {
     const newDialogues = {};
     const callResults = {};
     const existingBlackboard = debateBlackboardRef.current;
+    const existingMentionQueue = debateMentionQueueRef.current;
 
     const onAgentComplete = (agentId, text, success, error, source, collaboration) => {
       newDialogues[agentId] = text;
@@ -508,12 +514,14 @@ export default function Game() {
 
     const result = await generateDialoguesForAgents(
       question, selected, qType, onAgentComplete, undefined, inference.userContext,
-      { existingBlackboard, round: nextRound }
+      { existingBlackboard, existingMentionQueue, round: nextRound }
     );
     setAgentCallResults(prev => ({ ...prev, ...callResults }));
 
     if (result.blackboard) {
       debateBlackboardRef.current = result.blackboard;
+      // Step 6: 跨轮次持久化 mentionQueue
+      debateMentionQueueRef.current = result.mentionQueue || [];
       const convergence = detectConvergenceFromBlackboard(result.blackboard, { currentRound: nextRound });
       setDebateRound(nextRound);
       setDebateConvergence(convergence);
@@ -843,6 +851,14 @@ export default function Game() {
     return Object.values(h).reduce((sum, arr) => sum + arr.length, 0);
   }, [agentDialogues]);
 
+  // Step 6: 从 blackboard 提取 mention 消息（isMention 或 refusalReason），传给 overlay 做可视化
+  // 依赖 debateRound/phase/agentDialogues 触发重算（blackboard 是 ref，需要靠 state 变化驱动）
+  const mentionMessages = useMemo(() => {
+    const msgs = debateBlackboardRef.current?.messages;
+    if (!Array.isArray(msgs)) return [];
+    return msgs.filter(m => m && (m.isMention || m.refusalReason));
+  }, [debateRound, phase, agentDialogues]);
+
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: '#1A1410' }}>
       <div className="flex-1 min-h-0 overflow-hidden relative">
@@ -962,6 +978,7 @@ export default function Game() {
             saveAgentFeedback(agentId, feedbackType, userInput, dialogue);
           }}
           debateConvergence={debateConvergence}
+          mentions={mentionMessages}
         />
 
         {/* D3 收敛状态徽标 */}

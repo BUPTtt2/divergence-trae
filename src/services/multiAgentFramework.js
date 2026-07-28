@@ -60,14 +60,25 @@ class AgentMemory {
  * Blackboard - 共享黑板（消息总线）
  * 借鉴 MetaGPT 的 Environment 模式：Agent 通过 publish 发布结构化消息，通过 observe 订阅
  *
- * 消息结构：{ id, agentId, role, round, content, confidence, references:[msgId], msgType, targetAgentId?, timestamp }
+ * 消息结构：{ id, agentId, role, round, content, confidence, references:[msgId], msgType, targetAgentId?, timestamp,
+ *   replyTo?, replyToSnippet?, mentionChain?, refusalReason?, refusedMentionId?, isMention? }
  * msgType: claim(表态) / rebuttal(反驳) / support(补充) / question(追问) / verdict(裁决)
+ *
+ * mention 协议扩展字段（全部可选，向后兼容）：
+ *   replyTo?: string           - 被回应的 msgId（指向 mention 或被 mention 的发言）
+ *   replyToSnippet?: string    - 被引用原文片段 ≤20字（用于 UI tooltip）
+ *   mentionChain?: string[]    - msgId 链，根 → 当前
+ *   refusalReason?: string     - 拒答原因
+ *   refusedMentionId?: string  - 拒答指向的 mention msgId
+ *   isMention?: boolean        - 是否为 mention 消息（@ 消息本体）
  */
 class Blackboard {
   constructor() {
     this.messages = [];
     this.byType = new Map();      // 按 msgType 索引
     this.byAgent = new Map();     // 按 agentId 索引
+    this.mentionCount = 0;        // 总 mention 数
+    this.agentMentionCount = new Map();  // 每个 Agent 被收到的 mention 数
   }
 
   /**
@@ -84,6 +95,13 @@ class Blackboard {
     if (typeof msg.confidence !== 'number') msg.confidence = 0.7;
     if (!Array.isArray(msg.references)) msg.references = [];
 
+    // mention 协议扩展字段补全（未传则默认 undefined，保持向后兼容）
+    // replyTo / replyToSnippet / mentionChain / refusalReason / refusedMentionId / isMention
+    // 这些字段不强制补全，仅在显式传入时生效；只保证 mentionChain 为数组时的健壮性
+    if (msg.mentionChain != null && !Array.isArray(msg.mentionChain)) {
+      msg.mentionChain = undefined;
+    }
+
     this.messages.push(msg);
 
     // 更新索引
@@ -92,6 +110,15 @@ class Blackboard {
 
     if (!this.byAgent.has(msg.agentId)) this.byAgent.set(msg.agentId, []);
     this.byAgent.get(msg.agentId).push(msg);
+
+    // mention 计数器：仅在 isMention === true 且 targetAgentId 存在时累加
+    if (msg.isMention === true && msg.targetAgentId) {
+      this.mentionCount += 1;
+      this.agentMentionCount.set(
+        msg.targetAgentId,
+        (this.agentMentionCount.get(msg.targetAgentId) || 0) + 1
+      );
+    }
 
     return msg;
   }
@@ -123,6 +150,77 @@ class Blackboard {
   }
 
   /**
+   * 获取某 Agent 待回应的 mention 上下文窗口
+   * 用于被 @ Agent 下一轮发言时注入的聚焦上下文（≤3 条：前 1 + mention 本体 + 后 1）
+   * @param {string} agentId - 被 @ 的 Agent ID
+   * @returns {Array<{mention: object, beforeContext: object|null, afterContext: object|null}>}
+   *   每条 mention 配同轮次的前一条与后一条消息作为 context
+   */
+  getMentionContext(agentId) {
+    // 找出所有 targetAgentId === agentId 且 isMention === true 的消息
+    const mentions = this.messages.filter(
+      m => m.targetAgentId === agentId && m.isMention === true
+    );
+
+    return mentions.map(mention => {
+      const idx = this.messages.indexOf(mention);
+
+      // 前一条同轮次的消息
+      let beforeContext = null;
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        if (this.messages[i].round === mention.round) {
+          beforeContext = this.messages[i];
+          break;
+        }
+      }
+
+      // 后一条同轮次的消息
+      let afterContext = null;
+      for (let i = idx + 1; i < this.messages.length; i += 1) {
+        if (this.messages[i].round === mention.round) {
+          afterContext = this.messages[i];
+          break;
+        }
+      }
+
+      return { mention, beforeContext, afterContext };
+    });
+  }
+
+  /**
+   * @ 链上限校验：判断 fromAgentId 是否还能 @ toAgentId
+   * 规则（见设计文档 2.4）：
+   *   - 总 mention 数硬上限 = 活跃 Agent 数 × 2（用 byAgent.size 近似）
+   *   - 单 Agent 被连续 @ 上限 2 次
+   * @param {string} fromAgentId - 发起 @ 的 Agent ID
+   * @param {string} toAgentId - 被 @ 的 Agent ID
+   * @returns {{allowed: boolean, reason: string}}
+   */
+  canMention(fromAgentId, toAgentId) {
+    const activeAgentCount = this.byAgent.size;
+    const totalCap = activeAgentCount * 2;
+
+    // 总 mention 数硬上限
+    if (this.mentionCount >= totalCap) {
+      return {
+        allowed: false,
+        reason: `mention_total_cap_reached (${this.mentionCount}/${totalCap})`,
+      };
+    }
+
+    // 单 Agent 被连续 @ 上限 2 次
+    const toCount = this.agentMentionCount.get(toAgentId) || 0;
+    if (toCount >= 2) {
+      return {
+        allowed: false,
+        reason: `agent_mention_cap_reached (${toAgentId}: ${toCount}/2)`,
+      };
+    }
+
+    return { allowed: true, reason: 'ok' };
+  }
+
+  /**
    * 获取最近 N 条消息
    */
   getRecent(count = 10) {
@@ -143,6 +241,7 @@ class Blackboard {
 
   /**
    * 格式化消息为 LLM 可读的上下文文本
+   * 扩展：mention 消息渲染为 [追问→@X]，拒答消息渲染为 [拒答→@X]，普通 claim 保持原样
    */
   formatForPrompt(agentId, maxMessages = 8) {
     const observed = this.observe(agentId);
@@ -158,9 +257,21 @@ class Blackboard {
         verdict: '裁决',
       }[m.msgType] || m.msgType;
 
-      const targetLabel = m.targetAgentId ? `→@${m.targetAgentId}` : '';
       const refLabel = m.references?.length ? ` (回应了${m.references.length}条)` : '';
+      const agentDisplay = m.agentName || m.agentId;
 
+      // mention 消息：定向追问（@ 消息本体）
+      if (m.isMention) {
+        return `[追问→@${m.targetAgentId}] ${agentDisplay}（第${m.round}轮）: ${m.content}${refLabel}`;
+      }
+
+      // 拒答消息
+      if (m.refusalReason) {
+        return `[拒答→@${m.targetAgentId}] ${agentDisplay}: ${m.refusalReason}`;
+      }
+
+      // 普通 claim 保持原样
+      const targetLabel = m.targetAgentId ? `→@${m.targetAgentId}` : '';
       return `[${typeLabel}${targetLabel}] ${m.agentId}（第${m.round}轮）: ${m.content}${refLabel}`;
     }).join('\n');
   }
@@ -172,6 +283,8 @@ class Blackboard {
     this.messages = [];
     this.byType.clear();
     this.byAgent.clear();
+    this.mentionCount = 0;
+    this.agentMentionCount.clear();
   }
 }
 
