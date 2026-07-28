@@ -114,6 +114,40 @@ class Tracker {
   }
 
   /**
+   * 上报关键错误（同步 sendBeacon，页面崩溃也能发出去）
+   * @param {string} message - 错误消息
+   * @param {Object} extra - 额外信息 { stack, phase, ... }
+   */
+  trackError(message, extra = {}) {
+    if (this.disabled) return;
+    try {
+      const payload = JSON.stringify({
+        message: String(message).slice(0, 500),
+        stack: extra.stack ? String(extra.stack).slice(0, 1000) : undefined,
+        phase: extra.phase ? String(extra.phase) : undefined,
+        userId: this.userId,
+        sessionId: this.sessionId,
+      });
+      // 优先用 sendBeacon（页面卸载也能发出去）
+      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+        const blob = new Blob([payload], { type: 'application/json' });
+        const ok = navigator.sendBeacon(`${API_BASE_URL}/api/track/error`, blob);
+        if (ok) return;
+      }
+      // 降级 fetch
+      fetch(`${API_BASE_URL}/api/track/error`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true,
+      }).catch(() => { /* ignore */ });
+    } catch (e) {
+      // 埋点失败绝不影响主流程
+      console.warn('[tracker] trackError failed', e);
+    }
+  }
+
+  /**
    * 开启埋点（用户 opt-in）
    */
   enable() {

@@ -12,6 +12,7 @@ import FollowUpReminder from './components/FollowUpReminder';
 import YanChat from './components/YanChat';
 import AppNav from './components/AppNav';
 import { fetchAgentPersonas } from './services/inferenceEngine';
+import { tracker } from './services/tracker';
 
 /* lazy import 重试：浏览器缓存旧 chunk hash 时自动刷新 */
 function lazyRetry(fn, retries = 2) {
@@ -105,6 +106,10 @@ class ErrorBoundary extends Component {
     console.error('Component:', compStack);
     console.error('============================');
     this.setState({ errorStack: stack, componentStack: compStack });
+    // 上报错误到后端监控
+    try {
+      tracker.trackError(error?.message || 'Unknown error', { stack: `${stack}\n---Component---\n${compStack}` });
+    } catch { /* ignore */ }
   }
 
   render() {
