@@ -579,9 +579,10 @@ function normalizeAgent(raw) {
  * @param {Object} agent - Agent 对象
  * @param {string} question - 用户问题（含上下文）
  * @param {Array|Object} previousDialogues - 前序 Agent 发言
- * @param {Object} dialogueOptions - Blackboard mention 协议参数
+ * @param {Object} dialogueOptions - Blackboard mention 协议参数 + 工具回调
  *   - pendingMentions: 该 Agent 待回应的 mention 列表
  *   - availableAgents: 可被 @ 的智囊列表
+ *   - onToolStart/onToolCall/onToolResult: 工具调用 SSE 事件回调（Step 3）
  */
 async function getFullAgentDialogue(agent, question, previousDialogues, dialogueOptions = {}) {
   // 智囊调校：把该 Agent 的历史反馈摘要附加到 question, 让 LLM 据此微调发言
@@ -603,16 +604,20 @@ async function getFullAgentDialogue(agent, question, previousDialogues, dialogue
 /**
  * 带超时的单个 Agent 对话请求（10秒）
  * 含 LLM 调用埋点：llm_call（调用前）+ llm_result（调用后，含成功/失败/超时/耗时）
+ * @param {Object} toolCallbacks - 工具调用回调 { onToolStart, onToolCall, onToolResult }（Step 3）
  */
-async function getAgentDialogueWithTimeout(agent, question, previousDialogues, dialogueOptions = {}) {
+async function getAgentDialogueWithTimeout(agent, question, previousDialogues, dialogueOptions = {}, toolCallbacks = {}) {
   const agentId = agent?.id || 'unknown';
   const startTime = Date.now();
   try { tracker.track('llm_call', { agentId }); } catch (e) { /* ignore */ }
 
+  // 合并工具回调到 dialogueOptions（apiClient.streamAgentDialogue 从 options 解构）
+  const mergedOptions = { ...dialogueOptions, ...toolCallbacks };
+
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error('单个 Agent 对话超时')), 20000)
   );
-  const dialoguePromise = getFullAgentDialogue(agent, question, previousDialogues, dialogueOptions);
+  const dialoguePromise = getFullAgentDialogue(agent, question, previousDialogues, mergedOptions);
   try {
     const result = await Promise.race([dialoguePromise, timeoutPromise]);
     const duration = Date.now() - startTime;
@@ -772,7 +777,7 @@ function shouldRefuse(mention, agent, agentHistory, questionType) {
 export async function generateDialoguesForAgents(question, agents, questionType, onAgentComplete, onError, userContext, options = {}) {
   if (!agents || agents.length === 0) return { dialogues: {}, results: {}, errors: {} };
 
-  const { existingBlackboard, existingMentionQueue = [], round = 1 } = options;
+  const { existingBlackboard, existingMentionQueue = [], round = 1, toolCallbacks } = options;
   const nonMasterAgents = agents.filter(a => a.role !== 'master');
   const dialogues = {};
   const results = {};
@@ -987,12 +992,19 @@ export async function generateDialoguesForAgents(question, agents, questionType,
       let attempt = 0;
       const maxAttempts = 2;
 
+      // Step 3：包装工具回调，注入当前 agent.id（让组件层知道是哪个智囊在调工具）
+      const wrappedToolCallbacks = toolCallbacks ? {
+        onToolStart: (tools) => toolCallbacks.onToolStart?.(agent.id, tools),
+        onToolCall: (tool, params) => toolCallbacks.onToolCall?.(agent.id, tool, params),
+        onToolResult: (tool, summary, status) => toolCallbacks.onToolResult?.(agent.id, tool, summary, status),
+      } : {};
+
       while (attempt < maxAttempts) {
         attempt++;
         try {
           // 将上下文注入到问题中
           const questionWithContext = contextStr ? `${question}${contextStr}` : question;
-          text = await getAgentDialogueWithTimeout(agent, questionWithContext, previousDialogues, dialogueOptions);
+          text = await getAgentDialogueWithTimeout(agent, questionWithContext, previousDialogues, dialogueOptions, wrappedToolCallbacks);
           if (text && text.length > 5) {
             dialogues[agent.id] = text;
             // 用 parseMentions 解析 mention 标签 + 发布到 Blackboard + 维护 mentionQueue
@@ -1010,7 +1022,7 @@ export async function generateDialoguesForAgents(question, agents, questionType,
           if (/问题过长|500/.test(e.message || '') && contextStr) {
             try {
               console.warn(`[发言] Agent ${agent.id} 上下文超限, 降级为纯问题重试`);
-              text = await getAgentDialogueWithTimeout(agent, question, previousDialogues, dialogueOptions);
+              text = await getAgentDialogueWithTimeout(agent, question, previousDialogues, dialogueOptions, wrappedToolCallbacks);
               if (text && text.length > 5) {
                 dialogues[agent.id] = text;
                 const collaboration = publishAndEnqueue(agent, text, 0.8);

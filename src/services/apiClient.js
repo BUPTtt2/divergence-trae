@@ -279,9 +279,12 @@ export async function analyzeQuestion(question) {
  * @param {string} question - 用户问题
  * @param {Array|Object} previousDialogues - 之前 Agent 的对话，供当前 Agent 参考
  * @param {Function} onChunk - 每收到一段文字时的回调 (text) => void
- * @param {Object} options - 额外参数（Blackboard mention 协议）
+ * @param {Object} options - 额外参数（Blackboard mention 协议 + 工具调用回调）
  *   - pendingMentions: 该 Agent 待回应的 mention 列表 [{from, fromName, to, snippet, question, type, msgId}]
  *   - availableAgents: 可被 @ 的智囊列表 [{id, name, stance}]
+ *   - onToolStart: (tools:string[]) => void  收到 event:start 时触发
+ *   - onToolCall: (tool:string, params:object) => void  收到 event:tool_call 时触发
+ *   - onToolResult: (tool:string, summary:string, status:string) => void  收到 event:tool_result 时触发
  */
 export async function streamAgentDialogue(agent, question, previousDialogues, onChunk, options = {}) {
   const agentId = typeof agent === 'string' ? agent : agent.id;
@@ -343,10 +346,16 @@ export async function streamAgentDialogue(agent, question, previousDialogues, on
     return;
   }
 
+  // 工具调用回调（Step 3：SSE 事件扩展）
+  const { onToolStart, onToolCall, onToolResult } = options;
+
   let sseTimeout = null;
   const reader = resp.body.getReader();
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
+  // SSE 事件类型追踪：event: 行设置 currentEvent，data: 行据此分发
+  // 空行（事件块边界）重置 currentEvent。无 event 前缀的 data 视为普通内容流。
+  let currentEvent = null;
   const resetSSETimeout = () => {
     if (sseTimeout) clearTimeout(sseTimeout);
     sseTimeout = setTimeout(() => {
@@ -369,7 +378,22 @@ export async function streamAgentDialogue(agent, question, previousDialogues, on
         const line = buffer.slice(0, nlIdx).trim();
         buffer = buffer.slice(nlIdx + 1);
 
-        if (!line) continue;
+        // 空行 = SSE 事件块边界，重置 currentEvent
+        if (!line) {
+          currentEvent = null;
+          continue;
+        }
+
+        // event: 行 — 设置当前事件类型
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim();
+          // event:done 直接结束（后续 data 行无需处理）
+          if (currentEvent === 'done') {
+            if (sseTimeout) clearTimeout(sseTimeout);
+            return;
+          }
+          continue;
+        }
 
         if (line.startsWith('data:')) {
           const data = line.slice(5).trim();
@@ -380,10 +404,26 @@ export async function streamAgentDialogue(agent, question, previousDialogues, on
 
           try {
             const parsed = JSON.parse(data);
-            const text = parsed.content || parsed.text || parsed.delta || '';
-            if (text && onChunk) onChunk(text);
+
+            // 按事件类型分发（Step 3：工具调用事件）
+            if (currentEvent === 'start') {
+              if (onToolStart && Array.isArray(parsed.tools)) onToolStart(parsed.tools);
+            } else if (currentEvent === 'tool_call') {
+              if (onToolCall) onToolCall(parsed.tool, parsed.params || {});
+            } else if (currentEvent === 'tool_result') {
+              if (onToolResult) onToolResult(parsed.tool, parsed.summary, parsed.status);
+            } else if (currentEvent === 'fallback') {
+              // 降级事件：把 fallback 文本作为内容流送入打字机
+              const text = parsed.text || parsed.content || '';
+              if (text && onChunk) onChunk(text);
+            } else {
+              // 默认（无 event 前缀的流式内容，或未知事件）：作为发言内容
+              const text = parsed.content || parsed.text || parsed.delta || '';
+              if (text && onChunk) onChunk(text);
+            }
           } catch {
-            if (data && onChunk) onChunk(data);
+            // JSON 解析失败：仅在无事件类型时作为原始文本送入
+            if (!currentEvent && data && onChunk) onChunk(data);
           }
         }
       }

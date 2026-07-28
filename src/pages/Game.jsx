@@ -51,6 +51,10 @@ export default function Game() {
   const [floatTip, setFloatTip] = useState(null);
   const [selectedAgentIds, setSelectedAgentIds] = useState(new Set());
   const [agentCallResults, setAgentCallResults] = useState({});
+  // Step 4: 工具调用状态（当前发言智囊的工具调用过程与结果，供 Overlay 可视化）
+  const [toolCallState, setToolCallState] = useState({
+    agentId: null, tools: [], currentTool: null, results: [], status: 'idle',
+  });
   // D3 DebateConvergence - 自适应收敛
   const MAX_DEBATE_ROUNDS = 3;
   const [debateRound, setDebateRound] = useState(1);
@@ -437,6 +441,27 @@ export default function Game() {
     }
   }, [activeAgentIdx, inference, currentResponse, userInput, agentDialogues, debateConvergence]);
 
+  // Step 4: 工具调用回调 — 转发给 generateDialoguesForAgents，更新 toolCallState 供 Overlay 可视化
+  // 使用 useCallback 保证引用稳定，避免重渲染打字机
+  const handleToolStart = useCallback((agentId, tools) => {
+    setToolCallState({ agentId, tools, currentTool: null, results: [], status: 'calling' });
+  }, []);
+  const handleToolCall = useCallback((agentId, tool, params) => {
+    setToolCallState(prev => prev.agentId === agentId
+      ? { ...prev, currentTool: tool, status: 'calling' }
+      : prev);
+  }, []);
+  const handleToolResult = useCallback((agentId, tool, summary, status) => {
+    setToolCallState(prev => prev.agentId === agentId
+      ? { ...prev, results: [...prev.results, { tool, summary, status }] }
+      : prev);
+  }, []);
+  const toolCallbacks = useMemo(() => ({
+    onToolStart: handleToolStart,
+    onToolCall: handleToolCall,
+    onToolResult: handleToolResult,
+  }), [handleToolStart, handleToolCall, handleToolResult]);
+
   const handleConfirmAgents = useCallback(async () => {
     if (!inference) return;
     const customAgentsList = getCustomAgents();
@@ -453,14 +478,17 @@ export default function Game() {
     setPhase('agent_debate');
     setActiveAgentIdx(0);
     setFloatTip('智囊正在斟酌发言…');
-    
+
     const question = userInput;
     const qType = detectQuestionType(question);
     const newDialogues = {};
     const callResults = {};
     let hasErrors = false;
     let allErrors = {};
-    
+
+    // Step 4: 重置工具调用状态（新一轮辩论开始）
+    setToolCallState({ agentId: null, tools: [], currentTool: null, results: [], status: 'idle' });
+
     const onAgentComplete = (agentId, text, success, error, source, collaboration) => {
       newDialogues[agentId] = text;
       callResults[agentId] = { success, error, source, collaboration };
@@ -469,14 +497,16 @@ export default function Game() {
         allErrors[agentId] = { agentName: selected.find(a => a.id === agentId)?.name || agentId, error: error || '未知错误' };
       }
       setInference(prev => prev ? { ...prev, agentDialogues: { ...newDialogues } } : { agentDialogues: newDialogues });
+      // Step 4: 标记该智囊工具调用完成（触发 loading 卡片淡出，脚注数据已就绪）
+      setToolCallState(prev => prev.agentId === agentId ? { ...prev, status: 'done' } : prev);
     };
-    
+
     const onError = (errors) => {
       setAgentErrors(errors);
       setShowAgentErrorModal(true);
     };
-    
-    const result = await generateDialoguesForAgents(question, selected, qType, onAgentComplete, onError, inference.userContext, { round: 1 });
+
+    const result = await generateDialoguesForAgents(question, selected, qType, onAgentComplete, onError, inference.userContext, { round: 1, toolCallbacks });
     setAgentCallResults(callResults);
 
     // D3 收敛检测 - 决定是否提示用户「再辩一轮」
@@ -505,7 +535,7 @@ export default function Game() {
       return { ...prev, [selected[0].id]: firstDialogue, history };
     });
     setAwaitingUser(true);
-  }, [inference, selectedAgentIds, userInput, clearTimers]);
+  }, [inference, selectedAgentIds, userInput, clearTimers, toolCallbacks]);
 
   // D3: 再辩一轮 - 复用 blackboard 上下文，让智囊基于前轮分歧深入
   const handleRunAnotherRound = useCallback(async () => {
@@ -525,15 +555,20 @@ export default function Game() {
     const existingBlackboard = debateBlackboardRef.current;
     const existingMentionQueue = debateMentionQueueRef.current;
 
+    // Step 4: 重置工具调用状态（新一轮辩论开始）
+    setToolCallState({ agentId: null, tools: [], currentTool: null, results: [], status: 'idle' });
+
     const onAgentComplete = (agentId, text, success, error, source, collaboration) => {
       newDialogues[agentId] = text;
       callResults[agentId] = { success, error, source, collaboration };
       setInference(prev => prev ? { ...prev, agentDialogues: { ...(prev.agentDialogues || {}), [agentId]: text } } : prev);
+      // Step 4: 标记该智囊工具调用完成
+      setToolCallState(prev => prev.agentId === agentId ? { ...prev, status: 'done' } : prev);
     };
 
     const result = await generateDialoguesForAgents(
       question, selected, qType, onAgentComplete, undefined, inference.userContext,
-      { existingBlackboard, existingMentionQueue, round: nextRound }
+      { existingBlackboard, existingMentionQueue, round: nextRound, toolCallbacks }
     );
     setAgentCallResults(prev => ({ ...prev, ...callResults }));
 
@@ -564,7 +599,7 @@ export default function Game() {
 
     setFloatTip(null);
     setAwaitingUser(true);
-  }, [inference, userInput, debateRound]);
+  }, [inference, userInput, debateRound, toolCallbacks]);
 
   useEffect(() => () => clearTimers(), [clearTimers]);
 
@@ -998,6 +1033,7 @@ export default function Game() {
           }}
           debateConvergence={debateConvergence}
           mentions={mentionMessages}
+          toolCallState={toolCallState}
         />
 
         {/* D3 收敛状态徽标 */}

@@ -1,7 +1,7 @@
 # 智囊工具调用（Tool Calling）· 详细设计
 
 > 目标：让智囊从"只会说话"升级为"能调工具拿真数据再说话"的真 Agent。
-> 状态：待 review，review 通过后按 §6 步骤进入编码。
+> 状态：✅ 已完成（2026-07-28），6 步全部落地并通过联调验证（钱谷查股价/风眼搜公司/心禾无工具三场景）。
 > 关联：P1 任务（见 [`PROJECT_STATUS.md`](file:///Users/yegua/vibe/个人Trae赛/divergence-trae/PROJECT_STATUS.md) L86）、Agent 架构（见 [`docs/AGENT_DESIGN.md`](file:///Users/yegua/vibe/个人Trae赛/divergence-trae/docs/AGENT_DESIGN.md) L104）、参考设计风格（见 [`docs/BLACKBOARD_UPGRADE_DESIGN.md`](file:///Users/yegua/vibe/个人Trae赛/divergence-trae/docs/BLACKBOARD_UPGRADE_DESIGN.md)）。
 
 ---

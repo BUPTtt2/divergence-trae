@@ -20,6 +20,43 @@ const FALLBACK_ID_TO_NAME = {
   falv: '法度', jiankang: '养生', jiaoyu: '师道', jishu: '匠心',
 };
 
+/* ============================================================
+   Step 4: 工具调用可视化辅助
+   - TOOL_EMOJI_MAP / TOOL_NAME_MAP: 工具 → emoji/中文名
+   - ToolLoadingCard: 发言前的 loading 卡片（水墨风格，虚线边框）
+   - ToolFootnote: 发言底部脚注（小字号灰阶斜体，点击展开）
+============================================================ */
+const TOOL_EMOJI_MAP = {
+  web_search: '🔍',
+  stock_query: '📈',
+  exchange_rate: '💱',
+  salary_calc: '💰',
+  company_info: '🏢',
+  macro_data: '📊',
+  calendar_query: '📅',
+  law_search: '⚖️',
+  job_search: '💼',
+  industry_report: '📑',
+  tech_stack: '⚙️',
+  github_trending: '🐙',
+};
+const TOOL_NAME_MAP = {
+  web_search: '搜索',
+  stock_query: '股价',
+  exchange_rate: '汇率',
+  salary_calc: '薪资',
+  company_info: '公司',
+  macro_data: '宏观数据',
+  calendar_query: '日历',
+  law_search: '法规',
+  job_search: '职位',
+  industry_report: '行业报告',
+  tech_stack: '技术栈',
+  github_trending: '趋势',
+};
+function getToolEmoji(tool) { return TOOL_EMOJI_MAP[tool] || '🔧'; }
+function getToolName(tool) { return TOOL_NAME_MAP[tool] || tool; }
+
 /**
  * 把 LLM 输出的 <mention> XML 标签转换为可见短文本
  * 保留 mention 内容，附加 `→@agentName` 标记
@@ -118,19 +155,37 @@ function renderTextWithMentions(str, agents) {
  * - summary / path_reveal 阶段显示演 的总结
  * - 无框、居中、字距宽松，带打字机效果
  */
-export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, activeAgents, agentDialogues, selectedAgentIds, onAgentToggle, onConfirmAgents, awaitingUser, currentResponse, setCurrentResponse, onUserAdvance, agentCallResults, onFeedback, debateConvergence, mentions }) {
+export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, activeAgents, agentDialogues, selectedAgentIds, onAgentToggle, onConfirmAgents, awaitingUser, currentResponse, setCurrentResponse, onUserAdvance, agentCallResults, onFeedback, debateConvergence, mentions, toolCallState }) {
   const [customAgents, setCustomAgents] = useState([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentDesc, setNewAgentDesc] = useState('');
   const [createError, setCreateError] = useState('');
   const [feedbackGiven, setFeedbackGiven] = useState({}); // { [agentId]: 'positive'|'negative' }
+  // Step 4: 打字机完成状态（控制工具结果脚注的显示时机，发言结束后才露出）
+  const [typingDone, setTypingDone] = useState({}); // { [agentId]: true }
 
   useEffect(() => {
     if (phase === 'agent_select') {
       setCustomAgents(getCustomAgents());
     }
   }, [phase]);
+
+  // Step 4: 切换智囊或新发言到达时，重置该智囊的打字机完成标记
+  // 避免第二轮辩论时脚注在打字开始前就显示
+  useEffect(() => {
+    if (phase !== 'agent_debate' || activeAgentIdx < 0 || !activeAgents) return;
+    const agents = activeAgents.filter(a => a.role !== 'master');
+    const agent = agents[activeAgentIdx];
+    if (agent && typingDone[agent.id]) {
+      setTypingDone(prev => {
+        const next = { ...prev };
+        delete next[agent.id];
+        return next;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAgentIdx, agentDialogues, phase]);
 
   const handleCreateAgent = () => {
     const nameValidation = validateAgentName(newAgentName, [...customAgents, ...(activeAgents || [])]);
@@ -437,8 +492,24 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
     const agent = agents[activeAgentIdx];
     if (!agent) return null;
     const dialogue = agentDialogues?.[agent.id];
-    if (!dialogue) return null;
     const color = COLORS.agent[agent.id] || { main: '#C8A850', glow: '#F0D890' };
+
+    // Step 4: 当前智囊的工具调用状态（仅匹配当前发言智囊）
+    const agentToolState = toolCallState && toolCallState.agentId === agent.id
+      ? toolCallState : null;
+
+    // 无发言且正在调工具 → 显示 loading 卡片（不 return null，让用户看到工具调用过程）
+    if (!dialogue) {
+      if (agentToolState && agentToolState.status === 'calling') {
+        return (
+          <AnimatePresence mode="wait">
+            <ToolLoadingCard key={'tool-' + activeAgentIdx} agent={agent} toolState={agentToolState} />
+          </AnimatePresence>
+        );
+      }
+      return null;
+    }
+
     // 协作关系标签（反驳/补充/追问 @目标智囊）
     const collaboration = agentCallResults?.[agent.id]?.collaboration;
     const collabMap = { rebuttal: { label: '反驳', color: '#E88080' }, support: { label: '补充', color: '#80C8A8' }, question: { label: '追问', color: '#F0D890' } };
@@ -463,6 +534,8 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
       : null;
     const isRefusal = !!(currentMention?.refusalReason) ||
       (typeof dialogue === 'string' && dialogue.includes('拒答：'));
+    // Step 4: 工具结果脚注（打字机完成后显示）
+    const toolResults = agentToolState?.results || [];
     return (
       <DialogueFrame key={'debate-' + activeAgentIdx} color={color} name={agent.name} stance={agent.stance} progress={`${activeAgentIdx + 1} / ${agents.length}`} stanceStrength={stanceStrength} refused={isRefusal}>
         {collabInfo && (
@@ -511,7 +584,11 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
             拒答 · {currentMention.refusalReason}
           </motion.div>
         )}
-        <TypewriterText text={dialogue} agentColor={color} agents={agents} />
+        <TypewriterText text={dialogue} agentColor={color} agents={agents} onDone={() => setTypingDone(prev => ({ ...prev, [agent.id]: true }))} />
+        {/* Step 4.2: 工具结果脚注 — 打字机完成后显示 */}
+        {toolResults.length > 0 && typingDone[agent.id] && (
+          <ToolFootnote results={toolResults} />
+        )}
         {/* 智囊调校：反馈 chip（受用/失言 → 存入 memoryStore，下次发言注入） */}
         <div style={{ display: 'flex', gap: '10px', marginTop: '14px', justifyContent: 'center' }}>
           {[
@@ -960,14 +1037,187 @@ function DialogueFrame({ color, name, stance, progress, stanceStrength = 0, show
 }
 
 /* ============================================================
+   Step 4.1: 工具调用 Loading 卡片
+   - 智囊发言前显示，水墨风格，虚线边框
+   - 收到 tool_call：显示 emoji + "调用XX工具中…" + 进度条
+   - 收到 tool_result：变为 ✓ + summary，发言开始时由 AnimatePresence 淡出
+============================================================ */
+function ToolLoadingCard({ agent, toolState }) {
+  const { currentTool, results = [], status } = toolState;
+  // 最近的 tool_result（已完成态展示 ✓ + summary）
+  const lastResult = results.length > 0 ? results[results.length - 1] : null;
+  const isResultDone = !!lastResult && status !== 'calling';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -8, scale: 0.96, transition: { duration: 0.8, ease: 'easeInOut' } }}
+      transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+      style={{
+        position: 'absolute',
+        left: '50%',
+        top: '20%',
+        transform: 'translateX(-50%)',
+        zIndex: 20,
+        padding: '14px 22px',
+        background: 'rgba(20, 18, 15, 0.85)',
+        backdropFilter: 'blur(8px)',
+        border: '1px dashed #C8A85060',
+        borderRadius: '6px',
+        maxWidth: '440px',
+        pointerEvents: 'none',
+      }}
+    >
+      {/* 水墨晕染底 */}
+      <div aria-hidden style={{
+        position: 'absolute', inset: 0, borderRadius: '6px',
+        background: 'radial-gradient(ellipse at center, rgba(200,168,80,0.08) 0%, transparent 70%)',
+        filter: 'blur(10px)', pointerEvents: 'none', zIndex: -1,
+      }} />
+
+      {isResultDone ? (
+        // 完成态：✓ + summary（1 秒后由父组件切换状态触发淡出）
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          style={{ display: 'flex', alignItems: 'center', gap: '10px' }}
+        >
+          <motion.span
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 18 }}
+            style={{ color: '#80C8A8', fontSize: '14px' }}
+          >✓</motion.span>
+          <span style={{
+            color: '#C8A878', fontSize: '12px',
+            fontFamily: '"Noto Serif SC", serif', letterSpacing: '0.08em',
+          }}>
+            {lastResult.summary}
+          </span>
+        </motion.div>
+      ) : (
+        // 调用中：emoji + 文案 + 不确定进度条
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <motion.span
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+              style={{ fontSize: '16px' }}
+            >
+              {currentTool ? getToolEmoji(currentTool) : '🔧'}
+            </motion.span>
+            <span style={{
+              color: '#C8A878', fontSize: '12px',
+              fontFamily: '"Noto Serif SC", serif', letterSpacing: '0.12em',
+            }}>
+              {currentTool ? `调用${getToolName(currentTool)}工具中…` : '正在调取外部数据…'}
+            </span>
+          </div>
+          {/* 水墨风不确定进度条 */}
+          <div style={{
+            width: '180px', height: '2px',
+            background: 'rgba(200,168,80,0.15)', borderRadius: '1px',
+            overflow: 'hidden', position: 'relative',
+          }}>
+            <motion.div
+              animate={{ x: ['-60px', '180px'] }}
+              transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+              style={{
+                position: 'absolute', top: 0, left: 0,
+                width: '60px', height: '100%',
+                background: 'linear-gradient(90deg, transparent, #C8A850, transparent)',
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+/* ============================================================
+   Step 4.2: 发言底部工具结果脚注
+   - 小字号(10px)、灰阶色(#9A9488)、斜体
+   - 点击可展开完整工具结果（JSON）
+============================================================ */
+function ToolFootnote({ results }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!results || results.length === 0) return null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+      style={{
+        marginTop: '10px',
+        paddingTop: '8px',
+        borderTop: '1px dotted #3A3530',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '4px',
+        pointerEvents: 'auto',
+        cursor: 'pointer',
+      }}
+      onClick={() => setExpanded(prev => !prev)}
+      title={expanded ? '点击收起' : '点击展开完整结果'}
+    >
+      {results.map((r, i) => (
+        <div key={i} style={{
+          fontSize: '10px',
+          color: '#9A9488',
+          fontFamily: '"Noto Serif SC", serif',
+          fontStyle: 'italic',
+          letterSpacing: '0.05em',
+          lineHeight: 1.5,
+          textAlign: 'center',
+        }}>
+          {getToolEmoji(r.tool)} {r.summary}
+          {r.status === 'failed' && <span style={{ color: '#E88080', marginLeft: '4px' }}>·失败</span>}
+        </div>
+      ))}
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.3 }}
+            style={{
+              marginTop: '4px',
+              padding: '6px 8px',
+              background: 'rgba(40,35,30,0.4)',
+              borderRadius: '3px',
+              fontSize: '10px',
+              color: '#6A6560',
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              textAlign: 'left',
+              maxHeight: '160px',
+              overflowY: 'auto',
+            }}
+          >
+            {JSON.stringify(results, null, 2)}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+/* ============================================================
    打字机效果 - 字符逐字显示
    Step 6: 支持 <mention> 标签渲染（朱砂红下划线 + tooltip）
 ============================================================ */
-function TypewriterText({ text, agentColor, agents }) {
+function TypewriterText({ text, agentColor, agents, onDone }) {
   const [displayed, setDisplayed] = useState('');
   const [done, setDone] = useState(false);
   const startTimeRef = useRef(null);
   const rafRef = useRef(null);
+  // 缓存 onDone 回调，避免它变化时触发 effect 重跑（保护打字机不被重渲染打断）
+  const onDoneRef = useRef(onDone);
+  useEffect(() => { onDoneRef.current = onDone; }, [onDone]);
 
   // Step 6: 预处理 <mention> XML 标签 → 可见短文本 `内容 →@风眼`
   // 不破坏打字机效果，渲染时再高亮 →@风眼 部分
@@ -1008,6 +1258,11 @@ function TypewriterText({ text, agentColor, agents }) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [processedText]);
+
+  // Step 4: 打字完成后通知父组件（触发工具结果脚注显示）
+  useEffect(() => {
+    if (done && onDoneRef.current) onDoneRef.current();
+  }, [done]);
 
   return (
     <div

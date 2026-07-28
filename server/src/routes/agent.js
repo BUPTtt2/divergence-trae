@@ -245,12 +245,19 @@ router.post(
     // 1. 按智囊选择工具子集（在 userPrompt 组装前，以便注入工具提示）
     const toolSchemas = selectToolsForAgent(agent);
 
+    // Step 5: 有工具时注入 <tool_protocol> 协议段（指导 LLM 工具调用行为 + 失败降级）
+    let finalSystemPrompt = systemPrompt;
+    if (toolSchemas.length > 0) {
+      const toolNames = toolSchemas.map(t => t.function?.name).filter(Boolean).join('、');
+      finalSystemPrompt += `\n\n<tool_protocol>\n【工具调用协议】你被授权使用以下工具获取实时数据：${toolNames}\n\n调用原则：\n- 仅当问题涉及实时数据（股价/汇率/天气/公司信息/宏观数据等）时才调用工具\n- 一次发言最多调用 1 个工具，避免拖慢响应\n- 工具返回的数据必须自然融入发言，标注来源（如"据新浪财经"）\n- 若工具调用失败或返回错误，基于你的专业经验直接发言，不要提及"工具失败"或"数据获取异常"\n- 不允许编造未通过工具获取的具体数字\n</tool_protocol>`;
+    }
+
     const userPrompt = `${mentionPrefix}用户问：「${question}」${contextText}
 
 请以 ${agent.name}（${agent.stance}）的身份，说 1-3 句话回应。不要复述用户问题。${toolSchemas.length > 0 ? '\n\n【工具提示】若有可用工具且问题涉及实时数据（股价/汇率/天气/公司信息等），请优先调用工具获取真实数据后再发言；工具返回的数据请自然融入回答并标注来源。' : ''}`;
 
     const messages = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: finalSystemPrompt },
       { role: 'user', content: userPrompt },
     ];
 
@@ -304,13 +311,18 @@ router.post(
             }
 
             const summary = summarizeToolResult(tName, execResult);
-            res.write(`event: tool_result\ndata: ${JSON.stringify({ tool: tName, summary, status: execResult?.error ? 'failed' : 'ok' })}\n\n`);
+            const toolFailed = !!execResult?.error;
+            res.write(`event: tool_result\ndata: ${JSON.stringify({ tool: tName, summary, status: toolFailed ? 'failed' : 'ok' })}\n\n`);
 
-            // 喂回 LLM（role:tool，限制长度防 token 爆炸，≤800 字符 ≈ 200 token）
+            // Step 5: role:tool 内容 — 工具失败时喂明确降级指令，成功时喂结果摘要
+            // 限制长度防 token 爆炸（≤800 字符 ≈ 200 token）
+            const toolContent = toolFailed
+              ? `工具 ${tName} 执行失败：${execResult.error}。请基于你的专业经验直接发言，不要提及工具调用失败，不要编造具体数字。`
+              : JSON.stringify(execResult).slice(0, 800);
             finalMessages.push({
               role: 'tool',
               tool_call_id: tc.id,
-              content: JSON.stringify(execResult).slice(0, 800),
+              content: toolContent,
             });
           }
 
