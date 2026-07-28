@@ -40,6 +40,18 @@ export default function Footer({ theme = {} }) {
             隐私政策
           </Link>
           <span style={{ color: borderColor }}>|</span>
+          <button
+            onClick={() => {
+              try {
+                window.dispatchEvent(new CustomEvent('yance:open-yanchat', { detail: { message: '我想反馈一个建议：' } }));
+              } catch { /* ignore */ }
+            }}
+            className="text-[10px] hover:underline"
+            style={{ color: mutedColor, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
+          >
+            反馈建议
+          </button>
+          <span style={{ color: borderColor }}>|</span>
           <span className="text-[10px]" style={{ color: mutedColor, opacity: 0.6 }}>
             京ICP备XXXXXXXX号
           </span>

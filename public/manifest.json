@@ -1,0 +1,20 @@
+{
+  "name": "演策 — AI决策推演沙盘",
+  "short_name": "演策",
+  "description": "多智囊辩论·八卦立卦·命签收藏。让AI帮你在人生重要决策前多想一步。",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#FAF8F0",
+  "theme_color": "#A8472E",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["lifestyle", "productivity", "utilities"]
+}

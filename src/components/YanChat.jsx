@@ -472,8 +472,13 @@ export default function YanChat() {
 
   // 接收来自悬浮配件/大管家浮标的"问演"指令，打开时主动发起到期回访
   useEffect(() => {
-    const onOpen = () => {
+    const onOpen = (e) => {
       setIsOpen(true);
+      // 支持预填消息（来自反馈入口等）
+      const prefill = e?.detail?.message;
+      if (prefill) {
+        setTimeout(() => setInput(prefill), 100);
+      }
       // 检测到期回访，主动发起对话
       try {
         const pending = getPendingFollowUps();
@@ -490,7 +495,7 @@ export default function YanChat() {
           setMessages(prev => [...prev, followUpMsg]);
           localStorage.setItem(promptedKey, '1');
         }
-      } catch (e) { /* ignore */ }
+      } catch (err) { /* ignore */ }
     };
     window.addEventListener('yance:open-yanchat', onOpen);
     return () => window.removeEventListener('yance:open-yanchat', onOpen);
