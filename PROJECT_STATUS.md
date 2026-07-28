@@ -1,8 +1,8 @@
 # 演策项目状态总览
 
-> 最后更新：2026-07-25
-> 分支：`feat/p0-fix-fate-deepen`
-> 最新提交：`479423b fix(P0)+docs: 修复Agent对话400问题过长 + 新增AGENT_DESIGN权威蓝图`
+> 最后更新：2026-07-27
+> 分支：`main`
+> 最新提交：`d4c49cc docs: 交接文档更新最新commit和生产验证状态`
 
 ---
 
@@ -27,7 +27,7 @@
 |------|------|------|
 | 11阶段状态机 | ✅ | Game.jsx 硬编码推进 |
 | 多智囊辩论 | ✅ | 顺序发言 + Blackboard + 收敛检测 |
-| 三层提示词 | ✅ | identity/methodology/deliverable（前端+后端双份，P0待统一） |
+| 三层提示词 | ✅ | identity/methodology/deliverable（后端单一来源，前端通过API获取，P0已完成） |
 | 上下文预算控制 | ✅ | ≤480字，超限截断，400降级重试 |
 | 智囊调校迭代 | ✅ | 受用/失言反馈 → 下次发言注入 |
 | 演思考可视化 | ✅ | 4步流：读问题→召回记忆→匹配智囊→预判分歧 |
@@ -75,10 +75,10 @@
 ## 二、待办任务（按优先级）
 
 ### P0 — 必须做（上线前）
-| 任务 | 说明 | 预估工作量 |
-|------|------|-----------|
-| **persona/prompt 前后端统一收敛到后端** | 前端`inferenceEngine.js`的`AGENT_PERSONAS`和后端`agentPool.js`双份维护，改prompt要改两处。收敛为后端单一来源，前端只读 | 中 |
-| 验证完整推演流程无报错 | 本地跑一遍 input→final 全流程 | 小 |
+| 任务 | 说明 | 状态 |
+|------|------|------|
+| **persona/prompt 前后端统一收敛到后端** | 后端`agentPool.js`单一来源，前端通过`GET /api/agent/personas`获取，`AGENT_PERSONAS`降级为fallback。dialogue接口用`buildAgentSystemPrompt`组装三层提示词 | ✅ 完成（2026-07-27） |
+| 验证完整推演流程无报错 | 本地跑一遍 input→final 全流程 | 待验证 |
 
 ### P1 — 重要（上线后优先）
 | 任务 | 说明 | 价值 |
@@ -108,7 +108,7 @@
 |---|------|------|----------|
 | 1 | Surge部署后偶现 MIME type "text/html" 错误 | ⚠️ 已知 | 硬刷新或重新部署 |
 | 2 | 智囊阁加载失败（浏览器缓存旧hash） | ⚠️ 已有lazyRetry | 自动重试+刷新 |
-| 3 | Prompt前后端双份维护 | ❌ 待P0统一 | 改prompt时手动改两处 |
+| 3 | ~~Prompt前后端双份维护~~ | ✅ 已修复 | P0完成：后端单一来源，前端API获取 |
 | 4 | worker目录代码未启用 | ℹ️ 设计 | 保留在github分支，不部署 |
 
 ---
@@ -146,16 +146,15 @@ railway up
 ### 分支
 | 分支 | 用途 | 状态 |
 |------|------|------|
-| `main` | 主分支 | 稳定，可部署 |
-| `feat/p0-fix-fate-deepen` | P0修复+命牌深化+决策闭环 | **当前开发分支**，最新代码 |
+| `main` | 主分支 | ✅ 当前开发分支，最新代码 |
 | `cloudflare-workers` | Cloudflare Workers后端（备用） | 不启用，保留代码 |
 
 ### 最近提交
 ```
-479423b fix(P0)+docs: 修复Agent对话400问题过长 + 新增AGENT_DESIGN权威蓝图
-a599737 perf(分包+对照): vite manualChunks细化 + 结局对照加卦中/卦偏标识
-0d54888 feat(命牌): 命牌深化全部做 - 分享卡/翻卦交互/推演路径回看
-f201846 feat: P0修复 + 命牌深化 + 决策回顾闭环 + 智囊市集
+d4c49cc docs: 交接文档更新最新commit和生产验证状态
+f0ab395 fix: 最后一位智囊跳过追问判断+judgeContinueAsking超时控制
+4593aa8 fix: 演总结API加8秒超时降级，防后端不响应卡死
+（P0 persona统一收敛 改动待提交）
 ```
 
 ---

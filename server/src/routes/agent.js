@@ -1,13 +1,36 @@
 import { Router } from 'express';
 import { analyzeQuestion, generateAgentDialogue, generateAgentQuestion, shouldContinueAsking, generateMasterSummary } from '../services/agentEngine.js';
 import { callLLMStream } from '../services/llmRouter.js';
-import { AGENT_POOL_MAP } from '../data/agentPool.js';
+import { AGENT_POOL, AGENT_POOL_MAP, buildAgentSystemPrompt } from '../data/agentPool.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { llmRateLimit } from '../middleware/rateLimit.js';
 import { optionalAuth } from '../middleware/auth.js';
 import { listAdvisors, formatAdvisorForAgentPool } from '../services/customAdvisorService.js';
 
 const router = Router();
+
+// GET /api/agent/personas — 返回全部智囊的完整 persona 数据（单一来源）
+// 前端通过此接口获取 persona，不再本地维护一份
+router.get(
+  '/personas',
+  asyncHandler(async (req, res) => {
+    const personas = AGENT_POOL.map(a => ({
+      id: a.id,
+      name: a.name,
+      stance: a.stance,
+      color: a.color,
+      glow: a.glow,
+      symbol: a.symbol,
+      questionTypes: a.questionTypes,
+      identity: a.identity,
+      methodology: a.methodology,
+      deliverable: a.deliverable,
+      persona: a.persona,
+      seed: a.stance, // 向后兼容前端 seed 字段
+    }));
+    res.json({ personas });
+  })
+);
 
 router.post(
   '/analyze',
@@ -120,14 +143,9 @@ router.post(
       return res.status(404).json({ error: `Agent ${agentId} 不存在` });
     }
 
-    const systemPrompt = `${agent.persona}
-
-【回答要求】
-- 1-3 句话，不超过 80 字
-- 用中文口语，不要书面体
-- 必须抓住用户问题里的具体词（数字、对象、场景），不要泛泛而谈
-- 不要给"祝你顺利"之类的客套结尾
-- 可以质疑用户、可以反问、可以泼冷水，但要说人话`;
+    // 使用 buildAgentSystemPrompt 组装三层提示词（identity/methodology/deliverable）
+    // 三层结构的 deliverable 已包含交付标准（≤80字/口语/抓具体词等），无需重复
+    const systemPrompt = buildAgentSystemPrompt(agent);
 
     let contextText = '';
     if (Array.isArray(previousDialogues) && previousDialogues.length > 0) {

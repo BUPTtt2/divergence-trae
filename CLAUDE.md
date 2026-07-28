@@ -148,6 +148,7 @@ sandbox-app/
 | **推演台** | `src/pages/Game.jsx` | `/api/agent/analyze` | `server/src/routes/agent.js` | optionalAuth |
 | | | `/api/agent/dialogue` | `server/src/routes/agent.js` | optionalAuth |
 | | | `/api/agent/summary` | `server/src/routes/agent.js` | optionalAuth |
+| | | `GET /api/agent/personas` | `server/src/routes/agent.js` | 无（P0新增，返回全部智囊persona） |
 | | | `/api/divination/cast` | `server/src/routes/divination.js` | optionalAuth |
 | | | `/api/divination/interpret` | `server/src/routes/divination.js` | optionalAuth |
 | **演对话** | `src/components/YanChat.jsx` | `/api/yan/chat` | `server/src/routes/yan.js` | optionalAuth |
@@ -228,3 +229,4 @@ GET /api/yan/memories          (获取记忆上下文)
 | 2026-07-23 | 循环依赖导致白页 | auth.js延迟导入apiClient，避免循环 | `src/services/auth.js` |
 | 2026-07-23 | 析问阶段白页 | Game.jsx添加try-catch和默认配置fallback | `src/pages/Game.jsx` |
 | 2026-07-23 | AgentDialogueOverlay白页 | 添加yan_analyze阶段加载状态显示 | `src/components/board/AgentDialogueOverlay.jsx` |
+| 2026-07-27 | persona/prompt前后端双份维护 | P0：后端新增`GET /api/agent/personas` API，dialogue接口改用`buildAgentSystemPrompt`三层提示词；前端`inferenceEngine.js`新增`fetchAgentPersonas()`从API获取persona，`AGENT_PERSONAS`降级为fallback | `server/src/routes/agent.js` `src/services/inferenceEngine.js` `src/App.jsx` |

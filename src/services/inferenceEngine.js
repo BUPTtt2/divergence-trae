@@ -88,6 +88,50 @@ const AGENT_PERSONAS = {
 };
 
 /* ============================================================
+   远程 Persona 缓存 — 从后端获取权威 persona，本地 AGENT_PERSONAS 仅作降级兜底
+   P0: persona/prompt 前后端统一收敛到后端（后端 agentPool.js 为单一来源）
+============================================================ */
+let _remotePersonas = null; // null=未加载, Object=已缓存
+
+/**
+ * 从后端获取全部智囊的 persona（后端 agentPool.js 是单一来源）
+ * 首次加载后缓存，后端不可用时降级到本地 AGENT_PERSONAS
+ */
+export async function fetchAgentPersonas() {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const resp = await fetch(`${API_BASE_URL}/api/agent/personas`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (data.personas && Array.isArray(data.personas)) {
+      _remotePersonas = {};
+      for (const p of data.personas) {
+        _remotePersonas[p.id] = p;
+      }
+      console.log(`[persona] 已从后端加载 ${Object.keys(_remotePersonas).length} 个智囊 persona`);
+    }
+  } catch (e) {
+    console.warn('[persona] 从后端获取 persona 失败，降级使用本地缓存:', e.message);
+  }
+  return _remotePersonas;
+}
+
+/**
+ * 获取指定智囊的 persona（优先远程缓存，降级本地 AGENT_PERSONAS）
+ */
+function getPersona(agentId) {
+  if (_remotePersonas && _remotePersonas[agentId]) {
+    return _remotePersonas[agentId];
+  }
+  return AGENT_PERSONAS[agentId];
+}
+
+/* ============================================================
    本地智能预设 - 按问题类型分类,真正能抓住问题里的具体词
 ============================================================ */
 const SMART_PRESETS = {
@@ -297,7 +341,8 @@ function hashStr(s) {
 
 export function selectSmartDialogue(agentId, question, questionType, agent, previousDialogues = []) {
   // 自定义智囊: 走专属发言逻辑,不再套用内置预设
-  if (agent && (agent.isCustom || !AGENT_PERSONAS[agentId])) {
+  // 使用 getPersona 优先查远程缓存（后端单一来源），降级到本地 AGENT_PERSONAS
+  if (agent && (agent.isCustom || !getPersona(agentId))) {
     return generateCustomAgentDialogue(agent, question, questionType, previousDialogues);
   }
 

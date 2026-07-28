@@ -168,10 +168,10 @@ flowchart LR
 ### 4.1 配置中心（prompt/变量单一来源 —— 解决"我不清楚的"）
 > 目标：所有 prompt/persona/阈值集中在本文档 + 一个配置文件，改一处生效。
 
-| 配置项 | 当前位置 | 应收敛到 |
-|--------|----------|----------|
-| 智囊 persona（三层） | 前端 `inferenceEngine.js` AGENT_PERSONAS + 后端 `agentPool.js` | **后端单一来源**，前端只读 |
-| 发言交付标准（≤80字口语） | 后端 `agent.js` systemPrompt | 后端 `agent.js` 统一 |
+| 配置项 | 当前位置 | 状态 |
+|--------|----------|------|
+| 智囊 persona（三层） | **后端 `agentPool.js` 单一来源**，前端通过 `GET /api/agent/personas` 获取，`AGENT_PERSONAS` 降级为 fallback | ✅ 已收敛（P0完成 2026-07-27） |
+| 发言交付标准（≤80字口语） | 后端 `agent.js` 用 `buildAgentSystemPrompt` 组装三层提示词（deliverable 已含交付标准） | ✅ 已收敛（P0完成 2026-07-27） |
 | 上下文预算（≤480字） | 前端 `inferenceEngine.js` MAX_Q | 前端常量+后端校验对齐 |
 | 收敛阈值（共识分0.8/轮次3） | 前端 Game.jsx + multiAgentFramework | `multiAgentFramework.js` 单一 |
 | 记忆层上限（working10/facts30/episodes50）| `memoryStore.js` | 保持，已收敛 |
@@ -208,7 +208,7 @@ flowchart TD
 
 | 优先级 | 事项 | 价值 |
 |--------|------|------|
-| P0 | persona/prompt 前后端统一收敛到后端 | 改 prompt 只改一处，防不一致 |
+| ✅ P0已完成 | persona/prompt 前后端统一收敛到后端 | 改 prompt 只改一处，防不一致（2026-07-27完成） |
 | P1 | 智囊工具调用（搜索/日历）→ 真Agent | 最大技术壁垒跃迁 |
 | P1 | 上线埋点 + 错误率告警 | 数据驱动迭代的前提 |
 | P2 | 记忆云端同步（已登录用户）| 跨设备留存 |
