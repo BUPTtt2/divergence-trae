@@ -1,15 +1,16 @@
 services:
   - type: web
     name: yance-bagua-engine
-    runtime: node
-    plan: free
+    env: node
     rootDir: server
     buildCommand: npm install
     startCommand: npm start
+    healthCheckPath: /api/agent/personas
+    plan: free
     envVars:
       - key: NODE_ENV
         value: production
-      - key: CORS_ORIGIN
-        value: https://yance-bagua.surge.sh
-      - key: DEEPSEEK_API_KEY
+      - key: ZHIPU_API_KEY
+        sync: false
+      - key: JWT_SECRET
         sync: false
