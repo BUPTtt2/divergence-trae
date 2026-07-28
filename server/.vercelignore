@@ -1,0 +1,18 @@
+# 部署到 Vercel 时忽略的文件
+.env
+.env.local
+.env.development
+.env.production
+.env.example
+.memory-db.json
+*.log
+.git
+.gitignore
+railway.json
+render.yaml
+node_modules
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+README.md
