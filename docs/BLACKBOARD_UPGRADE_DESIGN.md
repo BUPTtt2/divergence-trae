@@ -1,7 +1,7 @@
 # Blackboard 真消息传递升级 · 详细设计
 
 > 目标：把 Blackboard 从"单向订阅 + 事后关键词猜测"升级为"主动 @ + 被动应答"的真消息传递。
-> 状态：待 review，review 通过后再进入编码。
+> 状态：✅ 已落地（P1 完成 2026-07-28），review gap 已补齐（2026-07-28）：mentionChain 字段维护 + canMention 链深度校验 + shouldRefuse 第三层 LLM 自评兜底。
 > 关联：P1 任务（见 [`PROJECT_STATUS.md`](file:///Users/yegua/vibe/个人Trae赛/divergence-trae/PROJECT_STATUS.md) L83-88）、伪协作现状（见 [`docs/AGENT_DESIGN.md`](file:///Users/yegua/vibe/个人Trae赛/divergence-trae/docs/AGENT_DESIGN.md) L100-106）。
 
 ---
@@ -250,4 +250,4 @@ agent_debate 阶段右侧 320px 浮层（现有容器）底部加可折叠"引�
 
 ---
 
-**下一步**：请 review 本设计，重点确认 ① @ 链深度上限是否合理 ② 拒绝条件是否完整 ③ 方案 A 是否符合预期。Review 通过后按 Step 1-6 顺序进入编码。
+**Review 结论**（2026-07-28）：① @ 链深度上限 3 跳合理，已补齐 mentionChain 字段维护 + canMention 链深度校验；② 拒绝条件三层完整（questionTypes + 指纹重复 + LLM 自评兜底），已补齐第三层；③ 方案 A 已落地，6 文件改动、状态机兼容、向后兼容。Step 1-6 全部完成。

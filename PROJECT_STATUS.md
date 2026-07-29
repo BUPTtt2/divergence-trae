@@ -32,7 +32,7 @@
 | 智囊调校迭代 | ✅ | 受用/失言反馈 → 下次发言注入 |
 | 演思考可视化 | ✅ | 4步流：读问题→召回记忆→匹配智囊→预判分歧 |
 | 自定义智囊铸造 | ✅ | 5步向导：赐名→关系→审问→封印→入营 |
-| Blackboard协作 | ✅ | 真消息传递（P1完成 2026-07-28）：XML mention协议 + mentionQueue跨轮调度 + 三层拒答逻辑 + 前端@标签可视化 |
+| Blackboard协作 | ✅ | 真消息传递（P1完成 2026-07-28，review gap 已补齐）：XML mention协议 + mentionQueue跨轮调度 + mentionChain链深度校验(≤3跳) + 三层拒答逻辑(规则+指纹+LLM自评兜底) + 前端@标签可视化 |
 | 工具调用 | ✅ | 原生 function calling + 降级（P1完成 2026-07-28）：10个工具（web_search/stock_query/exchange_rate/salary_calc等），按智囊视角注入子集，SSE事件可视化，工具失败自动降级 |
 | 记忆云端同步 | ⚠️ | localStorage已落地，云端同步P2 |
 
@@ -100,7 +100,7 @@
 ### P3 — 优化
 | 任务 | 说明 | 状态 |
 |------|------|------|
-| Bundle压缩 | vendor-three已分包，可再懒加载 | 待办 |
+| Bundle压缩 | shareCardGenerator动态导入（分享时才加载，首屏减负）+ vendor-three已分包 | ✅ 首批完成（2026-07-28），Board3D懒加载待评估 |
 | Prompt注入防护加固 | sanitizeUserInput清洗XML标签+注入关键词 + `<user_input>`标签包裹 + identity角色锚定 | ✅ 完成（2026-07-28） |
 
 ---
@@ -121,26 +121,26 @@
 ### 当前生产环境
 | 组件 | 平台 | 地址 | 状态 |
 |------|------|------|------|
-| 前端 | Surge | https://yance-bagua.surge.sh | ✅ 运行中 |
-| 后端 | Railway | https://yance-bagua-engine-production.up.railway.app | ✅ 运行中 |
+| 前端 | Surge | https://yance-bagua.surge.sh | ✅ 运行中（2026-07-28 重新部署） |
+| 后端 | Vercel | https://yance-bagua-engine.vercel.app | ✅ 运行中（2026-07-28 从 Railway 迁移） |
 | LLM | 智谱GLM-4-Flash | 通过后端 llmRouter.js 调用 | ✅ 正常 |
 
 ### 部署命令
 ```bash
 # 前端部署
 npm run build
-npx surge dist yance-bagua.surge.sh
+npx surge dist yance-bagua.surge.sh --domain yance-bagua.surge.sh
 
-# 后端部署
+# 后端部署（Vercel serverless）
 cd server
-railway login
-railway up
+npx vercel --prod --yes
 ```
 
 ### 环境变量
-- 前端：`.env.production` → `VITE_API_BASE=https://yance-bagua-engine-production.up.railway.app`
-- 运行时：`public/api-config.js` → `window.__API_BASE__`
-- 后端：Railway 环境变量（LLM API Key、JWT_SECRET 等，**不提交到git**）
+- 前端：`.env.production` → `VITE_API_BASE=https://yance-bagua-engine.vercel.app`
+- 运行时：`public/api-config.js` → `window.__API_BASE__`（localhost 用本地后端，其他用 Vercel）
+- 后端：Vercel 环境变量（ZHIPU_API_KEY / ZHIPU_MODEL / CORS_ORIGIN / JWT_SECRET，**不提交到git**）
+- 注意：国内访问 vercel.app 可能不稳定，如遇超时可配自定义域名或 CDN
 
 ---
 

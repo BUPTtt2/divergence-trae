@@ -2,5 +2,5 @@
 if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
   window.__API_BASE__ = 'http://localhost:3001';
 } else {
-  window.__API_BASE__ = 'https://yance-bagua-engine-production.up.railway.app';
+  window.__API_BASE__ = 'https://yance-bagua-engine.vercel.app';
 }

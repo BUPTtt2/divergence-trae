@@ -1,5 +1,9 @@
 {
   "version": 2,
+  "framework": null,
+  "buildCommand": "echo 'No build required for serverless API'",
+  "outputDirectory": ".",
+  "installCommand": "npm install",
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/[[...path]]" }
   ],

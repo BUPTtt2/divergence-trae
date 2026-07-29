@@ -12,5 +12,9 @@ services:
         value: production
       - key: ZHIPU_API_KEY
         sync: false
+      - key: ZHIPU_MODEL
+        value: glm-4-flash
+      - key: CORS_ORIGIN
+        value: https://yance-bagua.surge.sh
       - key: JWT_SECRET
         sync: false

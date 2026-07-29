@@ -735,18 +735,18 @@ function similarity(text1, text2) {
 
 /**
  * 判断被 @ 的 Agent 是否应该拒答（Step 5：拒绝回应逻辑）
- * 三层规则判断（不调 LLM，LLM 自评兜底暂不实现）：
+ * 三层判断：前两层规则即时，第三层 LLM 自评兜底（仅在前两层都通过时触发）
  *   1. questionTypes 不匹配（仅对 question 类型 mention 生效）→ "视角不符"
  *      注意：rebuttal/support 类型不拒（因为是回应，不是新问题）
  *   2. 指纹重复（mention.question 与历史发言相似度 ≥ 0.7）→ "已说过类似观点"
- *   3. 否则不拒
+ *   3. LLM 自评：让 Agent 自评是否已表达过类似观点（轻量调用，max_tokens=30）
  * @param {Object} mention - { from, fromName, to, snippet, question, type }
  * @param {Object} agent - 被 @ 的智囊对象（含 questionTypes, name, id）
  * @param {Array} agentHistory - 该智囊的历史发言列表 [{content, round}]
  * @param {string} questionType - 当前问题类型
- * @returns {{ refuse: boolean, reason: string|null }}
+ * @returns {Promise<{ refuse: boolean, reason: string|null }>}
  */
-function shouldRefuse(mention, agent, agentHistory, questionType) {
+async function shouldRefuse(mention, agent, agentHistory, questionType) {
   // 1. questionTypes 不匹配：mention.type 是 question 且 agent.questionTypes 不含 questionType
   //    rebuttal/support 类型不拒（因为是回应，不是新问题）
   if (
@@ -769,7 +769,57 @@ function shouldRefuse(mention, agent, agentHistory, questionType) {
     }
   }
 
-  // 3. 否则不拒（LLM 自评兜底先不实现，规则判断足够）
+  // 3. LLM 自评兜底：规则判断模糊时，让 Agent 自评是否已表达过类似观点
+  //    仅在前两层都通过时触发；失败则降级为不拒（不阻塞主流程）
+  if (mention.question && Array.isArray(agentHistory) && agentHistory.length > 0) {
+    const llmResult = await llmSelfEvaluateRefusal(mention, agent, agentHistory);
+    if (llmResult.refuse) {
+      return { refuse: true, reason: llmResult.reason || '已说过类似观点' };
+    }
+  }
+
+  return { refuse: false, reason: null };
+}
+
+/**
+ * LLM 自评拒答兜底（Step 5 第三层）
+ * 让被 @ 的 Agent 自评"是否已经在历史发言中表达过对类似问题的看法"
+ * 轻量调用：max_tokens=30，temperature=0.3，仅返回 JSON
+ * 失败时降级为 { refuse: false }，不阻塞主流程
+ * @param {Object} mention - { fromName, question }
+ * @param {Object} agent - { name }
+ * @param {Array} agentHistory - [{content, round}]
+ * @returns {Promise<{ refuse: boolean, reason: string|null }>}
+ */
+async function llmSelfEvaluateRefusal(mention, agent, agentHistory) {
+  const historyText = agentHistory
+    .map(h => h.content)
+    .join('\n')
+    .slice(0, 300);
+  const messages = [
+    {
+      role: 'system',
+      content: `你是${agent.name}。判断你是否已经在历史发言中表达过对类似问题的看法。只返回JSON：{"refuse":true/false,"reason":"已说过类似观点"或null}`,
+    },
+    {
+      role: 'user',
+      content: `@你的问题：「${(mention.question || '').slice(0, 60)}」\n你的历史发言：\n${historyText}`,
+    },
+  ];
+  try {
+    const data = await callChatApi(messages, 'glm-4-flash', 0.3, 30);
+    const text = data.choices?.[0]?.message?.content || data.content || '';
+    const match = text.match(/\{[^}]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      return {
+        refuse: !!parsed.refuse,
+        reason: parsed.refuse ? (parsed.reason || '已说过类似观点') : null,
+      };
+    }
+  } catch (e) {
+    console.warn('[llmSelfEvaluateRefusal] 失败，降级为不拒', e.message);
+  }
   return { refuse: false, reason: null };
 }
 
@@ -798,7 +848,8 @@ export async function generateDialoguesForAgents(question, agents, questionType,
 
   // 内部辅助：用 parseMentions 解析发言，发布到 Blackboard 并维护 mentionQueue
   // 返回 collaboration 对象（与旧 inferCollaboration 同 shape，向后兼容 onAgentComplete 回调）
-  const publishAndEnqueue = (agent, text, confidence) => {
+  // async：因 shouldRefuse 第三层 LLM 自评需 await
+  const publishAndEnqueue = async (agent, text, confidence) => {
     // 用 parseMentions 解析 <mention> 标签（替代 inferCollaboration 主路径）
     const { mentions, body } = parseMentions(text, nonMasterAgents);
 
@@ -853,6 +904,25 @@ export async function generateDialoguesForAgents(question, agents, questionType,
       replyToSnippet,
     });
 
+    // 回填 mentionChain：追溯 fromAgent 被最近一次 @ 的链，追加当前 msgId
+    // 新链 = [当前id]；延续链 = [...parentChain, 当前id]；非 mention 不赋值
+    if (isMention) {
+      const parentMentions = blackboard.messages.filter(
+        m => m.isMention === true && m.targetAgentId === agent.id && m.id !== published.id
+      );
+      let chain;
+      if (parentMentions.length > 0) {
+        const lastParent = parentMentions[parentMentions.length - 1];
+        const parentChain = Array.isArray(lastParent.mentionChain)
+          ? lastParent.mentionChain
+          : [lastParent.id];
+        chain = [...parentChain, published.id];
+      } else {
+        chain = [published.id];
+      }
+      published.mentionChain = chain;
+    }
+
     // mention 入队 + 拒答判断（Step 5：拒绝回应逻辑）
     // 拒答在 @ 发起时立即判断（A@B 时判断 B 是否拒答），B 本轮不再发言
     if (isMention && mentions.length > 0) {
@@ -873,7 +943,7 @@ export async function generateDialoguesForAgents(question, agents, questionType,
         const agentHistory = blackboard.getByAgent(targetAgent.id)
           .filter(msg => !msg.refusalReason)
           .map(msg => ({ content: msg.content, round: msg.round }));
-        const refusal = shouldRefuse(mentionObj, targetAgent, agentHistory, questionType);
+        const refusal = await shouldRefuse(mentionObj, targetAgent, agentHistory, questionType);
         if (refusal.refuse) {
           // 拒答：由被 @ 的智囊发布一条 refusal 消息，不加入 mentionQueue
           blackboard.publish({
@@ -1007,7 +1077,7 @@ export async function generateDialoguesForAgents(question, agents, questionType,
           if (text && text.length > 5) {
             dialogues[agent.id] = text;
             // 用 parseMentions 解析 mention 标签 + 发布到 Blackboard + 维护 mentionQueue
-            const collaboration = publishAndEnqueue(agent, text, 0.8);
+            const collaboration = await publishAndEnqueue(agent, text, 0.8);
             apiSuccess = true;
             source = 'llm';
             results[agent.id] = { text, success: true, error: null, source, collaboration };
@@ -1024,7 +1094,7 @@ export async function generateDialoguesForAgents(question, agents, questionType,
               text = await getAgentDialogueWithTimeout(agent, question, previousDialogues, dialogueOptions, wrappedToolCallbacks);
               if (text && text.length > 5) {
                 dialogues[agent.id] = text;
-                const collaboration = publishAndEnqueue(agent, text, 0.8);
+                const collaboration = await publishAndEnqueue(agent, text, 0.8);
                 apiSuccess = true;
                 source = 'llm';
                 results[agent.id] = { text, success: true, error: null, source, collaboration };
@@ -1044,7 +1114,7 @@ export async function generateDialoguesForAgents(question, agents, questionType,
       text = localText;
       dialogues[agent.id] = localText;
       // 降级发言同样用 parseMentions 解析（confidence 较低，标记来源）
-      const collaboration = publishAndEnqueue(agent, localText, 0.6);
+      const collaboration = await publishAndEnqueue(agent, localText, 0.6);
       source = 'preset';
       errors[agent.id] = {
         agentName: agent.name,

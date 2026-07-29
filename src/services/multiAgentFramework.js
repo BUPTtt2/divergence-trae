@@ -217,6 +217,24 @@ class Blackboard {
       };
     }
 
+    // @ 链深度校验：fromAgentId 若是被 @ 触发的回应，追溯其 mentionChain 长度
+    // 最大链长 = 3（A@B→B@C→C@A 允许，第 4 跳强制降级为 claim）
+    const parentMentions = this.messages.filter(
+      m => m.isMention === true && m.targetAgentId === fromAgentId
+    );
+    if (parentMentions.length > 0) {
+      const lastParent = parentMentions[parentMentions.length - 1];
+      const parentChain = Array.isArray(lastParent.mentionChain)
+        ? lastParent.mentionChain
+        : [lastParent.id];
+      if (parentChain.length >= 3) {
+        return {
+          allowed: false,
+          reason: `mention_chain_depth_exceeded (${parentChain.length}/3)`,
+        };
+      }
+    }
+
     return { allowed: true, reason: 'ok' };
   }
 

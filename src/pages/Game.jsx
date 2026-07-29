@@ -13,7 +13,6 @@ import { detectConvergenceFromBlackboard } from '../services/multiAgentFramework
 import { getCustomAgents, recommendSubscribedAgents } from '../utils/customAgent';
 import { streamYanChat, addYanMemory, getYanMemories } from '../services/apiClient';
 import { recallRelevantMemories, formatMemoriesForPrompt, saveWorkingMemory, saveEpisode, inferFactsFromSession, saveAgentFeedback, detectChoicePattern } from '../services/memoryStore';
-import { generateShareCard, downloadShareCard } from '../utils/shareCardGenerator';
 
 const BORDER_COLOR = '#C8A850';
 const GLOW_COLOR = '#F0D890';
@@ -2058,6 +2057,7 @@ function FateCardPanel({ choice, inference, userInput, agentDialogues, activeAge
                 pillars,
                 date: new Date().toISOString().split('T')[0],
               };
+              const { generateShareCard, downloadShareCard } = await import('../utils/shareCardGenerator');
               const dataUrl = await generateShareCard(cardForShare, {
                 yanSummary: summary,
                 agentNotes: advisorNotes.map(a => ({ name: a.name, color: a.color, note: a.note })),
