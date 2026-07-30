@@ -262,13 +262,13 @@ input → casting → analyzing → summoning → yan_analyze → agent_select
 - `server/src/routes/deliberation.js` ★ 新轨路由 /api/deliberation/*（5个端点）
 - `server/src/services/reflector.js` (待建) Reflect 阶段：聚合+矛盾检测+重规划+立卦
 - `server/src/services/autonomyGate.js` (待建) 自主性判定（追问/停止/重规划）
-- `server/src/services/toolProbeService.js` (待建) 演侧工具调用（确定性映射+兜底）
+- `server/src/services/toolProbeService.js` ★ 演侧工具调用（确定性映射+6s超时降级+"天机未明"兜底，接入planner Plan阶段）
 - `server/src/migrations/004-deliberation-memory.sql` ★ 3张表：deliberation_sessions/session_summaries/user_memory
 
 **实现进度**:
 - [x] Step 1: 记忆系统骨架（memoryService.js + 004迁移 + db.js白名单）✅ 已自检通过
 - [x] Step 2: 推演状态机骨架（deliberationEngine + planner + /api/deliberation/start）✅ 已自检通过
-- [ ] Step 3: 演侧工具调用（toolProbeService）
+- [x] Step 3: 演侧工具调用（toolProbeService）✅ 已自检通过（无网络降级不抛错，接入planner）
 - [ ] Step 4: 自主性（autonomyGate）
 - [ ] Step 5: Reflect 与立卦（reflector）
 - [ ] Step 6: 记忆闭环（consolidate 前端命格簿）

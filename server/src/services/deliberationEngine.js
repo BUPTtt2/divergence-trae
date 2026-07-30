@@ -242,11 +242,25 @@ export async function selfTest() {
   if (!restored || restored.id !== result.sessionId) {
     throw new Error(`selfTest 失败：getState 读回异常 restored=${JSON.stringify(restored?.id)}`);
   }
+
+  // Step 3 校验：session.tool_results 非空（至少探测了工具）
+  //   saveSession 持久化字段为 snake_case: tool_results
+  //   运行时字段为 camelCase: toolResults
+  const toolResults = restored.tool_results || restored.toolResults || [];
+  const toolProbeCount = Array.isArray(toolResults) ? toolResults.length : 0;
   logger.info('=== DeliberationEngine selfTest getState 校验通过 ===', {
     restoredState: restored.state,
+    toolProbeCount,
+    toolProbeOk: toolResults.filter((r) => r.ok).length,
+    toolProbeSummaries: toolResults.map((r) => `${r.tool}:${r.ok ? '✓' : '✗'}`),
   });
 
-  return { ok, sessionId: result.sessionId, state: result.state, dimCount: result.plan.dimensions.length };
+  // Step 3 断言：travel 类问题应至少探测了工具（探测本身可能失败，但应有记录）
+  if (toolProbeCount === 0) {
+    throw new Error(`selfTest 失败：toolResults 为空，期望至少探测 1 个工具`);
+  }
+
+  return { ok, sessionId: result.sessionId, state: result.state, dimCount: result.plan.dimensions.length, toolProbeCount };
 }
 
 export default {

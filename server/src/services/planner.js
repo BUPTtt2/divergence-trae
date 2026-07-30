@@ -15,6 +15,7 @@
 
 import { callLLM } from './llmRouter.js';
 import * as memoryService from './memoryService.js';
+import * as toolProbeService from './toolProbeService.js';
 import logger from './logger.js';
 
 // ============ 常量 ============
@@ -132,9 +133,10 @@ function parseDimensionsJSON(text) {
  * @param {string} question
  * @param {Array} ruleDims 规则降级维度（兜底）
  * @param {Array} memories L3 命格
+ * @param {Array} toolResults 演窥探的天机（Step 3 注入）
  * @returns {Promise<Array|null>} 增强后的维度数组
  */
-async function llmEnhanceDimensions(question, ruleDims, memories) {
+async function llmEnhanceDimensions(question, ruleDims, memories, toolResults) {
   const memoryText = Array.isArray(memories) && memories.length > 0
     ? memories.map((m) => `[${m.memory_type || '记忆'}] ${m.content}`).join('\n')
     : '（无历史命格记录）';
@@ -143,12 +145,20 @@ async function llmEnhanceDimensions(question, ruleDims, memories) {
     .map((d) => `- ${d.name}(perspective=${d.perspective})`)
     .join('\n');
 
-  const prompt = `你是"演"，赛博推演师。请基于用户问题与已知命格，优化推演维度。
+  // Step 3: 注入演窥探的天机摘要（让 LLM 基于实时数据优化维度）
+  const toolResultsText = Array.isArray(toolResults) && toolResults.length > 0
+    ? toolResults.map((r) => `- [${r.tool}] ${r.summary}`).join('\n')
+    : '（未窥得天机）';
+
+  const prompt = `你是"演"，赛博推演师。请基于用户问题、已知命格与所窥天机，优化推演维度。
 
 【用户问题】${question}
 
 【演所记命格】
 ${memoryText}
+
+【演所窥天机（实时数据，可据此调整维度侧重）】
+${toolResultsText}
 
 【规则降级已生成的维度（兜底，可调整）】
 ${ruleDimsText}
@@ -160,7 +170,8 @@ perspective 可选: financial/risk/emotional/reflection/strategic/action/communi
 规则：
 1. 维度必须覆盖问题核心矛盾
 2. 若命格与问题相关，应增加反思维度引用命格
-3. 只返回 JSON 数组，不要任何解释`;
+3. 若天机显示特定风险（如恶劣天气、股市大跌），应强化对应维度
+4. 只返回 JSON 数组，不要任何解释`;
 
   try {
     const text = await callLLM(
@@ -228,16 +239,38 @@ export async function plan(session) {
   const questionType = detectQuestionType(question);
   logger.info('[Planner] 规则降级规划完成', { questionType, dimCount: ruleDims.length });
 
-  // 4. LLM 增强（失败走规则降级，不阻塞）
-  const enhanced = await llmEnhanceDimensions(question, ruleDims, memories);
+  // 3.5 调工具窥天机（Step 3 接入：detectToolNeeds → probe）
+  //     失败不阻塞规划，已有 try/catch 降级；结果注入 session 供 LLM/智囊/Reflect 使用
+  let toolResults = [];
+  try {
+    const toolNeeds = toolProbeService.detectToolNeeds(session.question, questionType);
+    toolResults = toolNeeds.length > 0
+      ? await toolProbeService.probe(session.question, questionType)
+      : [];
+    logger.info('[Planner] 工具探测完成', {
+      toolNeeds,
+      toolResultCount: toolResults.length,
+      okCount: toolResults.filter((r) => r.ok).length,
+      summaries: toolResults.map((r) => `${r.tool}:${r.ok ? '✓' : '✗'}`),
+    });
+  } catch (e) {
+    logger.warn('[Planner] 工具探测异常，跳过（不阻塞规划）', { error: e.message });
+    toolResults = [];
+  }
+  // 同时写入 camelCase（运行时访问）与 snake_case（saveSession 持久化字段）
+  session.toolResults = toolResults;
+  session.tool_results = toolResults;
+
+  // 4. LLM 增强（失败走规则降级，不阻塞）—— 注入工具结果摘要让 LLM 基于天机优化维度
+  const enhanced = await llmEnhanceDimensions(question, ruleDims, memories, toolResults);
   const dimensions = enhanced || ruleDims;
 
   // 5. 生成 DeliberationPlan（按文档 4.3.2 节）
-  //    Step 2 不接工具调用（toolProbes 留空，Step 3 实现）
+  //    Step 3: toolProbes 填入探测摘要（Step 2 留空，Step 3 接工具）
   //    Step 2 不追问（askUser 留空，Step 4 实现）
   const deliberationPlan = {
     dimensions,
-    toolProbes: [],
+    toolProbes: toolResults.map((r) => ({ tool: r.tool, summary: r.summary, ok: r.ok })),
     askUser: [],
     minFindings: MIN_FINDINGS,
   };
@@ -262,6 +295,8 @@ export async function plan(session) {
     state: session.state,
     dimCount: dimensions.length,
     memoryCount: memories.length,
+    toolProbeCount: toolResults.length,
+    toolProbeOk: toolResults.filter((r) => r.ok).length,
   });
 
   // 8. 返回（askUser 固定空数组）
