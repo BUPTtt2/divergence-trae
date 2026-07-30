@@ -1,232 +1,308 @@
-# 演策 - 产品梳理文档
+# 演策 (YAN CE) - 项目核心说明书
 
-> **权威设计文档**：[`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md) —— Agent 架构 + 工作流可视化 + prompt配置中心 + 五视角商业蓝图 + 技术债 + ADR 决策记录。**改任何 Agent 行为/prompt/工作流，先读它。** 本文档（CLAUDE.md）是产品梳理与 API 对照，AGENT_DESIGN.md 是架构与商业地图。
-
-## 一、当前状态总结
-
-### 核心功能（AI决策推演沙盘）
-- 用户输入问题 → 演分析问题 → 召唤Agent → 用户选择Agent → Agent辩论 → 演总结 → 占卜立卦 → 用户抉择 → 生成命签
-
-### 已完成功能
-1. ✅ 后端分析问题（LLM生成动态Agent列表）
-2. ✅ 预设Agent辩论发言（LLM生成真实回答）
-3. ✅ Agent选择界面（侧边栏形式）
-4. ✅ 自定义Agent创建功能
-5. ✅ 演的析问、反思、总结阶段
-6. ✅ 占卜立卦动画
-7. ✅ 命签收藏功能
-
-### 当前问题
-1. ❌ 自定义Agent发言失败（后端不认识custom_开头的ID）
-2. ❌ 演的分析总结不够真实（需要调用LLM生成）
-3. ❌ 流程卡住（branch_select阶段不存在）
-4. ❌ API路径问题（部分接口404）
-5. ❌ 用户体验不稳定（mock内容过多）
-6. ❌ 循环依赖导致白页（apiClient.js ↔ auth.js 相互导入）
-7. ❌ 登录入口不明显，用户难以发现
+> **版本**: v2.0 (2026-07-30 重写)
+> **用途**: 给 AI 和开发者提供完整项目上下文，避免理解偏差
+> **更新纪律**: 任何架构/功能变更必须同步更新此文件
 
 ---
 
-## 二、核心考察维度分析
+## 一、项目目标
 
-### 产品完成度（30%）
-- **功能完整**：用户使用路径基本完整，但存在断点
-- **体验稳定**：存在严重bug，核心流程不可顺畅走通
-- **页面完备**：主要页面存在，但部分功能缺失
+**一句话**: 演策 = AI 决策推演沙盘。用户抛出真实纠结 → 演（主Agent）析问 → 召唤多视角智囊辩论 → 占卜立卦 → 用户抉择 → 生成可收藏可分享的命签。
 
-### 技术实现（30%）
-- **交互友好**：整体交互设计有特色，3D界面美观
-- **运行稳定**：存在多处崩溃点
-- **技术方案**：架构设计合理，但实现细节有问题
+**核心价值**: 帮助用户在面临重要决策时，通过多维度 Agent 辩论获得更全面的视角，避免决策盲区。
 
-### 实用性（20%）
-- **场景成熟**：决策辅助是真实高频需求
-- **解决效果**：当前无法有效解决用户问题
-- **持续使用**：缺少用户粘性设计
-
-### 创新性（20%）
-- **需求创新**：将AI与传统卜卦结合，有独特性
-- **解决思路**：多Agent辩论形式有创新性
-- **技术创新**：3D卦象展示有特色
+**北极星指标**: 让用户在「人生重要决策前，先想到来演策起一卦」。
 
 ---
 
-## 三、问题根因分析
+## 二、技术栈
 
-### 1. 自定义Agent问题
-- **原因**：自定义Agent只保存在前端localStorage，后端不认识
-- **影响**：用户创建的Agent无法发言，体验断裂
-- **解决方案**：前端本地生成发言，或同步到后端
+### 前端 (Client)
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| React | 19.2 | UI 框架 |
+| Vite | 8.1 | 构建工具 |
+| Tailwind CSS | 3.4 | 样式 |
+| Framer Motion | 12.4 | 动画 |
+| Three.js / React Three Fiber | 0.185 / 9.6 | 3D 视觉 |
+| React Router | 7.18 | 路由 |
 
-### 2. 演的分析总结问题
-- **原因**：`generateYanSummary`调用后端API，但部分接口不存在
-- **影响**：演的总结内容为空或使用默认模板
-- **解决方案**：完善后端API或本地降级策略
+### 后端 (Server)
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| Node.js | - | 运行时 |
+| Express | - | Web 框架 |
+| 智谱 AI (Zhipu) | - | LLM 推理引擎 |
+| SQLite | - | 数据存储 (via better-sqlite3) |
+| Railway | - | 部署平台 |
 
-### 3. 流程卡住问题
-- **原因**：`handleProceedToChoices`跳转到不存在的`branch_select`阶段
-- **影响**：占卜后无法继续流程
-- **解决方案**：改为跳转到`committing`阶段
-
-### 4. API路径问题
-- **原因**：部分API路径与后端实际路由不匹配
-- **影响**：关键功能无法使用
-- **解决方案**：统一API路径配置
-
----
-
-## 四、产品方向建议
-
-### 目标定位
-从"demo级产品"升级为"可落地的AI决策辅助工具"
-
-### 核心价值
-帮助用户在面临重要决策时，通过多维度分析获得更全面的视角
-
-### 关键改进方向
-1. **稳定性**：修复所有流程断点，确保核心流程100%可走通
-2. **真实性**：确保所有Agent发言为LLM真实生成，减少mock
-3. **用户体验**：优化流程体验，减少等待时间
-4. **商业化**：考虑如何实现用户增长和变现
+### 开发工具
+| 工具 | 用途 |
+|------|------|
+| oxlint | 代码检查 |
+| Vite Dev Server | 本地开发 (port 5173) |
 
 ---
 
-## 五、优先级排序
+## 三、目录结构
 
-### P0 - 必须修复（上线前）
-1. ✅ 自定义Agent发言（本地模板）
-2. ✅ 演的分析总结（本地降级）
-3. ✅ 流程卡住问题（阶段跳转）
-4. ✅ API路径修复
-
-### P1 - 重要优化（上线后）
-1. 减少mock内容，提高LLM调用成功率
-2. 优化用户交互体验
-3. 添加用户反馈机制
-4. 完善命签生成逻辑
-
-### P2 - 长期规划
-1. 用户登录系统
-2. 历史记录管理
-3. 分享功能
-4. 移动端适配
-5. 商业化功能（会员、积分等）
-
----
-
-## 六、前后端模块对应文档
-
-### 项目结构
 ```
-sandbox-app/
-├── src/                    # 前端代码 (React + Vite)
-│   ├── pages/              # 页面组件
-│   ├── components/         # 通用组件
-│   ├── services/           # API调用与业务逻辑
-│   ├── context/            # React Context
-│   ├── data/               # 静态数据
-│   └── utils/              # 工具函数
-├── server/                 # 后端代码 (Express + Railway)
+divergence-trae/
+├── src/                          # 前端 (React + Vite)
+│   ├── pages/                    # 页面
+│   │   ├── Game.jsx             # ★ 核心推演页 (状态机 + 编排层)
+│   │   ├── Landing.jsx          # 首页
+│   │   ├── Agents.jsx           # 智囊阁
+│   │   ├── Daily.jsx            # 每日卦签
+│   │   ├── Collection.jsx       # 命签册
+│   │   └── ...
+│   ├── components/
+│   │   ├── board/               # ★ 推演棋盘组件
+│   │   │   ├── AgentDialogueOverlay.jsx  # Agent选择+辩论界面
+│   │   │   ├── GameBoard.jsx    # 主棋盘
+│   │   │   ├── ChoiceHud.jsx    # 选择HUD
+│   │   │   ├── ProcessStepper.jsx  # 流程步进器
+│   │   │   └── ...
+│   │   ├── ClarifyDialog.jsx    # 澄清对话
+│   │   ├── YanChat.jsx          # 演对话
+│   │   ├── AgentCreator.jsx     # 铸造台
+│   │   └── ...
+│   ├── services/                 # ★ 业务逻辑层
+│   │   ├── inferenceEngine.js   # 推演引擎 (Agent合并/降级)
+│   │   ├── apiClient.js         # API客户端
+│   │   ├── memoryStore.js       # 记忆存储
+│   │   ├── multiAgentFramework.js  # 多Agent框架 (Blackboard)
+│   │   └── ...
+│   ├── data/                     # 静态数据
+│   │   ├── agents.js            # ★ Agent池前端定义 (12个Agent)
+│   │   ├── nodes.js             # 决策树节点
+│   │   ├── scripts.js           # 预设场景
+│   │   └── ...
+│   ├── context/                  # React Context
+│   ├── hooks/                    # 自定义Hooks
+│   ├── utils/                    # 工具函数
+│   └── App.jsx                   # 根组件
+├── server/                       # 后端 (Express)
 │   ├── src/
-│   │   ├── routes/         # API路由
-│   │   ├── services/       # 业务服务
-│   │   ├── middleware/     # 中间件
-│   │   ├── data/           # 静态数据
-│   │   └── utils/          # 工具函数
-└── worker/                 # 后端代码 (Cloudflare Workers - 备用)
-    └── src/
-        ├── routes/         # API路由
-        ├── services/       # 业务服务
-        ├── middleware/     # 中间件
-        └── utils/          # 工具函数
+│   │   ├── routes/              # API路由
+│   │   │   ├── agent.js         # ★ Agent分析/辩论
+│   │   │   ├── yan.js           # ★ 演对话
+│   │   │   ├── divination.js    # 占卜
+│   │   │   └── ...
+│   │   ├── services/            # 业务服务
+│   │   │   ├── agentEngine.js   # ★ Agent编排引擎
+│   │   │   ├── llmRouter.js     # LLM路由
+│   │   │   ├── treeService.js   # 决策树生成
+│   │   │   └── ...
+│   │   ├── data/
+│   │   │   ├── agentPool.js     # ★ 权威Agent池 (后端单一来源)
+│   │   │   └── hexagrams.json   # 卦象数据
+│   │   └── middleware/          # 中间件
+│   └── index.js                 # 入口
+├── docs/                         # 设计文档
+│   ├── AGENT_DESIGN.md          # ★ Agent设计权威文档
+│   ├── PRODUCTION_ARCHITECTURE.md  # 生产级架构
+│   └── ...
+└── CLAUDE.md                     # 本文件
 ```
 
-### 前端模块 → 后端路由对应表
+---
 
-| 前端模块 | 前端文件 | 后端路由 | 后端文件 | 认证要求 |
-|----------|----------|----------|----------|----------|
-| **推演台** | `src/pages/Game.jsx` | `/api/agent/analyze` | `server/src/routes/agent.js` | optionalAuth |
-| | | `/api/agent/dialogue` | `server/src/routes/agent.js` | optionalAuth |
-| | | `/api/agent/summary` | `server/src/routes/agent.js` | optionalAuth |
-| | | `GET /api/agent/personas` | `server/src/routes/agent.js` | 无（P0新增，返回全部智囊persona） |
-| | | `/api/divination/cast` | `server/src/routes/divination.js` | optionalAuth |
-| | | `/api/divination/interpret` | `server/src/routes/divination.js` | optionalAuth |
-| **演对话** | `src/components/YanChat.jsx` | `/api/yan/chat` | `server/src/routes/yan.js` | optionalAuth |
-| | | `/api/yan/chat/stream` | `server/src/routes/yan.js` | optionalAuth |
-| | | `/api/yan/memories` | `server/src/routes/yan.js` | optionalAuth |
-| **智囊阁** | `src/pages/Agents.jsx` | `/api/advisors` | `server/src/routes/advisors.js` | requireUser |
-| | | `/api/agent/analyze` | `server/src/routes/agent.js` | optionalAuth |
-| **命签收藏** | `src/pages/Collection.jsx` | `/api/cards` | `server/src/routes/cards.js` | requireUser |
-| **每日卦签** | `src/pages/Daily.jsx` | `/api/daily` | `server/src/routes/daily.js` | optionalAuth |
-| **数据同步** | `src/services/dataSync.js` | `/api/sync/migrate` | `server/src/routes/sync.js` | optionalAuth |
-| | | `/api/sync/status` | `server/src/routes/sync.js` | optionalAuth |
-| **会话管理** | `src/services/apiClient.js` | `/api/agent/session/*` | `server/src/routes/session.js` | requireUser |
+## 四、核心架构
 
-### 核心流程API调用链
+### 4.1 Agent 系统架构
 
-#### 1. 推演流程
 ```
-用户输入问题
-    ↓
-POST /api/agent/analyze        (分析问题，匹配Agent)
-    ↓
-POST /api/yan/memories         (获取用户记忆)
-    ↓
-POST /api/yan/chat/stream      (演分析问题，提出追问)
-    ↓
-POST /api/agent/dialogue       (Agent发言 - 循环调用)
-    ↓
-POST /api/agent/summary        (演总结辩论)
-    ↓
-POST /api/divination/cast      (起卦)
-    ↓
-POST /api/divination/interpret (解卦)
-    ↓
-POST /api/cards                (保存命签)
-    ↓
-POST /api/yan/memories         (保存记忆)
-```
-
-#### 2. 演对话流程
-```
-用户发送消息
-    ↓
-POST /api/yan/chat/stream      (流式对话)
-    ↓
-GET /api/yan/memories          (获取记忆上下文)
+用户输入 "我要不要去西藏"
+    │
+    ▼
+┌─────────────────────────────────┐
+│  前端 Game.jsx (编排层)          │
+│  - detectQuestionType()         │
+│  - getAgentsForQuestion()       │
+└──────────────┬──────────────────┘
+               │ POST /api/agent/analyze
+               ▼
+┌─────────────────────────────────┐
+│  后端 agentEngine.js            │
+│  - classifyIntent() → 意图识别   │
+│  - analyzeQuestion() → LLM分析   │
+│  - 动态生成Agent列表             │
+│  - generateTree() → 决策树       │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  后端 agentPool.js              │
+│  - 8个权威Agent (三层提示词)      │
+│  - buildAgentSystemPrompt()     │
+│  - getAgentsByIds()             │
+└──────────────┬──────────────────┘
+               │ 合并本地扩展Agent
+               ▼
+┌─────────────────────────────────┐
+│  前端 inferenceEngine.js        │
+│  - 合并后端+前端Agent (去重)     │
+│  - 补充远足/养生/法度/学者       │
+│  - 降级本地预设                  │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  AgentDialogueOverlay.jsx       │
+│  - Agent选择界面                  │
+│  - 多Agent辩论                   │
+│  - Blackboard (黑板共识)         │
+└─────────────────────────────────┘
 ```
 
-### API认证策略
+### 4.2 双端 Agent 定义 (不一致!)
 
-| 认证类型 | 说明 | 使用场景 |
-|----------|------|----------|
-| `requireUser` | 必须登录，生产环境需签名 | 用户数据操作（卡片、收藏、自定义Agent） |
-| `optionalAuth` | 登录可用，未登录降级 | 核心推演功能、演对话、卦签 |
+| 维度 | 后端 agentPool.js | 前端 agents.js |
+|------|-------------------|----------------|
+| Agent数量 | 8个 | 12个 |
+| Agent列表 | 钱谷/路向/风眼/心禾/镜渊/云图/震行/兑言 | +远足/养生/法度/学者 |
+| 提示词结构 | 三层 (identity/methodology/deliverable) | persona (单段) |
+| 问题类型 | career/finance/relationship/life/action/communication/offer/startup/invest/city/legal/health/education/technical/product | career/finance/relationship/offer/startup/invest/communication/action/life/daily/travel/city/health/education |
+| 权威源 | ✅ 是 | ❌ 仅降级用 |
 
-### 前端API配置
+**⚠️ 关键问题**: 后端缺少 travel 类型和远足/养生/法度/学者 Agent，前端扩展的这4个Agent后端无法发言。
 
-- **API地址**: `https://yance-bagua-engine-production.up.railway.app`
-- **配置文件**: `public/api-config.js` 和 `src/services/apiClient.js`
-- **环境变量**: `VITE_API_BASE`（开发环境）
+### 4.3 状态机 (Game.jsx 11阶段)
 
-### 常见问题排查
+```
+input → casting → analyzing → summoning → yan_analyze → agent_select
+→ agent_debate(≤3轮) → reflecting → summary → oracle_prompt
+→ oracle → path_reveal → committing → final
+```
 
-1. **404错误**: 检查后端路由是否存在，前端路径是否匹配
-2. **401错误**: 检查是否需要登录，签名是否正确
-3. **Agent不发言**: 检查后端`agentEngine.js`中LLM调用是否正常
-4. **演不回复**: 检查`yanChatService.js`和`llmRouter.js`
-5. **流程卡住**: 检查`Game.jsx`中的状态机逻辑
+---
 
-### 修复记录
+## 五、开发规范
 
-| 日期 | 问题 | 修复方案 | 文件 |
-|------|------|----------|------|
-| 2026-07-23 | 自定义Agent无法调用LLM | 后端接受agentConfig参数动态创建Agent | `server/src/routes/agent.js` |
-| 2026-07-23 | 演对话需要登录 | 修改yan路由使用optionalAuth | `server/src/routes/yan.js` |
-| 2026-07-23 | 记忆接口401 | 修改yan/memories支持未登录 | `server/src/routes/yan.js` |
-| 2026-07-23 | sync/migrate 404 | 添加sync路由 | `server/src/routes/sync.js` |
-| 2026-07-23 | 签名验证失败 | optionalAuth签名失败时允许匿名访问 | `server/src/middleware/auth.js` |
-| 2026-07-23 | 循环依赖导致白页 | auth.js延迟导入apiClient，避免循环 | `src/services/auth.js` |
-| 2026-07-23 | 析问阶段白页 | Game.jsx添加try-catch和默认配置fallback | `src/pages/Game.jsx` |
-| 2026-07-23 | AgentDialogueOverlay白页 | 添加yan_analyze阶段加载状态显示 | `src/components/board/AgentDialogueOverlay.jsx` |
-| 2026-07-27 | persona/prompt前后端双份维护 | P0：后端新增`GET /api/agent/personas` API，dialogue接口改用`buildAgentSystemPrompt`三层提示词；前端`inferenceEngine.js`新增`fetchAgentPersonas()`从API获取persona，`AGENT_PERSONAS`降级为fallback | `server/src/routes/agent.js` `src/services/inferenceEngine.js` `src/App.jsx` |
+### 5.1 命名规则
+- 组件: PascalCase (如 `AgentDialogueOverlay.jsx`)
+- 函数/变量: camelCase (如 `detectQuestionType`)
+- 常量: UPPER_SNAKE (如 `MAX_DEBATE_ROUNDS`)
+- 文件: kebab-case 或 PascalCase (保持现有风格)
+
+### 5.2 架构边界
+- **前端** 只负责: UI渲染、状态管理、API调用、本地降级
+- **后端** 负责: LLM调用、Agent编排、数据持久化
+- **禁止**: 在前端实现业务逻辑（如LLM prompt拼接应在后端）
+
+### 5.3 变更规则
+- ❌ **禁止擅自修改** 稳定模块: agentPool.js, agentEngine.js, llmRouter.js
+- ✅ **新增功能** 必须先写设计文档 → 确认方案 → 再写代码
+- ✅ **修改现有Agent** 必须同时更新: 后端agentPool.js + 前端agents.js + 对应文档
+
+### 5.4 Mock 数据规则
+- ❌ **禁止** 在useState中使用非空默认值作为初始状态
+- ❌ **禁止** 在placeholder中硬编码特定业务场景
+- ✅ 允许降级默认值 (如LLM失败时的fallback)，但必须标注 `[FALLBACK]`
+
+### 5.5 测试验证
+- 核心流程必须走通: input → agent_select → agent_debate → final
+- 新增Agent必须验证: 问题检测正确 → Agent推荐正确 → Agent发言正常
+- 回归测试: 新功能不能破坏已有功能
+
+---
+
+## 六、已识别的关键问题
+
+### P0 - 阻塞性问题
+1. ❌ **前后端Agent定义不一致**: 后端缺少4个扩展Agent (远足/养生/法度/学者) 和 travel 问题类型
+2. ❌ **后端detectQuestionType无类型优先级**: 旅行问题可能被误分类
+3. ❌ **Agent去重逻辑复杂**: 三层去重导致维护困难
+
+### P1 - 重要问题
+4. ❌ **自定义Agent发言链路未打通**: 自定义Agent存储在localStorage，后端不认识
+5. ❌ **LLM记忆上下文有限**: 澄清对话历史传入但可能被截断
+6. ❌ **字体渲染问题**: "Ma Shan Zheng" 字体中文字符不全
+
+### P2 - 优化项
+7. ❌ **代码中存在残留mock数据**: 需全面排查清理
+8. ❌ **状态机缺少异常路径**: 流程卡死无降级策略
+
+---
+
+## 七、开发步骤规划
+
+### Step 1: 基础建设 (当前)
+- [x] 清除所有mock默认值和硬编码
+- [ ] 创建项目文档 (CLAUDE.md + docs)
+- [ ] 建立开发日志机制
+
+### Step 2: Agent架构统一
+- [ ] 后端agentPool.js对齐前端12个Agent
+- [ ] 后端detectQuestionType增加类型优先级
+- [ ] 统一问题类型枚举 (前后端共用)
+- [ ] 前端Agent定义改为从后端fetch (不再双份维护)
+
+### Step 3: 核心流程稳定化
+- [ ] 自定义Agent发言链路打通
+- [ ] 澄清对话记忆完善
+- [ ] 状态机异常路径补充
+- [ ] LLM调用超时/失败降级
+
+### Step 4: 体验优化
+- [ ] Agent名称字体渲染修复
+- [ ] 界面响应式优化
+- [ ] 性能优化 (减少不必要的re-render)
+
+### Step 5+: 真 Agent 架构重构 (进行中)
+
+> 详见 [`docs/REAL_AGENT_ARCHITECTURE.md`](docs/REAL_AGENT_ARCHITECTURE.md)。目标：把演策从「多角色LLM咨询系统」升级为「真Agent推演系统」，补齐自主性/记忆/规划/演侧工具调用四项能力。范式：半中心化 Plan-Execute-Reflect。
+
+**关键路径（新增模块）**:
+- `server/src/services/memoryService.js` ★ L1/L2/L3 三层记忆读写+提取+向量检索（余弦相似度，无向量库依赖）
+- `server/src/services/deliberationEngine.js` (待建) 推演状态机总控 Plan→Execute→Reflect
+- `server/src/services/planner.js` (待建) Plan 阶段：读记忆+调工具+规划+自主性判定
+- `server/src/services/reflector.js` (待建) Reflect 阶段：聚合+矛盾检测+重规划+立卦
+- `server/src/services/autonomyGate.js` (待建) 自主性判定（追问/停止/重规划）
+- `server/src/services/toolProbeService.js` (待建) 演侧工具调用（确定性映射+兜底）
+- `server/src/migrations/004-deliberation-memory.sql` ★ 3张表：deliberation_sessions/session_summaries/user_memory
+
+**实现进度**:
+- [x] Step 1: 记忆系统骨架（memoryService.js + 004迁移 + db.js白名单）✅ 已自检通过
+- [ ] Step 2: 推演状态机骨架（deliberationEngine + planner + /api/deliberation/start）
+- [ ] Step 3: 演侧工具调用（toolProbeService）
+- [ ] Step 4: 自主性（autonomyGate）
+- [ ] Step 5: Reflect 与立卦（reflector）
+- [ ] Step 6: 记忆闭环（consolidate 前端命格簿）
+- [ ] Step 7: 前端状态机对齐
+- [ ] Step 8: 重规划与降级
+
+**演进策略**: 双轨并行。旧轨 `/api/agent/*` 保留兼容；新轨 `/api/deliberation/*` 逐步切换。两轨共用 agentPool/sharedPool/llmRouter。
+
+---
+
+## 八、参考文档
+
+- **Agent设计权威**: [`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md)
+- **生产架构**: [`docs/PRODUCTION_ARCHITECTURE.md`](docs/PRODUCTION_ARCHITECTURE.md)
+- **★真Agent架构(重构中)**: [`docs/REAL_AGENT_ARCHITECTURE.md`](docs/REAL_AGENT_ARCHITECTURE.md)
+- **动态生成架构**: [`docs/DYNAMIC_AGENT_ARCHITECTURE.md`](docs/DYNAMIC_AGENT_ARCHITECTURE.md)
+- **工具调用(已落地)**: [`docs/TOOL_CALLING_DESIGN.md`](docs/TOOL_CALLING_DESIGN.md)
+- **接口设计**: [`docs/specs/2026-07-05-inference-interface-design.md`](docs/specs/2026-07-05-inference-interface-design.md)
+- **决策树设计**: [`docs/specs/2026-07-12-production-grade-architecture-design.md`](docs/specs/2026-07-12-production-grade-architecture-design.md)
+
+---
+
+## 九、快速启动
+
+```bash
+# 前端开发
+cd divergence-trae
+npm run dev          # 启动 Vite dev server (http://localhost:5173)
+
+# 后端开发
+cd server
+npm install
+node index.js        # 启动 Express server
+
+# 生产部署
+# 后端: Railway (auto-deploy from main)
+# 前端: Vercel / Netlify
+```

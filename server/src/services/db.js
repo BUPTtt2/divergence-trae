@@ -211,7 +211,7 @@ export async function query(options) {
     const { table, action, data, filter, queryOptions, id } = options;
 
     // 表名白名单校验
-    const ALLOWED_TABLES = ['users', 'refresh_tokens', 'cards', 'community_posts', 'community_replies', 'community_likes', 'achievements', 'user_memories', 'conversations', 'conversation_messages', 'custom_advisors', 'daily_divinations', 'user_levels', 'decision_follow_ups', 'inference_sessions'];
+    const ALLOWED_TABLES = ['users', 'refresh_tokens', 'cards', 'community_posts', 'community_replies', 'community_likes', 'achievements', 'user_memories', 'conversations', 'conversation_messages', 'custom_advisors', 'daily_divinations', 'user_levels', 'decision_follow_ups', 'inference_sessions', 'shared_agents', 'agent_usage_log', 'deliberation_sessions', 'session_summaries', 'user_memory'];
     if (!ALLOWED_TABLES.includes(table)) {
       throw new Error(`非法表名: ${table}`);
     }
@@ -299,6 +299,9 @@ export async function ensureSchema() {
     `CREATE INDEX IF NOT EXISTS idx_followups_user_status ON decision_follow_ups(user_id, status)`,
     `CREATE INDEX IF NOT EXISTS idx_followups_date ON decision_follow_ups(follow_up_date)`,
     `CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON inference_sessions(user_id, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_delib_sessions_user ON deliberation_sessions(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_session_summaries_user ON session_summaries(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_memory_user ON user_memory(user_id)`,
   ];
   for (const sql of indexStatements) {
     try {
