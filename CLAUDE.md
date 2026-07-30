@@ -257,8 +257,9 @@ input → casting → analyzing → summoning → yan_analyze → agent_select
 
 **关键路径（新增模块）**:
 - `server/src/services/memoryService.js` ★ L1/L2/L3 三层记忆读写+提取+向量检索（余弦相似度，无向量库依赖）
-- `server/src/services/deliberationEngine.js` (待建) 推演状态机总控 Plan→Execute→Reflect
-- `server/src/services/planner.js` (待建) Plan 阶段：读记忆+调工具+规划+自主性判定
+- `server/src/services/deliberationEngine.js` ★ 推演状态机总控 Plan→Execute→Reflect（start/answer/execute/commit/getState）
+- `server/src/services/planner.js` ★ Plan 阶段：读记忆+规则降级规划+LLM增强+自主性判定占位
+- `server/src/routes/deliberation.js` ★ 新轨路由 /api/deliberation/*（5个端点）
 - `server/src/services/reflector.js` (待建) Reflect 阶段：聚合+矛盾检测+重规划+立卦
 - `server/src/services/autonomyGate.js` (待建) 自主性判定（追问/停止/重规划）
 - `server/src/services/toolProbeService.js` (待建) 演侧工具调用（确定性映射+兜底）
@@ -266,7 +267,7 @@ input → casting → analyzing → summoning → yan_analyze → agent_select
 
 **实现进度**:
 - [x] Step 1: 记忆系统骨架（memoryService.js + 004迁移 + db.js白名单）✅ 已自检通过
-- [ ] Step 2: 推演状态机骨架（deliberationEngine + planner + /api/deliberation/start）
+- [x] Step 2: 推演状态机骨架（deliberationEngine + planner + /api/deliberation/start）✅ 已自检通过
 - [ ] Step 3: 演侧工具调用（toolProbeService）
 - [ ] Step 4: 自主性（autonomyGate）
 - [ ] Step 5: Reflect 与立卦（reflector）
