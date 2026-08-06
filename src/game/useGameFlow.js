@@ -214,73 +214,70 @@ function generateContextAwareClarify(question, history, roundIdx = 0) {
  * @param {string[]} prevReplies 之前智囊的发言（用于立场对冲）
  * @param {number} roundIdx 第几轮辩论
  */
+function extractUserCore(question) {
+  const q = String(question || '').trim();
+  // 抛掉内部系统前缀，只留用户真正说的话
+  const cleaned = q
+    .replace(/【用户补充说明】/g, ' ')
+    .replace(/【你补充】/g, ' ')
+    .replace(/^@[^\s]+\s*/, '') // 去掉 @智囊名
+    .replace(/^追问补充\S*[：:]\s*/, '') // 去掉"追问补充X·视角："前缀
+    .trim();
+  const noQuote = cleaned.replace(/^[「『"']/, '').replace(/[」』"']$/, '');
+  return noQuote.slice(0, 24) || '这件事';
+}
+
+/**
+ * B1: 本地 Agent 发言兜底（后端不可达时用，基于真实用户输入生成自然对话，UI 不卡）
+ * 根本性修复：之前返回「【name·stance】前缀 + 硬编码模板（如"先说我要泼的冷水"）」，
+ * 这些内部标记和模板会原样泄露进推演记录，看起来全是预设话术、且与用户输入脱节。
+ * 现在：去掉所有内部标记，引用用户真实说的话，以该智囊视角自然回应，像真人在继续对话。
+ */
 function localGenerateAgentReply(agent, question, prevReplies = [], roundIdx = 0) {
   const name = agent?.name || '智囊';
   const stance = String(agent?.stance || '').trim() || '旁观者视角';
   const stanceShort = stance.replace(/视角$/, '').trim();
-  const q = String(question || '').trim();
-  const qShort = q.slice(0, 20) || '此事';
+  const core = extractUserCore(question);
 
   const stanceTokens = `${stance} ${name} ${(agent?.tags || []).join(' ')}`.toLowerCase();
   const type = {
-    risk: /风险|安全|坎|法律|险|合规|规则|合同|边界/.test(stanceTokens),
-    money: /财|钱|投资|财务|金|概率|赔率|成本|预算/.test(stanceTokens),
-    love: /情|感|家|关系|母亲|爱|婚|恋|暖/.test(stanceTokens),
-    health: /健康|养|身|体|老中医|养生|生理|睡眠|疲劳/.test(stanceTokens),
-    field: /实地|体验|背包|走|路|远足|实地|一线/.test(stanceTokens),
-    career: /职场|工作|事业|老兵|HR|管理|职业|晋升|辞/.test(stanceTokens),
-    study: /教育|学者|学习|研|师|知识|智慧|成长/.test(stanceTokens),
-    law: /讼|法律|规则|律师|边界|合规|合同/.test(stanceTokens),
-    reflect: /反思|人生|意义|盲点|镜|悟|哲|长期|远见/.test(stanceTokens),
+    risk: /风险|安全|险|合规|规则|合同|边界|泼|冷/.test(stanceTokens),
+    money: /财|钱|投资|财务|金|概率|赔率|成本|预算|算账/.test(stanceTokens),
+    love: /情|感|家|关系|爱|婚|恋|暖/.test(stanceTokens),
+    health: /健康|养|身|体|养生|生理|睡眠|疲劳|医/.test(stanceTokens),
+    career: /职场|工作|事业|管理|职业|晋升|HR/.test(stanceTokens),
+    study: /教育|学者|学习|知识|智慧|成长|师/.test(stanceTokens),
+    field: /实地|体验|远足|一线|旅行|走/.test(stanceTokens),
+    law: /讼|法律|规则|律师|合同|法度/.test(stanceTokens),
+    reflect: /反思|人生|意义|盲点|哲|长期|远见|镜/.test(stanceTokens),
+    act: /行动|动手|执行|震/.test(stanceTokens),
   };
 
-  let baseText;
-  if (type.risk) {
-    baseText = `先说我要泼的冷水：「${qShort}」这件事里，你现在最没准备好的那个最坏结果是什么？先写下来，别骗自己。\n\n你现在看到的全是收益，没给黑天鹅留预算。真要走这条路，请你先想好：如果事情在第 3 个月就朝最坏方向滑，你手上的现金和 Plan B 够不够扛过前 6 个月？扛不过，就别启动。`;
-  } else if (type.money) {
-    baseText = `只算一笔账：把这件事拆成「最低成本 / 最高收益 / 概率最大的平庸结果」三栏，算完再说话。\n\n大多数人纠结「要不要」的时候，根本没拿笔算过沉没成本和机会成本。你现在嘴上说"想试试"，如果真要你掏出 3 个月工资放桌上赌一把，你手会抖吗？手抖，就别上。`;
-  } else if (type.love) {
-    baseText = `我的娃啊，先别问别人。夜深人静、没人看着你的时候，你心里是"我好委屈"多一点，还是"我好想他"多一点？\n\n别拿沉没成本、别拿父母的话、别拿朋友圈的眼光当理由。心不骗你。如果相处的每一个晚上你都在失眠、在翻聊天记录等回复，那这段关系就已经在提醒你答案了。`;
-  } else if (type.health) {
-    baseText = `望闻问切，先切你的「气」——做这个决定前这一周，你睡得着吗？大便成形吗？早上起来口苦吗？身体永远比脑子诚实。\n\n「${qShort}」如果最终的结果是让你 3 个月后血压升高、失眠、掉头发，不管赚多少钱、多好看、多有面子，都不值。命，比什么都重。`;
-  } else if (type.field) {
-    baseText = `我走了万里路就懂一件事：别在地图上纠结，先穿上鞋走出去 100 米。\n\n你问了 10 个人「好不好」、查了 100 篇攻略、列了 10 张表格——但你就是没亲自去摸一下真的东西。别想了，买张票、请个假、到现场。答案会在你踩上那片地的第一分钟就浮出来。`;
-  } else if (type.career) {
-    baseText = `做 HR 这么多年我只送你三句话：钱没到位、心委屈了、跟的人不行——三个里占两个就走，一个都没占就别动。\n\n「${qShort}」这种事，你别问同龄人，去问那个比你大 10 岁、现在活得最舒服的前辈。他的一句话，比你在小红书看 100 篇经验贴顶用。`;
-  } else if (type.study) {
-    baseText = `学习这件事，90% 的纠结都来自「想太多，做太少」。今天先坐下来，把第一页书翻开、第一道真题做了，焦虑会立刻少一半。\n\n别问「来不来得及」。现在就是你余生里最早的那个时刻。最坏结果不过是大器晚成，总比永远不开始强。`;
-  } else if (type.law) {
-    baseText = `先划边界：口头承诺全不算、微信截图可伪造、合同没签字的全不作数。先把白纸黑字拿出来，一条一条读。\n\n「${qShort}」里，所有需要你承担无限连带责任的、所有需要你签「自愿放弃」的、所有对方说「先操作后补合同」的——一律 NO。边界守住了，才谈选择。`;
-  } else if (type.reflect) {
-    baseText = `站在你 80 岁的那个位置，回头看今天这个纠结。它重要吗？它会改变你人生的最终走向吗？\n\n十年后，你不会记得今天选了 A 还是 B，你只会记得：在那些关键节点上，我是不是诚实地面对了自己。诚实地选，哪怕输，也比骗自己赢要值当。`;
-  } else {
-    baseText = `我从「${stanceShort}」的角度，给你三个问题自己问自己：\n\n1. 选这个，你怕的到底是什么？那个恐惧是真实的，还是脑补出来的？\n2. 不选这个，三年后你会后悔吗？\n3. 如果最好的朋友现在和你一模一样的处境，你会劝 TA 怎么选？\n\n第三个答案，就是你心里真正的答案。`;
-  }
+  const openers = {
+    risk: `关于「${core}」，我先把最难听的话放前面：如果最坏的那种可能真的发生，你扛得住吗？先别急着讲收益，把承受下限想清楚，再谈要不要。`,
+    money: `「${core}」这笔账别只看表面。真正要算的是机会成本和沉没成本——万一选错了，你折进去的时间、钱、精力，还能换回来吗？`,
+    love: `我不跟你讲道理。只问一句：夜深人静、没人看着你的时候，「${core}」这件事，你心里是踏实更多，还是不安更多？那个更真实的感受，往往就是答案。`,
+    health: `先说身体。「${core}」如果最终换来的是你睡不好、压力大到掉头发，那不管别的理由多漂亮，都先打一个问号。命，比什么都重。`,
+    career: `「${core}」这种决定，别问同龄人。去问那个比你大十岁、现在活得最舒服的前辈——他一句话，顶你看一百篇经验贴。`,
+    study: `学习这件事，纠结大多来自「想太多、做太少」。今天先把第一页翻开，焦虑立刻少一半。别问来不来得及，你现在就是余生里最早的那个时刻。`,
+    field: `别在地图上纠结。「${core}」值不值，先亲自去摸一下真的东西，答案会在你碰到的第一分钟浮出来。`,
+    law: `先把边界划清楚：「${core}」里，口头承诺都不算、没签字的不作数、要你签「自愿放弃」的一律 NO。白纸黑字说话，边界守住了再谈选择。`,
+    reflect: `站在你八十岁往回看，「${core}」还重要吗？别骗自己选那个「看起来对」的，选那个「说谎也会心虚」的反方向。`,
+    act: `别分析了。「${core}」这件事，今晚能落地的第一步是什么？先把第一步做了，七成把握就出手，剩下的在路上补。`,
+  };
+  const fallback = `关于「${core}」，我没有标准答案，但想帮你把问题拆清楚：你真正怕的，是这件事本身，还是选了之后没了退路？把最坏的结果写下来，再回头看，答案会清晰很多。`;
+  const baseText = openers[Object.keys(type).find(k => type[k])] || fallback;
 
-  const dialoguePrefix = prevReplies.length > 0
-    ? buildContextualLeadIn(prevReplies, name, stanceShort)
+  // 自然接上一句真实发言（去内部标记），让对话有来有回
+  const lastPrev = (prevReplies.filter(r => r && typeof r === 'string' && r.length > 10).pop() || '')
+    .replace(/【[^】]+】/g, '')
+    .replace(/\n/g, ' ')
+    .slice(0, 24);
+  const dialoguePrefix = lastPrev
+    ? `你刚才提到「${lastPrev}」，我从${stanceShort}的角度再补一点：`
     : '';
 
-  return `【${name}·${stanceShort}】${dialoguePrefix}${baseText}`;
-}
-
-function buildContextualLeadIn(prevReplies, myName, myStance) {
-  const valid = prevReplies.filter(r => r && typeof r === 'string' && r.length > 10);
-  if (valid.length === 0) return '';
-  const lastReply = valid[valid.length - 1];
-  const speakerMatch = lastReply.match(/【([^·】]+)·([^】]+)】/);
-  if (!speakerMatch) return '';
-  const speakerName = speakerMatch[1];
-  const speakerStance = speakerMatch[2];
-  const snippet = lastReply.replace(/^【[^】]+】/, '').slice(0, 30).replace(/\n/g, ' ');
-  const leadIns = [
-    `刚才${speakerName}（${speakerStance}）说的"${snippet}…"——我接一句：`,
-    ` ${speakerName}提到的那个点，我从${myStance}的角度补充一下：`,
-    ` 同意${speakerName}的一部分，但我有不同看法——`,
-    ` ${speakerName}说得很直接，我换个角度：`,
-  ];
-  const idx = (myName.length + speakerName.length) % leadIns.length;
-  return leadIns[idx] + '\n\n';
+  return `${dialoguePrefix}${baseText}`;
 }
 
 const _generate5WQuestions = (question, typeLabel, kwList, cyberGua) => {
@@ -1636,42 +1633,60 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
         setCurrentResponse('');
         setFloatTip(mentionName ? `@${mentionName} 正在补充回复…` : '诸位智囊正在斟酌补充意见…');
 
-        // 用本地 localGenerateAgentReply 生成一轮补充回复（1.5s 后依次写入，模拟真实流式感）
+        // 根本性修复：用户补充/追问时，让智囊走「真实 LLM」回复，而不是本地预设模板。
+        // 之前用 localGenerateAgentReply 本地兜底，导致对话全是预设话术、且与用户输入脱节。
+        // 现在通过 generateDialoguesForAgents → streamAgentDialogue → 后端 /api/agent/dialogue 真实流式生成。
+        // 只有后端确实完全不可达（网络级）时，才回退到本地兜底，保证对话尽力真实。
         try {
+          const qType = detectQuestionType(userInput);
           const prevRepliesArr = agents.map(a => (agentDialogues[a.id] ? String(agentDialogues[a.id]) : ''));
-          for (let i = 0; i < targetAgents.length; i++) {
-            const a = targetAgents[i];
-            const delayMs = 1200 + i * 900;
-            const t = setTimeout(() => {
+          const supplementQuestion = `${userInput}\n\n【用户补充说明】${userSupplement}`;
+          const onAgentComplete = (agentId, text, success, error, source) => {
+            if (!success || !text) return;
+            const replyText = sanitizeLLMText(String(text).trim());
+            if (!replyText) return;
+            setAgentDialogues(prev => {
+              const history = { ...(prev.history || {}) };
+              const arr = history[agentId] || [];
+              history[agentId] = [...arr, replyText];
+              return { ...prev, [agentId]: replyText, history };
+            });
+          };
+          const onErr = (errs) => {
+            console.warn('[agent_debate 追问补充] 部分智囊失败:', errs);
+          };
+          // 仅让目标智囊（@ 到的或全部）基于补充信息真实回复一轮
+          await generateDialoguesForAgents(
+            supplementQuestion, targetAgents, qType, onAgentComplete, onErr, supplementQuestion,
+            { round: (debateRound || 1) + 1 }
+          );
+          setInfoProgress(prev => Math.min(95, prev + 10));
+        } catch (e) {
+          // 兜底：仅后端完全不可达时用本地自然语言回复，避免整段空白
+          console.warn('[agent_debate 追问补充] 真实LLM失败，本地兜底:', e.message);
+          try {
+            const prevRepliesArr = agents.map(a => (agentDialogues[a.id] ? String(agentDialogues[a.id]) : ''));
+            for (let i = 0; i < targetAgents.length; i++) {
+              const a = targetAgents[i];
               try {
                 const replyText = localGenerateAgentReply(a, `${userInput}\n\n【用户补充说明】${userSupplement}`, prevRepliesArr, (debateRound || 1) + 1);
-                // 把回复追加到 history 里，显示为「补充回复」
                 setAgentDialogues(prev => {
                   const history = { ...(prev.history || {}) };
                   const arr = history[a.id] || [];
-                  const wrapped = mentionName ? `【@你追问 · 补充回复】${replyText}` : `【追问补充】${replyText}`;
-                  history[a.id] = [...arr, wrapped];
-                  return { ...prev, [a.id]: wrapped, history };
+                  history[a.id] = [...arr, replyText];
+                  return { ...prev, [a.id]: replyText, history };
                 });
-              } catch (e) {
-                console.warn('[agent_debate 追问补充] 生成失败:', e);
+              } catch (e2) {
+                console.warn('[agent_debate 追问补充] 本地兜底失败:', e2.message);
               }
-              if (i === targetAgents.length - 1) {
-                setTimeout(() => {
-                  setFloatTip(null);
-                  setAwaitingUser(true); // 继续等待用户，想继续聊就继续输入，或点「跳过到总结」
-                }, 600);
-              }
-            }, delayMs);
-            stageTimersRef.current.push(t);
+            }
+          } catch (e2) {
+            console.warn('[agent_debate 追问补充] 整体失败:', e2.message);
           }
-          // 更新辩论阶段进度（每追问一次 +10%，上限 95%）
-          setInfoProgress(prev => Math.min(95, prev + 10));
-        } catch (e) {
-          console.warn('[agent_debate 追问补充] 整体失败:', e);
         } finally {
-          // 不切下一位！停在当前 Agent，等待用户继续输入或点「跳过到总结」
-          // 注意：这里不要 setAwaitingUser(false)！用户可以选择继续输入追问 or 跳过到总结
+          setFloatTip(null);
+          setAwaitingUser(true);
+          // 不切下一位！停在当前阶段，等待用户继续输入或点「跳过到总结」
           return;
         }
       }
@@ -1788,9 +1803,9 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
     } else {
       setAwaitingUser(false);
 
-      // ★ 修复：外层超时必须 > generateYanSummary 内部超时(8s)，否则后端慢响应时外层先超时，
-      //   返回默认空话而非本地降级总结。改为 12s 确保 generateYanSummary 内部降级能完成。
-      const YAN_SUMMARY_TIMEOUT = 12000;
+      // ★ 修复：外层超时必须 > generateYanSummary 内部超时，否则后端慢响应时外层先超时，
+      //   返回默认空话而非本地降级总结。后端 LLM 20s+，放宽到 30s 确保真实总结能完成。
+      const YAN_SUMMARY_TIMEOUT = 30000;
       let yanSummary = null;
       try {
         const p = generateYanSummary(userInput, agentDialogues || {}, agents);
@@ -2072,7 +2087,7 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       setShowAgentErrorModal(true);
     };
 
-    const TIMEOUT_MS = 12000;
+    const TIMEOUT_MS = 25000;
     let raceFinished = false;
 
     const localPresetDialogues = () => {

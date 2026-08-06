@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 后端 API 封装模块
  * 统一管理所有后端接口调用，包含 SSE 流式处理
  *
@@ -79,7 +79,17 @@ function resetBackendCircuit() {
 async function refreshAccessToken() {
   const refreshToken = getRefreshTokenSync();
   if (!refreshToken) return null;
-  
+
+  // 根本性修复：匿名/本地模式（local- 前缀）的 token 永不过期，无需网络刷新。
+  // 之前这里会对一个不存在的用户强制 POST /api/auth/refresh → 后端查库查不到 → 401，
+  // 每个请求都刷一遍 401 红日志，看起来像"后端挂了"。
+  // 匿名 token 直接跳过刷新，静默返回 null，彻底消除这串 401 噪音。
+  const curUserId = typeof window !== 'undefined' ? getCurrentUserIdSync() : null;
+  const isAnonymous = !!curUserId && (curUserId.startsWith('anon_') || curUserId.startsWith('local-'));
+  if (isAnonymous) {
+    return null;
+  }
+
   try {
     const resp = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
       method: 'POST',
@@ -125,8 +135,11 @@ function clearAuth() {
 export { PRIMARY_API, FALLBACK_API };
 export { isBackendCircuitOpen, resetBackendCircuit, ApiUnavailableError };
 
-export const API_TIMEOUT = 15000;
-export const SSE_TIMEOUT = 30000;
+// 超时放宽：Vercel serverless 冷启动（5-10s）+ 真实 LLM 响应（10-20s）叠加，
+// 15s/30s 会误杀真实对话，导致智囊被跳过、后端被判"不可达"而降级预设。
+// 放宽到 25s/45s，让真实 LLM 有足够时间流式返回。
+export const API_TIMEOUT = 25000;
+export const SSE_TIMEOUT = 45000;
 
 async function tryFetch(url, options = {}, timeout = API_TIMEOUT) {
   if (isBackendCircuitOpen()) {
@@ -140,7 +153,19 @@ async function tryFetch(url, options = {}, timeout = API_TIMEOUT) {
   } catch (e) {
     const name = e?.name || '';
     const msg = e?.message || String(e);
-    if (name === 'AbortError' || msg.includes('abort') || msg.includes('Failed to fetch') || msg.includes('NetworkError') || name === 'TypeError') {
+    // 根本性修复：只有「网络级不可达」才熔断整个后端。
+    // AbortError 是前端主动超时 abort（可能是单接口慢/冷启动），不代表后端不可用，
+    // 若因此熔断，会导致后续所有真实 LLM 对话/总结都降级成本地预设模板。
+    const isNetworkUnreachable =
+      name === 'TypeError' ||
+      msg.includes('Failed to fetch') ||
+      msg.includes('NetworkError') ||
+      msg.includes('Network request failed') ||
+      msg.includes('load failed') ||
+      msg.includes('connection refused') ||
+      msg.includes('ENOTFOUND') ||
+      msg.includes('ERR_NAME_NOT_RESOLVED');
+    if (isNetworkUnreachable) {
       tripBackendCircuit(name || 'connect_fail');
     }
     throw e;

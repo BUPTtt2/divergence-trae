@@ -191,7 +191,17 @@ router.post('/refresh', async (req, res) => {
     });
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ error: '用户不存在' });
+      // 根本性修复：不存在的用户（匿名/本地 token / DB 为空）不再返回 401。
+      // 本工具所有业务端点都走 optionalAuth，接受任意 local-<id> 标识，无真实鉴权。
+      // 之前这里对"查不到的用户"直接 401，导致前端 /api/auth/refresh 连环 401，
+      // 产生"后端不可达"的假象并触发本地沙盘降级。
+      // 现在：按 token 里的 id 直接签发一个新鲜 local token，让链路继续。
+      const anonymousId = userId || 'anon_' + Date.now().toString(36);
+      return res.json({
+        accessToken: `local-${anonymousId}`,
+        expiresIn: 900,
+        user: null,
+      });
     }
 
     const user = result.rows[0];

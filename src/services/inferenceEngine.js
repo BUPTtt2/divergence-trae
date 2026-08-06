@@ -1240,7 +1240,15 @@ export async function generateDialoguesForAgents(question, agents, questionType,
     }
 
     if (!apiSuccess) {
-      throw new Error(`BACKEND_REQUIRED:agent ${agent.id} 发言失败，请重试`);
+      // 根本性修复：单个智囊发言失败，只跳过该智囊，不拖累整个辩论降级成本地模板。
+      // 之前这里 throw BACKEND_REQUIRED，会让 useGameFlow 把「所有」智囊都降级成预设话术。
+      // 现在：记录该智囊失败，继续让其他智囊走真实 LLM，保证对话仍是真 AI。
+      errors[agent.id] = {
+        agentName: agent.name || agent.id,
+        error: errorInfo || '发言失败',
+      };
+      console.warn(`[发言] Agent ${agent.name} 发言失败，跳过（其他智囊继续真实 LLM）：`, errorInfo);
+      continue;
     }
 
     // 消费待回应 mention：该 Agent 已发言，移除其 pendingMentions（避免下轮重复注入）
@@ -1599,13 +1607,14 @@ export async function generateYanSummary(question, agentDialogues, agents) {
   }
 
   // C3：后端不可达/失败/超时，都静默降级本地 generateLocalYanSummary，不再 throw BACKEND_REQUIRED
-  // ★ 修复：给 apiClient.generateSummary 传入 6s 超时 < race 8s < 外层 12s，
-  //   确保后端慢响应时，apiClient 先超时 → race reject → catch → 本地降级，链路清晰
+  // ★ 根本性修复：超时层级必须匹配真实 LLM 耗时（后端 LLM 15-20s + Vercel 冷启动）。
+  //   之前 apiClient 6s < race 8s < 外层 12s，真实总结 20s 根本等不到 → 永远降级本地预设模板。
+  //   现在 apiClient 20s < race 25s < 外层 30s，让真实总结有足够时间完成。
   try {
     if (!isBackendCircuitOpen() && isLlmAvailable()) {
       const result = await Promise.race([
-        apiClient.generateSummary(cleanQ, nonMasterAgents.map(a => a.id), formattedDialogues, { timeout: 6000 }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('summary timeout')), 8000)),
+        apiClient.generateSummary(cleanQ, nonMasterAgents.map(a => a.id), formattedDialogues, { timeout: 20000 }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('summary timeout')), 25000)),
       ]);
       if (result && result.options && Array.isArray(result.options)) {
         markBackendResult(true);
@@ -2282,7 +2291,11 @@ export async function generateInferenceContent(question) {
       if (!alive) throw new ApiUnavailableError('probe_fail');
     }
 
-    // ===== 意图识别 + 动态决策树（生产级架构）=====
+    // ===== 意图识别 + 动态决策树（可选增强，失败静默降级，不阻塞核心分析链）=====
+    // 根本性修复：决策树/意图识别是「锦上添花」的可选功能。
+    // 之前它们失败会直接 throw BACKEND_REQUIRED，导致 analyze-v2 核心 Agent 分析链被跳过，
+    // 前端只能退回本地兜底 Agent 池 → 智囊数量变少 + 后续对话/总结全部降级为预设模板。
+    // 现在：失败仅记日志，intent=null 继续走 analyze-v2，核心 LLM 能力不受影响。
     let intent = null;
     let assessment = null;
     try {
@@ -2290,11 +2303,10 @@ export async function generateInferenceContent(question) {
       intent = intentResp.intent;
       assessment = intentResp.assessment;
     } catch (e) {
-      console.warn('[inference] 意图识别失败:', e.message);
-      throw new Error('BACKEND_REQUIRED:inference 后端不可达，请重试');
+      console.warn('[inference] 意图识别失败，静默跳过（不影响核心分析）:', e.message);
     }
 
-    // 动态生成决策树（替代硬编码 nodes.js）
+    // 动态生成决策树（替代硬编码 nodes.js）— 可选增强，失败静默
     if (intent) {
       try {
         const treeResp = await apiClient.generateTree(question, intent);
@@ -2323,8 +2335,7 @@ export async function generateInferenceContent(question) {
           console.log('[inference] 决策树已动态更新');
         }
       } catch (e) {
-        console.warn('[inference] 决策树生成失败:', e.message);
-        throw new Error('BACKEND_REQUIRED:inference 后端不可达，请重试');
+        console.warn('[inference] 决策树生成失败，使用默认决策树:', e.message);
       }
     }
 
