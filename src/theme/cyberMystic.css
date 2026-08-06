@@ -146,3 +146,139 @@ button:hover:not(:disabled) {
     0 0 16px var(--gold-halo-outer),
     0 0 48px var(--gold-halo-outer) !important;
 }
+
+/* ============================================================
+   赛博算命感 · 新增叠加层（Game.jsx 对应 3 个 div）
+   ============================================================ */
+
+/* 1. 更精细的 CRT 扫描线（行间 + 滚动横向扫光条 + RGB 错位）*/
+.cyber-crt-scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9997;
+  mix-blend-mode: overlay;
+  opacity: 0.55;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.03) 0px,
+      rgba(255, 255, 255, 0.03) 1px,
+      transparent 2px,
+      transparent 4px
+    );
+}
+.cyber-crt-scanlines::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: -5%;
+  height: 8%;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(255, 236, 170, 0.08) 40%,
+    rgba(255, 236, 170, 0.18) 50%,
+    rgba(255, 236, 170, 0.08) 60%,
+    transparent 100%
+  );
+  filter: blur(1px);
+  animation: cyber-sweep 8s linear infinite;
+}
+.cyber-crt-scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to right, rgba(255,0,0,0.04), transparent 20%, transparent 80%, rgba(0,255,255,0.04));
+  mix-blend-mode: screen;
+  opacity: 0.6;
+}
+@keyframes cyber-sweep {
+  0%   { transform: translateY(0%); }
+  100% { transform: translateY(1300%); }
+}
+
+/* 2. 卦符/数据流"赛博雨"（从顶部缓慢落下的易经符号与二进制字符）*/
+.cyber-data-rain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9995;
+  opacity: 0.55;
+  overflow: hidden;
+  mix-blend-mode: screen;
+}
+.cyber-data-rain::before,
+.cyber-data-rain::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-repeat: repeat-y;
+  background-size: 260px 600px;
+  animation: cyber-rain-drift 22s linear infinite;
+}
+.cyber-data-rain::before {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='260' height='600'><g fill='%23FFD56B' fill-opacity='0.22' font-family='Ma Shan Zheng,serif' font-size='14'><text x='10' y='40'>☰</text><text x='60' y='90'>☷</text><text x='115' y='150'>☳</text><text x='170' y='210'>☵</text><text x='215' y='270'>☲</text><text x='30' y='350'>☱</text><text x='95' y='420'>☴</text><text x='160' y='490'>☶</text><text x='220' y='560'>☯</text><text x='10' y='130' fill='%234FD6FF' fill-opacity='0.18' font-family='JetBrains Mono,monospace' font-size='10'>01001010101011100100101010101001010101010</text><text x='10' y='300' fill='%23FF5C6E' fill-opacity='0.15' font-family='JetBrains Mono,monospace' font-size='10'>乾兑离震巽坎艮坤 · 二進制推演流</text></g></svg>");
+  opacity: 0.9;
+}
+.cyber-data-rain::after {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='260' height='600'><g fill='%234ADE99' fill-opacity='0.18' font-family='Ma Shan Zheng,serif' font-size='12'><text x='130' y='70'>夬</text><text x='200' y='180'>革</text><text x='45' y='260'>復</text><text x='180' y='380'>謙</text><text x='100' y='520'>大有</text></g></svg>");
+  animation-duration: 34s;
+  animation-direction: reverse;
+  opacity: 0.6;
+}
+@keyframes cyber-rain-drift {
+  from { background-position: 0 0; }
+  to   { background-position: 0 2400px; }
+}
+
+/* 3. 全息边框（四角坐标刻度 + 动态扫描直角边 + 干扰横条）*/
+.cyber-holo-frame {
+  position: fixed;
+  inset: 10px;
+  pointer-events: none;
+  z-index: 9996;
+  border-radius: 2px;
+  border: 1px solid rgba(232, 198, 112, 0.10);
+  box-shadow:
+    inset 0 0 60px rgba(232, 198, 112, 0.04),
+    inset 0 0 200px rgba(0, 0, 0, 0.5);
+}
+.cyber-holo-frame::before {
+  content: "推演台 · YAN SANDBOX  ▎立卦 → 析理 → 召智 → 辩论 → 凝 → 卦 → 择 → 命 ▎v3.0";
+  position: absolute;
+  top: -9px; left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 14px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: rgba(232, 198, 112, 0.55);
+  background: #120D10;
+  border-left: 1px solid rgba(232, 198, 112, 0.25);
+  border-right: 1px solid rgba(232, 198, 112, 0.25);
+  white-space: nowrap;
+}
+.cyber-holo-frame::after {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border-radius: 2px;
+  /* 四角刻度：左上/右上/左下/右下 30px 短横 + 短竖 */
+  background:
+    linear-gradient(to right, rgba(79,214,255,0.6), rgba(79,214,255,0.6)) 0 0 / 32px 1px no-repeat,
+    linear-gradient(to bottom, rgba(79,214,255,0.6), rgba(79,214,255,0.6)) 0 0 / 1px 32px no-repeat,
+    linear-gradient(to left, rgba(79,214,255,0.6), rgba(79,214,255,0.6)) 100% 0 / 32px 1px no-repeat,
+    linear-gradient(to bottom, rgba(79,214,255,0.6), rgba(79,214,255,0.6)) 100% 0 / 1px 32px no-repeat,
+    linear-gradient(to right, rgba(255,92,110,0.55), rgba(255,92,110,0.55)) 0 100% / 32px 1px no-repeat,
+    linear-gradient(to top, rgba(255,92,110,0.55), rgba(255,92,110,0.55)) 0 100% / 1px 32px no-repeat,
+    linear-gradient(to left, rgba(255,92,110,0.55), rgba(255,92,110,0.55)) 100% 100% / 32px 1px no-repeat,
+    linear-gradient(to top, rgba(255,92,110,0.55), rgba(255,92,110,0.55)) 100% 100% / 1px 32px no-repeat;
+  animation: holo-flicker 6s infinite steps(1);
+}
+@keyframes holo-flicker {
+  0%, 96%, 100% { opacity: 1; }
+  97% { opacity: 0.5; }
+  97.8% { opacity: 1; }
+  98.5% { opacity: 0.6; }
+}

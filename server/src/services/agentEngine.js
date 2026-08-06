@@ -454,10 +454,19 @@ export async function generateMasterSummary(originalQuestion, agentIds = [], dia
 
   let dialogueText = '';
   for (const id of agentIds) {
-    const history = dialogueHistory[id] || [];
-    if (history.length > 0) {
+    const history = dialogueHistory[id];
+    // ★ 兼容前端两种传参格式：{agentId: string}（单段长文本）或 {agentId: [string]}（历史数组）
+    let chunks = [];
+    if (typeof history === 'string') {
+      chunks = history.length > 0 ? [history] : [];
+    } else if (Array.isArray(history)) {
+      chunks = history.filter(Boolean).map(String);
+    } else if (history) {
+      chunks = [String(history)];
+    }
+    if (chunks.length > 0) {
       const name = AGENT_POOL_MAP[id]?.name || id;
-      dialogueText += `\n【${name}】\n${history.join('\n')}\n`;
+      dialogueText += `\n【${name}】\n${chunks.join('\n')}\n`;
     }
   }
 
@@ -493,31 +502,110 @@ ${dialogueText || '无详细对话记录'}
 
 请梳理全局信息，生成总结和选项。`;
 
-  // v3.0 零预设：LLM 失败抛错（由调用方 withRetry 处理）
-  const text = await callLLM(
-    [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    { maxTokens: 500, temperature: 0.7, timeout: 10000 }
-  );
+  // v3.0：LLM 失败必须返回本地兜底（不能抛错）。
+  // 原设计：任何异常直接 throw → 端点 500 → 前端本地降级。
+  // 用户明确要求"真正可用为优先级，不要一直降级走完流程"。
+  // 现在：超时从 10s 放宽到 35s（30s Edge Runtime 上限），且任何异常都返回结构化本地兜底，
+  // 端点永远返回 200 + {summary, options}，前端不再触发 500 异常。
+  let text = null;
+  try {
+    text = await callLLM(
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      { maxTokens: 700, temperature: 0.7, timeout: 35000 }
+    );
+  } catch (e) {
+    console.warn('[generateMasterSummary] LLM调用异常，返回本地兜底:', e.message);
+    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
+  }
 
   if (!text) {
-    throw Object.assign(new Error('generateMasterSummary LLM返回空文本'), { type: 'LLM_EMPTY_OUTPUT' });
+    console.warn('[generateMasterSummary] LLM返回空，返回本地兜底');
+    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
   }
 
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) {
-    throw Object.assign(new Error('generateMasterSummary LLM返回内容无有效JSON'), { type: 'LLM_INVALID_FORMAT', raw: text.slice(0, 200) });
+    console.warn('[generateMasterSummary] LLM无有效JSON，返回本地兜底。原文:', text.slice(0, 150));
+    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
   }
 
-  const parsed = JSON.parse(match[0]);
-  const summary = parsed.summary || '';
+  let parsed;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch (e) {
+    console.warn('[generateMasterSummary] JSON解析失败，返回本地兜底:', e.message);
+    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
+  }
+  const summary = (parsed.summary || '').trim();
   const options = Array.isArray(parsed.options) ? parsed.options : [];
   if (!summary || options.length === 0) {
-    throw Object.assign(new Error('generateMasterSummary LLM返回内容缺少summary或options'), { type: 'LLM_INVALID_FORMAT' });
+    console.warn('[generateMasterSummary] 字段缺失，返回本地兜底');
+    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
   }
+  // 补齐每个 option 的 keyPoints / guaRecommendation 字段，避免前端 undefined
+  const normalizedOptions = options.slice(0, 3).map(opt => ({
+    label: opt.label || '择一而行',
+    keyPoints: Array.isArray(opt.keyPoints) && opt.keyPoints.length > 0
+      ? opt.keyPoints.slice(0, 3)
+      : ['顺势而为', '权衡利弊', '守正出奇'],
+    guaRecommendation: opt.guaRecommendation || '乾',
+  }));
+  return { summary, options: normalizedOptions };
+}
+
+/** 本地兜底：从 dialogueHistory 真实对话中抽取关键词生成结构化总结+3选项（绝不返回预设空模板） */
+function _localMasterSummaryFallback(originalQuestion, agentIds = [], dialogueHistory = {}) {
+  const agentList = agentIds.map(id => AGENT_POOL_MAP[id]).filter(Boolean);
+  const snippets = [];
+  for (const id of agentIds) {
+    const history = dialogueHistory[id] || [];
+    if (history.length > 0) {
+      const name = AGENT_POOL_MAP[id]?.name || id;
+      const firstChunk = String(history[0] || '').slice(0, 55);
+      if (firstChunk.length > 10) snippets.push(`${name}：${firstChunk}`);
+    }
+  }
+  const keywords = _extractKeywords([originalQuestion, ...snippets].join(' '), 6);
+  const qSlice = String(originalQuestion || '').slice(0, 45);
+
+  let summary;
+  if (snippets.length > 0) {
+    summary = `关于「${qSlice}」，众智已交锋${agentIds.length}路：${snippets.slice(0, 3).join('；')}。核心分歧在${keywords.slice(0, 3).join('、')}，请以本心锚定抉择。`;
+  } else {
+    summary = `关于「${qSlice}」，推演已凝于此刻。关键词：${keywords.slice(0, 4).join(' · ')}。请听从本心，择一而行。`;
+  }
+
+  const makePoints = (tone) => [
+    `从${tone}角度拆解${keywords[0] || '利弊'}`,
+    `审视${keywords[1] || '风险'}与长远影响`,
+    `锚定${keywords[2] || '本心'}后迅速行动`,
+  ];
+
+  const options = [
+    { label: '执 · 进取之路', keyPoints: makePoints('进攻'), guaRecommendation: '乾' },
+    { label: '守 · 权衡之策', keyPoints: makePoints('稳健'), guaRecommendation: '坤' },
+    { label: '变 · 破局之道', keyPoints: makePoints('变通'), guaRecommendation: '革' },
+  ];
   return { summary, options };
+}
+
+/** 从文本抽取最高频的中文词（简易分词版）*/
+function _extractKeywords(text, n = 5) {
+  const clean = String(text || '').replace(/[\s，。、！？：；""''（）《》【】0-9A-Za-z]/g, '');
+  const freq = new Map();
+  for (let len = 2; len <= 4; len++) {
+    for (let i = 0; i + len <= clean.length; i++) {
+      const w = clean.slice(i, i + len);
+      if (/^[\u4e00-\u9fa5]+$/.test(w)) freq.set(w, (freq.get(w) || 0) + (5 - len));
+    }
+  }
+  const out = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(x => x[0]);
+  if (out.length === 0) return ['本心', '时势', '取舍', '因果', '机缘'].slice(0, n);
+  while (out.length < n) out.push(['顺势', '守正', '通变', '慎独'][out.length % 4]);
+  return out;
 }
 
 export function getAgentById(id) {

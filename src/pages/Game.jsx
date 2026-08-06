@@ -311,6 +311,105 @@ function GuaMirror({
   );
 }
 
+/* ============================================================
+   辅助：阶段 · 标签 · 底部导航按键渲染
+   ============================================================ */
+const PHASE_LABEL_MAP = {
+  input: '起 · 立卦待卜', casting: '一 · 起卦问事',
+  yan_analyze: '二 · 演 · 问心析理', clarify_loop: '三 · 析 · 层层追问',
+  agent_select: '四 · 召 · 选智囊', agent_debate: '五 · 辩 · 众智交锋',
+  summary: '六 · 凝 · 演总结', oracle_prompt: '七 · 辞 · 卜筮之辞',
+  oracle: '八 · 卦 · 落卦成象', branch_select: '九 · 择 · 分岔路口',
+  path_reveal: '十 · 命 · 命签启封', committing: '十一 · 铭 · 立心践行',
+  final: '终 · 藏 · 收于锦囊',
+};
+
+function USER_LABEL(activeAgents, agentDialogues, choices, oracleResult) {
+  const n = (activeAgents || []).filter(a => a && a.role !== 'master').length;
+  const dialoguesLen = Object.values(agentDialogues || {}).filter(v => v && typeof v === 'string' && v.length > 30).length;
+  const parts = [];
+  if (n > 0) parts.push(`召智囊·${n}路`);
+  if (dialoguesLen > 0) parts.push(`辩辞·${dialoguesLen}章`);
+  if ((choices || []).length > 0) parts.push(`分岔·${choices.length}径`);
+  if (oracleResult) parts.push(`落卦·${oracleResult.gua || '成'}`);
+  return parts.length > 0 ? parts.join(' · ') : '推演待机中';
+}
+
+function _renderNavButton(phase, ctx) {
+  const GLOW = '#E8C670';
+  const btnBase = {
+    padding: '10px 20px',
+    fontFamily: '"Ma Shan Zheng", serif',
+    fontSize: 13,
+    letterSpacing: '0.25em',
+    cursor: 'pointer',
+    border: `1px solid ${GLOW}80`,
+    background: `linear-gradient(135deg, rgba(8,6,12,0.95) 0%, rgba(26,20,16,0.98) 100%)`,
+    color: GLOW,
+    borderRadius: 2,
+    textShadow: `0 0 6px ${GLOW}80`,
+    boxShadow: `0 0 14px ${GLOW}20, inset 0 0 10px ${GLOW}08`,
+    transition: 'all 0.25s ease',
+    whiteSpace: 'nowrap',
+  };
+  const btnPrimary = { ...btnBase,
+    background: `linear-gradient(135deg, ${GLOW}50 0%, #B48C48 50%, ${GLOW}80 100%)`,
+    color: '#0E0A06',
+    border: `1px solid ${GLOW}`,
+    textShadow: '0 1px 0 rgba(255,240,200,0.3)',
+    boxShadow: `0 0 22px ${GLOW}70, inset 0 0 10px rgba(255,255,255,0.12)`,
+  };
+  const btnDisabled = { ...btnBase, opacity: 0.35, cursor: 'not-allowed', filter: 'grayscale(0.5)' };
+  const mk = (label, onClick, primary = true, disabled = false, title = '') => (
+    <button
+      title={title}
+      style={disabled ? btnDisabled : (primary ? btnPrimary : btnBase)}
+      onClick={disabled ? undefined : onClick}
+      onMouseEnter={(e) => { if (!disabled) { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = `0 0 28px ${GLOW}A0`; } }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = disabled ? btnDisabled.boxShadow : (primary ? btnPrimary.boxShadow : btnBase.boxShadow); }}
+    >{label}</button>
+  );
+
+  // 按阶段返回最合理的下一步按键（永远有一个按键）
+  if (ctx.showInput) return mk('立卦开演', ctx.handleStart, true, !(ctx.inputValue && ctx.inputValue.trim().length > 0));
+
+  switch (phase) {
+    case 'input':
+    case 'casting':
+    case 'yan_analyze':
+      return mk('回答 · 继续', ctx.handleUserAdvance, true);
+    case 'clarify_loop':
+      return mk('已作答 · 或 直接召智囊', ctx.handleSkipClarify, false);
+    case 'agent_select':
+      return mk('已选智囊 · 开辩', ctx.handleUserAdvance, true, (ctx.activeAgents||[]).filter(a=>a&&a.role!=='master').length===0, '请先选择至少一位智囊');
+    case 'agent_debate': {
+      const N = (ctx.activeAgents||[]).filter(a=>a&&a.role!=='master').length;
+      const allDone = N > 0 && (ctx.activeAgentIdx >= N - 1 || (ctx.debateConvergence && ctx.debateConvergence.converged && ctx.debateRound >= 1));
+      if (allDone) return mk('辩毕 · 凝结总结', ctx.handleUserAdvance, true);
+      return mk(N>0 ? `辩中 · 第${ctx.debateRound||1}轮 (快进)` : '辩中 · 直接看总结', ctx.handleUserAdvance, false);
+    }
+    case 'summary':
+      return mk('分岔 · 看择路', ctx.handleShowChoices, true);
+    case 'oracle_prompt':
+      return mk('诵卜辞 · 投铜钱起卦', ctx.handleStartOracle, true);
+    case 'oracle':
+      if (ctx.oracleResult) return mk('落卦已定 · 见分岔', ctx.handleProceedToChoices, true);
+      return mk('天机暂缓 · 直接见分岔', ctx.handleSkipOracle, false);
+    case 'branch_select':
+      return mk('命牌背面已封 · 选分岔径', ()=>{}, false, (ctx.choices||[]).length===0, '请从画面中央择一路径');
+    case 'path_reveal':
+      if (!ctx.fateRevealed) return mk('↑ 揭 示 命 签 ↑', ctx.handleRevealFate, true);
+      if (ctx.selectedChoice) return mk('收此命 · 藏于锦囊', ctx.handleCommit, true);
+      return mk('先择一路', ()=>{}, false, true);
+    case 'committing':
+      return mk('铭心践行 · 收', ctx.handleCommit, true);
+    case 'final':
+      return mk('再起一卦', ctx.handleRestart, false);
+    default:
+      return mk('继 续', ctx.handleUserAdvance, false);
+  }
+}
+
 export default function Game() {
   const flow = useGameFlow({ DEFAULT_CHOICES });
   const {
@@ -365,6 +464,103 @@ export default function Game() {
         </div>
 
         <ProcessStepper phase={phase} />
+
+        {/* ★ 赛博算命感：全局扫描线 + 数据流 + 全息边框（所有阶段都有，视觉加强）*/}
+        <div className="cyber-crt-scanlines" />
+        <div className="cyber-data-rain" />
+        <div className="cyber-holo-frame" />
+
+        {/* ★ 永远可见的底部阶段导航条（关键修复：任何阶段都有明确的"下一步"按键）
+             彻底解决"投铜钱/抉择阶段画面错乱，没按键"的问题。
+             桌面端：底部半透明磨砂横条，左侧阶段信息，右侧下一步/当前动作按钮
+             移动端(<768px)：顶部横条样式 */}
+        <div className="fixed z-[55]"
+          style={{
+            left: '50%',
+            transform: 'translateX(-50%)',
+            bottom: typeof window !== 'undefined' && window.innerWidth > 768 ? 18 : 'auto',
+            top: typeof window !== 'undefined' && window.innerWidth > 768 ? 'auto' : 80,
+            width: 'min(1080px, 94vw)',
+          }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '10px 16px',
+            background: 'linear-gradient(135deg, rgba(8, 6, 12, 0.82) 0%, rgba(26, 20, 16, 0.88) 50%, rgba(8, 6, 12, 0.82) 100%)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            border: `1px solid ${GLOW_COLOR}40`,
+            borderRadius: 4,
+            boxShadow: `0 0 24px ${GLOW_COLOR}20, inset 0 0 24px ${GLOW_COLOR}08`,
+          }}>
+            {/* 左侧：当前阶段 + 卦符指示 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: 2,
+                border: `1px solid ${GLOW_COLOR}80`,
+                color: GLOW_COLOR,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: '"Ma Shan Zheng", serif', fontSize: 15,
+                textShadow: `0 0 8px ${GLOW_COLOR}`,
+                background: `radial-gradient(circle, ${GLOW_COLOR}14 0%, transparent 70%)`,
+              }}>
+                {({
+                  input:'立', casting:'卜', yan_analyze:'演', clarify_loop:'问',
+                  agent_select:'召', agent_debate:'辩', summary:'凝',
+                  oracle_prompt:'辞', oracle:'卦', branch_select:'择',
+                  path_reveal:'命', committing:'启', final:'藏',
+                  committing:'铭', final:'符'
+                }[phase] || '演')}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <span style={{
+                  fontFamily: '"Ma Shan Zheng", serif', color: GLOW_COLOR,
+                  fontSize: 12, letterSpacing: '0.2em',
+                  textShadow: `0 0 6px ${GLOW_COLOR}60`,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>
+                  {phaseLabel || PHASE_LABEL_MAP[phase] || '推演台 · 待命中'}
+                </span>
+                <span style={{
+                  fontSize: 10, color: '#807870', letterSpacing: '0.12em',
+                  fontFamily: '"Noto Serif SC", serif',
+                }}>
+                  {USER_LABEL(activeAgents, agentDialogues, choices, oracleResult)}
+                </span>
+              </div>
+            </div>
+
+            {/* 右侧：主操作按键（永远可见）*/}
+            {_renderNavButton(
+              phase,
+              {
+                awaitingUser,
+                debateConvergence,
+                debateRound,
+                activeAgentIdx,
+                activeAgents,
+                selectedChoice,
+                fateRevealed,
+                oracleResult,
+                showInput,
+                choices,
+                handleUserAdvance,
+                handleShowChoices,
+                handleStartOracle,
+                handleSkipOracle,
+                handleRevealFate,
+                handleProceedToChoices,
+                handleCommit,
+                handleRestart,
+                handleSkipClarify,
+                inputValue,
+                handleStart,
+              }
+            )}
+          </div>
+        </div>
 
         {/* ★ 修复：信息收集/推演横幅浓缩到左下角（原顶部遮挡内容）
             桌面端：左下角小卡片，悬浮不挡主视角；移动端：顶部半透明窄条 */}

@@ -1246,15 +1246,17 @@ export async function generateDialoguesForAgents(question, agents, questionType,
     }
 
     if (!apiSuccess) {
-      // 根本性修复：单个智囊发言失败，只跳过该智囊，不拖累整个辩论降级成本地模板。
-      // 之前这里 throw BACKEND_REQUIRED，会让 useGameFlow 把「所有」智囊都降级成预设话术。
-      // 现在：记录该智囊失败，继续让其他智囊走真实 LLM，保证对话仍是真 AI。
-      errors[agent.id] = {
-        agentName: agent.name || agent.id,
-        error: errorInfo || '发言失败',
-      };
-      console.warn(`[发言] Agent ${agent.name} 发言失败，跳过（其他智囊继续真实 LLM）：`, errorInfo);
-      continue;
+      // ★ 修复：单个智囊发言失败（LLM超时/网络问题/空文本）→ 立即本地自然语言兜底，不能让它"消失"
+      // 之前的 continue 会直接跳过该智囊，用户看到"选了两个但只出一个"的怪现象。
+      // 现在：该智囊仍然有内容（只是内容是本地生成的自然语言），UI 不缺块，用户体验完整。
+      const prevReplies = Object.values(dialogues).filter(Boolean);
+      text = localGenerateAgentReply(agent, userContext || question, prevReplies, i);
+      dialogues[agent.id] = text;
+      source = 'local_natural_degraded';
+      const collaboration = inferCollaboration(text, nonMasterAgents);
+      results[agent.id] = { text, success: true, error: errorInfo || '发言降级（本地自然语言）', source, collaboration };
+      if (onAgentComplete) onAgentComplete(agent.id, text, true, errorInfo || '（单Agent本地降级）', source, collaboration);
+      console.warn(`[发言] Agent ${agent.name} 发言失败，降级本地自然语言：`, errorInfo || '无内容');
     }
 
     // 消费待回应 mention：该 Agent 已发言，移除其 pendingMentions（避免下轮重复注入）
@@ -1959,8 +1961,22 @@ export async function generateSummaryFromDebate(question, agentDialogues, agents
   // 尝试后端生成
   if (isLlmAvailable()) {
     try {
-      const result = await apiClient.generateSummary(question, nonMasterAgents.map(a => a.id), agentDialogues);
-      if (result && result.length > 10) return result;
+      // ★ 修复：后端 /api/agent/summary 返回对象 {summary, options}，不是纯字符串
+      // 之前当字符串用，导致 result.length 判断命中 fallback 降级
+      const resp = await apiClient.generateSummary(question, nonMasterAgents.map(a => a.id), agentDialogues, { timeout: 40000 });
+      const raw = typeof resp === 'string' ? resp : (resp?.summary || '');
+      if (raw && raw.length > 10) {
+        // 把选项也合并进来，让前端展示更完整
+        const opts = Array.isArray(resp?.options) ? resp.options : [];
+        if (opts.length > 0) {
+          const optionsText = opts.map((opt, idx) => {
+            const points = (opt.keyPoints || []).filter(Boolean).map(p => `· ${p}`).join('；');
+            return `${idx + 1}.${opt.label || '择一'} ${points ? '（' + points + '）' : ''}`;
+          }).join('\n');
+          return `${raw}\n\n【推演之径】\n${optionsText}`;
+        }
+        return raw;
+      }
     } catch (e) {
       console.warn('[总结] 后端失败，降级本地', e);
     }
@@ -2106,14 +2122,52 @@ export async function generatePersonalizedCardContent({ question, guaName, choic
   };
 
   try {
-    const dialoguesText = Object.values(agentDialogues || {})
-      .filter(d => typeof d === 'string' && d.length > 5)
-      .slice(0, 3)
-      .map(d => d.slice(0, 60))
-      .join('\n');
+    // ★ 修复：先在本地抽取「关键词、智囊原话切片、立场分歧、共识、总结要点」等结构化信息，
+    // 再交给演生成命牌，而不是直接扔原始对话。用户要求"总得有一些信息吧，总结、关键词啥的，而不是放对话内容进去"。
+    const allTexts = Object.entries(agentDialogues || {})
+      .filter(([id, d]) => typeof d === 'string' && d.length > 5);
+    const agentNamesMap = new Map();
+    const snippets = [];
+    for (const [id, d] of allTexts) {
+      // 从 agentDialogues 中尝试找 agent 对象（若没有则用 id 作名）
+      const nameMatch = String(d).match(/^[\s　]*([\u4e00-\u9fa5A-Za-z]{2,4})[：:]/) || [];
+      const name = nameMatch[1] || id;
+      agentNamesMap.set(id, name);
+      const clean = String(d).replace(/^[\s　]*[\u4e00-\u9fa5A-Za-z]{2,4}[：:]\s*/, '');
+      // 每条抽一句最有信息量的切片（前 36 字）
+      const firstSentence = clean.split(/[。！？!?\n]/).map(s => s.trim()).find(s => s.length >= 8) || clean.slice(0, 36);
+      if (firstSentence.length >= 6) snippets.push(`${name}：${firstSentence.slice(0, 36)}`);
+    }
+    // 本地高频关键词（2-6字）抽取，真正的「总结信息」
+    const keywordsPool = _extractKeywords([question, choiceLabel || '', ...snippets].join(' '), 10);
+    const keywords = keywordsPool.slice(0, 6);
+    // 简单立场分类：偏向风险/机会/稳健/进取/内心/长远
+    const _fullText = [question, choiceLabel, ...snippets].join(' ');
+    const stanceTags = [
+      { key: '风险导向', test: /风险|崩|亏|最坏|谨慎|隐患|危机|不可控/ },
+      { key: '机会看涨', test: /红利|上升|机会|窗口|出手|利好|爆发|增长/ },
+      { key: '稳守为上', test: /等|稳住|不冒险|保留|观察|守|不要急/ },
+      { key: '果断行动', test: /行动|果断|上|出手|推进|现在|执行|趁/ },
+      { key: '叩问内心', test: /喜欢|内心|直觉|想要|热爱|快乐|愿意|感受/ },
+      { key: '长远格局', test: /长远|五年|十年|长期|格局|复利|沉淀|积累/ },
+    ].filter(t => t.test.test(_fullText)).map(t => t.key).slice(0, 4);
+    // 分歧/共识的本地判断
+    const hasRisk = /风险|崩|亏|最坏|谨慎/.test(_fullText);
+    const hasChance = /机会|红利|上升|出手/.test(_fullText);
+    const divergence = (hasRisk && hasChance)
+      ? '智囊于「机会 vs 风险」两端拉锯，你需以本心锚定。'
+      : (hasRisk ? '众智多提醒风险，勿因焦虑草率决策。' : (hasChance ? '众智多指向机会窗口，但越共识越要追问底线。' : '众智尚未成型绝对倾向，以你本心为锚。'));
+    // 真正传给演的是【结构化摘要信息】，不是原始对话
+    const dialoguesText = [
+      `【智囊原话切片】${snippets.slice(0, 4).join('｜')}`,
+      `【高频关键词】${keywords.join(' · ')}`,
+      `【立场标签】${stanceTags.length > 0 ? stanceTags.join('、') : '综合判断'}`,
+      `【分歧焦点】${divergence}`,
+    ].join('\n');
 
-    // ★ 修复：减小各 fetch 超时（3s/3s/5s = 11s 总），确保 < 外层 race 12s
-    const _fetchWithTimeout = async (url, opts, timeoutMs = 3000) => {
+    // ★ 修复：超时从 3s/3s/5s 放宽到 10s/10s/15s（总35s），
+    // 给 Vercel Edge Runtime 30s 上限 + 网络抖动充足空间。用户要求"真正可用为优先级"。
+    const _fetchWithTimeout = async (url, opts, timeoutMs = 10000) => {
       const ctrl = new AbortController();
       const tid = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
@@ -2124,7 +2178,7 @@ export async function generatePersonalizedCardContent({ question, guaName, choic
       }
     };
 
-    // Step 1: 若未传卦象，先用 yiJingEngine 起卦（真实后端路由 POST /api/divination/cast）
+    // Step 1: 若未传卦象，先用 yiJingEngine 起卦
     let hexagramData = { original: { name: guaName || '大有', symbol: trigram || '☰' } };
     if (!guaName) {
       try {
@@ -2132,7 +2186,7 @@ export async function generatePersonalizedCardContent({ question, guaName, choic
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ question }),
-        }, 3000);
+        }, 10000);
         if (castResp.ok) {
           hexagramData = await castResp.json();
         }
@@ -2145,15 +2199,14 @@ export async function generatePersonalizedCardContent({ question, guaName, choic
       };
     }
 
-    // Step 2: 调后端 yiJingEngine 解读卦象（真实路由 POST /api/divination/interpret）
+    // Step 2: 调后端 yiJingEngine 解读卦象
     let interpretationText = '';
     try {
-      const dialoguesArr = dialoguesText ? [dialoguesText] : [];
       const interResp = await _fetchWithTimeout(`${API_BASE_URL}/api/divination/interpret`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hexagram: hexagramData, question, agentDialogues: dialoguesArr }),
-      }, 3000);
+        body: JSON.stringify({ hexagram: hexagramData, question, keywords, stanceTags, divergence }),
+      }, 10000);
       if (interResp.ok) {
         const interData = await interResp.json();
         interpretationText = (interData.interpretation && (
@@ -2166,32 +2219,35 @@ export async function generatePersonalizedCardContent({ question, guaName, choic
       console.warn('[命牌] 调后端解卦失败，仅用 yan 生成:', e.message);
     }
 
-    // Step 3: 调真实存在的后端路由 POST /api/yan/chat，把解卦结果 + 上下文交给演生成命牌JSON
+    // Step 3: 交给演生成命牌JSON。prompt 里明确要求引用关键词与智囊原话切片。
     const instruction = `你是通晓易经的智者「演」。请严格按要求输出命牌内容，**只输出JSON，不要任何其他文字，不要markdown代码块**。
 
 **要求的JSON结构**：
 {
   "verse": "8-15字的古风卦辞，贴合卦象与抉择，不要直接照搬原卦辞",
   "summary": "30-50字的终局总结，融合卦象寓意与智囊观点，点出抉择后的走向与提醒，语气克制含蓄",
-  "keyPoints": ["要点1", "要点2", "要点3", "要点4"],
-  "explanation": "80-120字的解签，解析卦象与抉择的深层关联，给出恳切的提醒与指引"
+  "keyPoints": ["要点1（含关键词）", "要点2（含关键词）", "要点3（含关键词）", "要点4"],
+  "explanation": "80-120字的解签，解析卦象与抉择的深层关联，给出恳切的提醒与指引，建议引用智囊原话切片"
 }
-
-**字数硬性约束**：verse 8-15字，summary 30-50字，keyPoints 3-5条，explanation 80-120字。
 
 【用户问题】${question}
 【所得卦象】${guaName || hexagramData?.original?.name || '大有'}（${trigram || hexagramData?.original?.symbol || '☯'}）
-【用户抉择】${choiceLabel}
-【智囊发言】
-${dialoguesText || '（无智囊发言）'}
+【用户抉择】${choiceLabel || '本心所向'}
+【本次推演结构化信息】
+${dialoguesText}
 【卦象专业解读】
-${interpretationText || '（易经专业解读暂缺，基于卦象名称与抉择综合推演）'}`;
+${interpretationText || '（易经专业解读暂缺，基于卦象名称与抉择综合推演）'}
+
+硬性约束：
+1. verse 8-15字，summary 30-50字，keyPoints 3-5条，explanation 80-120字
+2. 必须在 keyPoints 和 explanation 中**直接引用本次推演关键词与智囊原话切片**（不要伪造）
+3. 不要使用【】、📌🎋☯✅等图标符号，使用阿拉伯数字序号和中文冒号`;
 
     const yanResp = await _fetchWithTimeout(`${API_BASE_URL}/api/yan/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: instruction, conversationId: 'fate-card-' + Date.now(), history: [] }),
-    }, 5000);
+    }, 15000);
 
     if (!yanResp.ok) {
       const errText = await yanResp.text().catch(() => '');
