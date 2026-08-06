@@ -1,21 +1,39 @@
 /**
- * 真 Agent 架构 Step 2: 推演状态机总控（DeliberationEngine）
+ * 真 Agent 架构 Step 2/4: 推演状态机总控（DeliberationEngine）
  *
  * 状态机：PLAN → WAIT → EXECUTE → REFLECT → ORACLE → COMMIT（按文档 4.3.1 节）
  *
- * Step 2 只跑通 start（PLAN → EXECUTE 骨架）：
- *   - start:  创建 session → 调 planner.plan() → 返回 { sessionId, state, plan, askUser }
- *   - answer: 占位（Step 4 实现 ASK 逻辑后，重新 plan）
+ * Step 4 接入自主性后：
+ *   - start:  创建 session(round=1) → 调 planner.plan() → 按数据契约返回完整字段
+ *             期望：信息不全时 state=WAIT + askUser 非空；信息充分时 state=EXECUTE
+ *   - answer: 加载 session → 合并 answers 到 questionContext → round+1 → 重新 plan → 返回完整字段
+ *             （round 硬限制 2 轮，超过则 planner 内 autonomyGate 降级 EXECUTE）
  *   - execute:占位（Step 5 实现智囊并行调用）
- *   - commit:占位（Step 6 实现命签），当前调 memoryService.consolidate 固化记忆
- *   - getState:读取当前状态
+ *   - commit: 占位（Step 6 实现命签），当前调 memoryService.consolidate 固化记忆
+ *   - getState: 读取当前状态，返回完整数据契约字段
+ *
+ * 统一数据契约（前端并行开发依赖）：
+ *   { sessionId, state, askUser:[{question,reason,source}], plan, round, maxRound:2, openingLine, memory:[{content,type}] }
  *
  * 依据: docs/REAL_AGENT_ARCHITECTURE.md 3.1 / 3.2 / 4.3.1 / 4.3.2 / 6.3 / 7 节
+ *       docs/AUTONOMY_GATE_DESIGN.md 第 5 节
  */
 
 import * as planner from './planner.js';
 import * as memoryService from './memoryService.js';
+import * as reflector from './reflector.js';
+import * as agentEngine from './agentEngine.js';
+import { AGENT_POOL } from '../data/agentPool.js';
+import * as customAdvisorService from './customAdvisorService.js';
 import logger from './logger.js';
+import eventBus from './eventBus.js';
+import { evaluateSession } from './evalPipeline.js';
+import { withRetry, withTimeout } from './retryHelper.js';
+import * as reactLoop from './reactLoop.js';
+import * as eventStore from './eventStore.js';
+// 系统级 Agent（生产级 4 Agent）
+import AuditAgentSingleton from '../agents/system/AuditAgent.js';
+const _auditAttached = (() => { try { AuditAgentSingleton.ensureAttached(); } catch (e) { logger.warn('[DeliberationEngine] audit attach fail', e.message); } return true; })();
 
 // ============ 状态枚举 ============
 
@@ -26,17 +44,93 @@ export const STATES = {
   REFLECT: 'REFLECT',
   ORACLE: 'ORACLE',
   COMMIT: 'COMMIT',
+  PAUSED: 'PAUSED',
+  FAILED: 'FAILED',
 };
+
+const MAX_ROUND = 2;
+const PAUSE_TIMEOUT_MS = 30 * 60 * 1000; // 30 分钟内可 resume
+
+// ============ 工具函数 ============
+
+/**
+ * 把 planner.plan() 的返回组装成统一数据契约响应
+ * @param {object} plannedSession session 对象（含 id/state/round）
+ * @param {object} plan DeliberationPlan
+ * @param {Array} askUser 追问数组
+ * @param {string} openingLine 开场吊言
+ * @param {number} round 当前轮次
+ * @param {Array} memory [{content,type}]
+ * @returns {object} 数据契约响应
+ */
+function buildResponse(plannedSession, plan, askUser, openingLine, round, memory) {
+  return {
+    sessionId: plannedSession.id,
+    state: plannedSession.state,
+    askUser: Array.isArray(askUser) ? askUser : [],
+    plan: plan || { dimensions: [], toolProbes: [], askUser: [], minFindings: 3 },
+    round: round || 1,
+    maxRound: MAX_ROUND,
+    openingLine: openingLine || '',
+    memory: Array.isArray(memory) ? memory : [],
+    questionType: plannedSession.questionType || '',
+    analysis: plan?.analysis || '',
+  };
+}
+
+/**
+ * 从已加载的 session（DB 态）组装统一数据契约响应（getState 用）
+ * askUser/round/openingLine 随 plan 字段持久化；memory 来自 memory_used
+ * @param {object} session
+ * @returns {object} 数据契约响应
+ */
+function buildResponseFromSession(session) {
+  const plan = session && session.plan ? session.plan : { dimensions: [], toolProbes: [], askUser: [], minFindings: 3 };
+  const memoryUsed = Array.isArray(session && session.memory_used) ? session.memory_used : [];
+  const askUser = Array.isArray(plan.askUser) && plan.askUser.length > 0
+    ? plan.askUser
+    : (Array.isArray(session && session.askUser) ? session.askUser : []);
+  return {
+    sessionId: session && session.id,
+    state: session && session.state,
+    askUser,
+    plan,
+    round: (plan && plan.round) || (session && session.round) || 1,
+    maxRound: MAX_ROUND,
+    openingLine: (plan && plan.openingLine) || (session && session.openingLine) || '',
+    memory: memoryUsed.map((m) => ({ content: m.content, type: m.memory_type })),
+  };
+}
+
+/**
+ * 把用户回答数组归一化为文本，合并进 questionContext（不改原问题）
+ * @param {string} question 原问题
+ * @param {Array} answers 用户回答数组（元素可为 string 或 {answer/text/content}）
+ * @returns {string} `${question} ${answersText}`
+ */
+function mergeAnswersToContext(question, answers) {
+  const arr = Array.isArray(answers) ? answers : [];
+  const text = arr
+    .map((a) => {
+      if (a == null) return '';
+      if (typeof a === 'string') return a;
+      if (typeof a === 'object') return a.answer || a.text || a.content || '';
+      return String(a);
+    })
+    .filter(Boolean)
+    .join(' ');
+  return text ? `${question} ${text}`.trim() : question;
+}
 
 // ============ 主入口 ============
 
 /**
- * 发起推演：创建 session → 调 planner.plan() → 返回
- * 状态流转：PLAN → EXECUTE（Step 2 固定 CONTINUE，不追问）
+ * 发起推演：创建 session(round=1) → 调 planner.plan() → 按数据契约返回
+ * 状态流转：PLAN → WAIT（信息不全，演追问）/ EXECUTE（信息充分）
  *
  * @param {string} question 用户问题
  * @param {string} userId 用户ID
- * @returns {Promise<{sessionId, state, plan, askUser}>}
+ * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
 export async function start(question, userId) {
   logger.info('[Deliberation] start 开始', { question: (question || '').slice(0, 60), userId });
@@ -51,39 +145,174 @@ export async function start(question, userId) {
     throw new Error('缺少 userId 参数');
   }
 
-  // 创建 session（snake_case 对齐 memoryService.saveSession）
-  const session = {
+  // ========== v3.1 关键修复：先落 session，再 plan ==========
+  // 即使 plan 全部失败也一定给前端返回一个有效的 sessionId，避免 500 让前端卡死
+  let session = {
     user_id: userId,
     question: question.trim(),
     state: STATES.PLAN,
     replan_count: 0,
+    round: 1,
   };
+  // 先持久化拿到确定 id
+  try {
+    session = await memoryService.saveSession(session);
+    logger.info('[Deliberation] session 预创建成功', { sessionId: session.id });
+  } catch (e) {
+    // 内存模式兜底：自造 id（极端情况下 saveSession 失败也要继续）
+    session.id = session.id || `sess_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    logger.warn('[Deliberation] saveSession 失败，使用内存态 id', { sessionId: session.id, error: e.message });
+  }
+  const sessionId = session.id;
 
-  // 调 planner.plan() —— 会读取记忆、生成维度、持久化 session、推进到 EXECUTE
-  const { session: plannedSession, plan, askUser } = await planner.plan(session);
+  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'start', thought: `演·起卦：用户问「${question.trim().slice(0, 40)}」` } });
+
+  // 调 planner.plan()，失败时给 fallback 版本（绝对不 throw）
+  let result;
+  try {
+    result = await withRetry(
+      () => withTimeout(
+        () => planner.plan(session),
+        20000,
+        '演规划'
+      ),
+      { retries: 2, delayMs: 1000, backoffMs: 2000, name: 'planner.plan' }
+    );
+  } catch (e) {
+    // v3.1 兜底：plan 彻底失败时，仍然返回一个有 sessionId + 启发式追问/维度 的合法响应
+    logger.warn('[Deliberation] planner.plan 彻底失败，使用最后一道规则兜底:', e.message);
+    result = _fallbackPlanResult(session, e.message);
+  }
+
+  // 确保 sessionId 一致（兜底时可能用的是内存态对象）
+  result.session.id = result.session.id || sessionId;
+  const sid = result.session.id;
+
+  // emit 状态流转事件（try/catch 防止 eventBus 问题影响主流程）
+  try {
+    eventBus.emit(sid, {
+      type: 'STATE_CHANGE',
+      data: { from: 'PLAN', to: result.session.state, round: result.round },
+    });
+    eventBus.emit(sid, {
+      type: 'THOUGHT',
+      data: {
+        step: 'planning',
+        thought: result.plan?.analysis || `拆解为${result.plan?.dimensions?.length || 0}个维度`,
+        dimensions: (result.plan?.dimensions || []).map(d => d.name),
+      },
+    });
+    if (result.askUser && result.askUser.length > 0) {
+      eventBus.emit(sid, {
+        type: 'THOUGHT',
+        data: { step: 'clarify', thought: `演·追问：${result.askUser.length}个问题` },
+      });
+    }
+    if (result.memory && result.memory.length > 0) {
+      eventBus.emit(sid, {
+        type: 'OBSERVATION',
+        data: { insight: `召回${result.memory.length}条记忆`, memory: result.memory.map(m => m.content?.slice(0, 30)) },
+      });
+    }
+  } catch (busErr) {
+    logger.warn('[Deliberation] eventBus 异常忽略', busErr.message);
+  }
 
   logger.info('[Deliberation] start 完成', {
-    sessionId: plannedSession.id,
-    state: plannedSession.state,
-    dimCount: plan?.dimensions?.length || 0,
-    askUserCount: askUser?.length || 0,
+    sessionId: sid,
+    state: result.session.state,
+    round: result.round,
+    dimCount: result.plan?.dimensions?.length || 0,
+    askUserCount: result.askUser?.length || 0,
+    fallback: !!result.fallback,
   });
 
+  const resp = buildResponse(result.session, result.plan, result.askUser, result.openingLine, result.round, result.memory);
+  if (result.fallback) {
+    resp.fallback = true;
+    resp.fallbackReason = result.fallbackReason || '';
+  }
+  return resp;
+}
+
+/**
+ * 最后一道兜底：当 planner.plan 全部失败（超时/LLM挂），给一个合法的响应
+ * 确保前端能得到 sessionId + 启发式追问 + 4 个智囊，流程继续
+ */
+function _fallbackPlanResult(session, errorMsg = '') {
+  const q = (session.question || '').toLowerCase();
+  // 启发式维度
+  const dims = [];
+  const add = (name, perspective) => dims.push({ name, perspective, agents: [], toolNeeds: [] });
+  add('投入与成本', 'financial');
+  add('风险与隐患', 'risk');
+  add('长期影响', 'strategic');
+  add('内心诉求', 'emotional');
+
+  // 启发式 agent（风眼/钱谷/路向/镜渊 四核心）
+  const fallbackAgents = [
+    { id: 'fengyan', name: '风眼', stance: '风险视角', role: 'dynamic', trigram: '☵', color: '#A84848', glow: '#E88080' },
+    { id: 'qiangu', name: '钱谷', stance: '财务视角', role: 'dynamic', trigram: '☰', color: '#C88848', glow: '#E8B880' },
+    { id: 'luxiang', name: '路向', stance: '职业/趋势视角', role: 'dynamic', trigram: '☴', color: '#508870', glow: '#80C8A8' },
+    { id: 'jingyuan', name: '镜渊', stance: '反思视角', role: 'dynamic', trigram: '☷', color: '#706088', glow: '#A890C8' },
+  ];
+
+  // 启发式追问（按问题关键词，最多 3 条）
+  const askUser = [];
+  if (/(租房|买房|换城市|城市|房租|房源)/.test(q)) {
+    askUser.push({ question: '能接受的月预算大概是多少？', reason: '预算决定筛选范围', source: 'P0-FB' });
+    askUser.push({ question: '工作/学校大概在哪个区域？期望的单程通勤时长是？', reason: '通勤是日常双输的元凶', source: 'P0-FB' });
+    askUser.push({ question: '是短期过渡还是长期居住？有没有对象或家人同住？', reason: '长期/同住会改变风险评估', source: 'P0-FB' });
+  } else if (/(offer|工作|跳槽|创业|辞职|转行|升职|职业)/.test(q)) {
+    askUser.push({ question: '你现在最看重的是收入、成长，还是稳定性？', reason: '三者不可兼得，先定权重', source: 'P0-FB' });
+    askUser.push({ question: '目前的储蓄能撑多久（裸辞缓冲期）？', reason: '财务缓冲决定决策风险', source: 'P0-FB' });
+  } else if (/(投资|股票|基金|理财|贷款|汇率|借钱|还钱)/.test(q)) {
+    askUser.push({ question: '能接受的最大亏损比例是多少？', reason: '风险承受力决定配置', source: 'P0-FB' });
+    askUser.push({ question: '这笔钱多久内要用？能锁多久？', reason: '期限决定产品选择', source: 'P0-FB' });
+  } else if (/(感情|恋爱|结婚|分手|对象|伴侣|老公|老婆|父母|家人)/.test(q)) {
+    askUser.push({ question: '你最不能接受的底线是什么？', reason: '没有底线的选择都是后悔', source: 'P0-FB' });
+    askUser.push({ question: '家人/对方的态度是？', reason: '亲密关系的事不是一个人决定的', source: 'P0-FB' });
+  } else {
+    askUser.push({ question: '这件事的时间限制是什么？多久之内必须决定？', reason: '时间决定信息获取深度', source: 'P0-FB' });
+    askUser.push({ question: '最坏情况是什么？你能接受吗？', reason: '先判底线再谈收益', source: 'P0-FB' });
+  }
+
+  session.state = STATES.WAIT;
+  session.round = 1;
+  session.askUser = askUser;
+
+  const plan = {
+    dimensions: dims,
+    agents: fallbackAgents,
+    toolProbes: [],
+    askUser,
+    minFindings: 3,
+    round: 1,
+    openingLine: `关于「${(session.question || '').slice(0, 30)}」，先问清几个关键点再推。`,
+    analysis: `（LLM 暂不可用：${String(errorMsg || '').slice(0, 40)}，演已按规则生成维度与追问）`,
+  };
+  session.plan = plan;
+
   return {
-    sessionId: plannedSession.id,
-    state: plannedSession.state,
+    session,
     plan,
     askUser,
+    openingLine: plan.openingLine,
+    round: 1,
+    maxRound: MAX_ROUND,
+    memory: [],
+    fallback: true,
+    fallbackReason: String(errorMsg || 'planner.plan failed').slice(0, 80),
   };
 }
 
 /**
- * 用户回答追问：更新 session → 重新 plan → 返回
- * Step 2 占位：Step 4 实现 ASK 逻辑后接入，当前直接重新 plan 推进到 EXECUTE
+ * 用户回答追问：加载 session → 合并 answers 到 questionContext → round+1 → 重新 plan → 返回
+ * round 硬限制 2 轮：round 达到 3 时 planner 内 autonomyGate 返回 STOP 降级 EXECUTE
  *
  * @param {string} sessionId
  * @param {Array} answers 用户回答数组
- * @returns {Promise<{sessionId, state, plan}>}
+ * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
 export async function answer(sessionId, answers) {
   logger.info('[Deliberation] answer 收到', { sessionId, answerCount: Array.isArray(answers) ? answers.length : 0 });
@@ -93,47 +322,279 @@ export async function answer(sessionId, answers) {
     throw new Error(`会话不存在: ${sessionId}`);
   }
 
-  // 记录用户回答（暂存到 memory_used 的扩展字段，Step 4 再细化）
-  session.answers = answers || [];
+  // round 从持久化的 plan.round 读取，+1 进入下一轮判定
+  const prevRound = Number((session.plan && session.plan.round) || session.round) || 1;
+  session.round = prevRound + 1;
 
-  // 重新 plan（Step 4 会在此前接入 autonomyGate 判定）
-  const { plan } = await planner.plan(session);
+  // 合并 answers 到 questionContext（作为补充信息，不改原问题），供 autonomyGate 重新扫描
+  session.questionContext = mergeAnswersToContext(session.question, answers);
+  session.answers = Array.isArray(answers) ? answers : [];
+
+  logger.info('[Deliberation] answer 重新规划', {
+    sessionId,
+    prevRound,
+    newRound: session.round,
+    questionContext: session.questionContext.slice(0, 80),
+  });
+
+  // 重新 plan（planner 内 autonomyGate 按 session.round 判定 ASK/CONTINUE/STOP）
+  const result = await withRetry(
+    () => withTimeout(
+      () => planner.plan(session),
+      20000,
+      '演规划'
+    ),
+    { retries: 2, delayMs: 1000, backoffMs: 2000, name: 'planner.plan' }
+  );
 
   logger.info('[Deliberation] answer 完成', {
     sessionId,
-    state: session.state,
-    dimCount: plan?.dimensions?.length || 0,
+    state: result.session.state,
+    round: result.round,
+    dimCount: result.plan?.dimensions?.length || 0,
+    askUserCount: result.askUser?.length || 0,
   });
 
-  return {
-    sessionId,
-    state: session.state,
-    plan,
-  };
+  return buildResponse(result.session, result.plan, result.askUser, result.openingLine, result.round, result.memory);
 }
 
 /**
- * 执行智囊推演（并行）
- * Step 2 占位：Step 5 实现，当前仅推进状态
+ * 执行推演（ReAct 循环）→ Reflect
+ * v3.0 重构：演自主 Think→Act→Observe 循环，替代一次性智囊并行发言
+ *   1. 加载 session，构建智囊候选池（agentIds 或 agentRouter 推荐）
+ *   2. 构建 ReAct state（questionContext/plan/advisorPool/findings/toolResults）
+ *   3. 调 reactLoop.runReActLoop：演自主决定 tool_call/advisor_call/ask_user/output
+ *   4. 演追问则返回 CLARIFY；否则调 reflector.reflect 立卦
+ *   5. 持久化 session（findings + tool_results + oracle + state）
  *
  * @param {string} sessionId
- * @param {Array} agentIds 指定调用的智囊ID
- * @returns {Promise<{sessionId, state, message}>}
+ * @param {Array} agentIds 指定调用的智囊ID（可选，作为 ReAct 候选池）
+ * @returns {Promise<{sessionId, state, findings, oracle, conflicts, gaps, replanned}>}
  */
 export async function execute(sessionId, agentIds) {
-  logger.info('[Deliberation] execute 占位调用', { sessionId, agentIds });
+  logger.info('[Deliberation] execute 开始', { sessionId, agentIds });
 
   const session = await memoryService.getSession(sessionId);
   if (!session) {
     throw new Error(`会话不存在: ${sessionId}`);
   }
 
-  // Step 5 将在此处并行调用智囊、收集 findings、进入 REFLECT
-  // 当前仅占位返回
+  // === ★ P0 守卫：澄清未完成绝不允许启动 ReAct 循环（之前前端 SSE 抢跑 EXECUTE → DELIBERATE，就靠这一条后端双保险）
+  const askUser = session.askUser || (session.plan && session.plan.askUser) || [];
+  const stillNeedClarify = Array.isArray(askUser) && askUser.length > 0 && (session.state === STATES.WAIT || session.state === STATES.PLAN);
+  if (stillNeedClarify) {
+    // SEV2 审计记录
+    try { AuditAgentSingleton && typeof AuditAgentSingleton.record === 'function' && AuditAgentSingleton.record({ sev: 2, rule: 'STATE_LEAP', evidence: `execute 被调用但 session 仍在澄清 (state=${session.state} askUser=${askUser.length})`, sessionId }); } catch { /* noop */ }
+    logger.warn('[Deliberation] execute 被拒绝：仍在澄清阶段，需先 answerDeliberation 完成追问', { sessionId, state: session.state, askUserCount: askUser.length });
+    const resp = buildResponseFromSession(session);
+    resp.clarifyRequired = true;
+    resp.state = STATES.WAIT;
+    resp.askUser = askUser;
+    return resp;
+  }
+
+  const question = session.questionContext || session.question || '';
+
+  // 1. 构建智囊池：优先用传入的 agentIds（用户选择的），否则用 plan 中的 agents（演推荐的）
+  //    ReAct 循环里演自主决定调哪些智囊，这里只提供候选池
+  // P0-2 修复：custom(市集) 的 agentId 不在 AGENT_POOL 中，需要从 customAdvisorService 合并查询
+  let userCustomAdvisors = [];
+  if (session.user_id) {
+    try {
+      userCustomAdvisors = (await customAdvisorService.listAdvisors(session.user_id))
+        .map(customAdvisorService.formatAdvisorForAgentPool?.bind(customAdvisorService) || (a => ({
+          id: a.id, name: a.name, persona: a.persona, stance: a.perspective || '市集智囊',
+          perspective: a.perspective || 'practical', isCustom: true, questionTypes: ['life'],
+        })));
+    } catch (e) {
+      logger.warn('[Deliberation] 加载用户custom智囊失败，忽略', { error: e.message });
+    }
+  }
+  const AGENT_POOL_WITH_CUSTOM = [...AGENT_POOL, ...userCustomAdvisors];
+  const AGENT_MAP_WITH_CUSTOM = new Map(AGENT_POOL_WITH_CUSTOM.map(a => [a.id, a]));
+
+  let advisorPool = [];
+  if (Array.isArray(agentIds) && agentIds.length > 0) {
+    advisorPool = agentIds
+      .map((id) => AGENT_MAP_WITH_CUSTOM.get(id))
+      .filter(Boolean);
+    logger.info('[Deliberation] execute 使用用户指定智囊', {
+      count: advisorPool.length, ids: agentIds,
+      customCount: advisorPool.filter(a => a.isCustom).length,
+      missing: agentIds.filter(id => !AGENT_MAP_WITH_CUSTOM.has(id)),
+    });
+  } else if (Array.isArray(session.plan?.agents) && session.plan.agents.length > 0) {
+    // 用 Plan 阶段演推荐的 agents：同时从 AGENT_POOL 和 custom pool 中查（可能有 custom id）
+    advisorPool = session.plan.agents
+      .map((a) => AGENT_MAP_WITH_CUSTOM.get(a.id) || a)  // plan.agents里已经是完整agent对象的兜底
+      .filter(Boolean);
+    logger.info('[Deliberation] execute 使用演推荐智囊', { count: advisorPool.length, ids: advisorPool.map(a => a.id) });
+  } else {
+    // 没有用户选择也没有演推荐：调 agentEngine 自主选择（useCustomAdvisors=true 已内置查custom）
+    try {
+      const t0 = Date.now();
+      const agentResult = await agentEngine.analyzeQuestion(question, session.user_id, { useCustomAdvisors: true });
+      advisorPool = (agentResult.agentIds || [])
+        .map(id => AGENT_MAP_WITH_CUSTOM.get(id))
+        .filter(Boolean);
+      logger.info('[Deliberation] execute agentEngine 自主选择', {
+        duration: `${Date.now() - t0}ms`,
+        count: advisorPool.length,
+        ids: advisorPool.map(a => a.id),
+      });
+    } catch (e) {
+      logger.warn('[Deliberation] execute agentEngine 选择失败，智囊池为空', { error: e.message });
+      advisorPool = [];
+    }
+  }
+
+  // 2. 构建 ReAct state（演的推演上下文，可变对象，runReActLoop 会追加 findings/toolResults/dialogue）
+  const reactState = {
+    sessionId,
+    question: session.question,
+    questionContext: question,
+    plan: session.plan || { dimensions: [] },
+    userId: session.user_id,
+    advisorPool,
+    findings: Array.isArray(session.findings) ? session.findings : [],
+    toolResults: Array.isArray(session.tool_results) ? session.tool_results : [],
+    dialogue: [],
+    llmCallCount: 0,
+  };
+
+  // 3. emit 进入 DELIBERATE（Event Sourcing：事件追加为真相）
+  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'EXECUTE', to: 'DELIBERATE', thought: '演·ReAct 推演开始' } });
+  await eventStore.appendEvent(sessionId, 'STATE_CHANGE', { from: 'EXECUTE', to: 'DELIBERATE' }, 'yan');
+
+  // 4. 运行 ReAct 循环（Think→Act→Observe，演自主决策 tool_call/advisor_call/ask_user/output）
+  const reactResult = await reactLoop.runReActLoop(sessionId, reactState);
+
+  // 5. 把 ReAct 产生的 findings/toolResults 写回 session
+  session.findings = reactState.findings || [];
+  session.tool_results = reactState.toolResults || [];
+
+  // 6. 演决定追问：持久化 + 返回 CLARIFY（不预设，演基于上下文判断）
+  if (reactResult.state === 'CLARIFY' && Array.isArray(reactResult.askUser) && reactResult.askUser.length > 0) {
+    await memoryService.updateSessionState(sessionId, STATES.WAIT, {
+      findings: session.findings,
+      tool_results: session.tool_results,
+    });
+    await eventStore.appendEvent(sessionId, 'CLARIFY_ASKED', { questions: reactResult.askUser }, 'yan');
+    logger.info('[Deliberation] execute 演追问，返回 CLARIFY', {
+      sessionId,
+      askUserCount: reactResult.askUser.length,
+      findingsCount: session.findings.length,
+    });
+    return {
+      sessionId,
+      state: 'CLARIFY',
+      askUser: reactResult.askUser,
+      findings: session.findings,
+    };
+  }
+
+  logger.info('[Deliberation] execute ReAct 完成，进入 REFLECT', {
+    sessionId,
+    findingsCount: session.findings.length,
+    toolResultsCount: session.tool_results.length,
+    llmCalls: reactState.llmCallCount,
+  });
+
+  // 7. Reflect（立卦或重规划）
+  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'REFLECT' } });
+  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'reflect', thought: `演·反思：聚合${session.findings.length}位智囊发现` } });
+  const result = await reflector.reflect(session);
+
+  // Step 8: 重规划串通 — reflector 触发重规划时，自动重新 plan/execute，最多1次
+  if (result.replanned && (result.session.state === 'PLAN' || result.session.state === 'EXECUTE')) {
+    logger.info('[Deliberation] 触发重规划，自动串通', {
+      reason: result.reason,
+      newState: result.session.state,
+      replanCount: result.session.replan_count,
+    });
+    eventBus.emit(sessionId, {
+      type: 'THOUGHT',
+      data: { step: 'replan', thought: `演·重规划：${result.reason}，重新析度召智` },
+    });
+    // 持久化当前 session（含 replan_count 和补维度）
+    await memoryService.saveSession(result.session);
+    // state='PLAN'：先重新 plan（planner 会读 session 已有 findings 重新规划）
+    if (result.session.state === 'PLAN') {
+      await withRetry(
+        () => withTimeout(
+          () => planner.plan(result.session),
+          20000,
+          '演规划'
+        ),
+        { retries: 2, delayMs: 1000, backoffMs: 2000, name: 'planner.plan' }
+      );
+    }
+    // 递归 execute（传空 agentIds 让 agentRouter 基于新维度推荐智囊，replan_count 已+1 不会无限）
+    return execute(sessionId, []);
+  }
+
+  // emit 反思结果
+  if (result.oracle) {
+    eventBus.emit(sessionId, {
+      type: 'OBSERVATION',
+      data: {
+        insight: `立卦：${result.oracle.primary?.lower?.name || ''}${result.oracle.primary?.upper?.name || ''} · ${result.conflicts?.length || 0}处矛盾`,
+      },
+    });
+  }
+  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'REFLECT', to: result.session?.state || 'ORACLE' } });
+
+  // 6. 持久化
+  await persistExecuteResult(sessionId, result);
+
+  return buildExecuteResponse(sessionId, result);
+}
+
+/**
+ * 持久化 execute + reflect 结果
+ */
+async function persistExecuteResult(sessionId, result) {
+  try {
+    const patch = {
+      findings: result.session.findings || [],
+      oracle: result.session.oracle || null,
+      replan_count: result.session.replan_count ?? 0,
+    };
+    // P1-1：持久化动态抉择选项和全局总结（下次恢复推演时不丢失）
+    if (result.session.dynamicChoices) patch.dynamic_choices = result.session.dynamicChoices;
+    if (result.session.masterSummary != null) patch.master_summary = result.session.masterSummary;
+    if (result.session.plan) {
+      patch.plan = result.session.plan;
+    }
+    await memoryService.updateSessionState(sessionId, result.session.state, patch);
+    logger.info('[Deliberation] execute 持久化完成', {
+      sessionId,
+      state: result.session.state,
+      findingsCount: patch.findings.length,
+      hasOracle: !!patch.oracle,
+      hasDynamicChoices: Array.isArray(patch.dynamic_choices) && patch.dynamic_choices.length > 0,
+    });
+  } catch (e) {
+    logger.warn('[Deliberation] execute 持久化失败', { sessionId, error: e.message });
+  }
+}
+
+/**
+ * 组装 execute 响应
+ */
+function buildExecuteResponse(sessionId, result) {
   return {
     sessionId,
-    state: STATES.EXECUTE,
-    message: '智囊调用待Step5实现',
+    state: result.session.state,
+    findings: result.session.findings || [],
+    oracle: result.oracle,
+    conflicts: result.conflicts,
+    gaps: result.gaps,
+    replanned: result.replanned,
+    reason: result.reason,
+    // P1-1：动态抉择选项（替代前端 DEFAULT_CHOICES 固定4个）
+    dynamicChoices: Array.isArray(result.session.dynamicChoices) ? result.session.dynamicChoices : [],
+    masterSummary: result.session.masterSummary || '',
   };
 }
 
@@ -148,6 +609,9 @@ export async function execute(sessionId, agentIds) {
  */
 export async function commit(sessionId, choice, feedback) {
   logger.info('[Deliberation] commit 收到', { sessionId, choice, feedback: (feedback || '').slice(0, 60) });
+
+  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'ORACLE', to: 'COMMIT', choice } });
+  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'commit', thought: `演·落印：用户选择「${choice}」` } });
 
   const session = await memoryService.getSession(sessionId);
   if (!session) {
@@ -179,18 +643,124 @@ export async function commit(sessionId, choice, feedback) {
     logger.warn('[Deliberation] commit 记忆固化失败', { error: e.message });
   }
 
-  // Step 6 将在此处生成命签（fateTicket），当前返回 null
+  // ===== P5：推演结束 LLM 提取用户画像，写入 user_memory =====
+  const userId = session.user_id;
+  try {
+    // 组装 qaHistory（从 session 的 answers/plan.askUser 中取）
+    const qaHistory = [];
+    const askUserArr = Array.isArray(session.plan?.askUser) ? session.plan.askUser : [];
+    const answersArr = Array.isArray(session.answers) ? session.answers : [];
+    for (let i = 0; i < Math.max(askUserArr.length, answersArr.length); i++) {
+      const q = askUserArr[i]?.question || askUserArr[i] || '';
+      const a = typeof answersArr[i] === 'string' ? answersArr[i] : (answersArr[i]?.answer || answersArr[i]?.text || answersArr[i]?.content || '');
+      if (q || a) qaHistory.push({ question: String(q), answer: String(a) });
+    }
+
+    const findings = Array.isArray(session.findings) ? session.findings : [];
+
+    // 已有记忆（去重参考）
+    let existingMemories = [];
+    try {
+      existingMemories = await memoryService.listMemories(userId, 20);
+    } catch {}
+
+    const extracted = await memoryService.extractUserProfileFromDeliberation({
+      question: session.question,
+      qaHistory,
+      findings,
+      userChoice: choice || '',
+      userFeedback: feedback || '',
+      existingMemories,
+    });
+
+    // 批量写入 memory 表
+    if (Array.isArray(extracted) && extracted.length > 0) {
+      for (const mem of extracted) {
+        await memoryService.upsertMemory({
+          user_id: userId,
+          content: mem.content,
+          memory_type: mem.memory_type,
+          tags: mem.tags,
+          importance: mem.importance,
+          source_session_id: sessionId,
+        });
+      }
+      logger.info('[Commit] 用户画像写入完成', { userId, count: extracted.length });
+      memoryUpdated = true;
+    }
+  } catch (e) {
+    logger.warn('[Commit] 用户画像写入失败', { error: e.message });
+    // 画像写入失败不影响主流程，不抛错（否则用户看不到命牌）
+  }
+
+  // Step 6: 生成命签（fateTicket）
+  const fateTicket = generateFateTicket(session, choice, feedback);
+
+  eventBus.emit(sessionId, {
+    type: 'OBSERVATION',
+    data: { insight: `命签已生成：${fateTicket?.verse?.slice(0, 30) || ''} | 记忆固化${memoryUpdated ? '成功' : '未更新'}` },
+  });
+
+  // 推演结束，清理事件总线
+  setTimeout(() => eventBus.cleanup(sessionId), 60000);
+
+  // P1 Eval Pipeline：异步评估推演质量（不 await，失败不阻塞 commit 返回）
+  evaluateSession(sessionId).catch((e) => {
+    logger.warn('[Deliberation] commit evaluateSession 失败（不阻塞）', { sessionId, error: e.message });
+  });
+
   return {
     sessionId,
-    fateTicket: null,
+    fateTicket,
     memoryUpdated,
   };
 }
 
 /**
- * 读取当前推演状态
+ * 生成命签（fateTicket）
+ * - 汇聚用户问题、抉择、卦象、智囊关键观点
+ * - 用于前端展示、收藏、分享
+ */
+function generateFateTicket(session, choice, feedback) {
+  const question = session.questionContext || session.question || '';
+  const oracle = session.oracle || {};
+  const findings = Array.isArray(session.findings) ? session.findings : [];
+
+  // 提取智囊关键观点（每条取前60字摘要）
+  const keyFindings = findings.slice(0, 6).map((f) => ({
+    agentName: f.agentName || '未知',
+    perspective: f.perspective || 'reflection',
+    stance: f.stance || 'neutral',
+    excerpt: (f.content || '').slice(0, 60),
+  }));
+
+  // 卦象摘要
+  const hexagram = oracle.primary
+    ? {
+        primary: `${oracle.primary.lower?.name || ''}${oracle.primary.upper?.name || ''}`,
+        changed: oracle.changed
+          ? `${oracle.changed.lower?.name || ''}${oracle.changed.upper?.name || ''}`
+          : '',
+        dynamics: Array.isArray(oracle.dynamics) ? oracle.dynamics : [],
+      }
+    : null;
+
+  return {
+    ticketId: `ft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    question,
+    choice: choice || '',
+    feedback: feedback || '',
+    hexagram,
+    oracleText: oracle.text || '',
+    keyFindings,
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * 读取当前推演状态（返回完整数据契约字段）
  * @param {string} sessionId
- * @returns {Promise<object|null>} session 对象
+ * @returns {Promise<object|null>} 数据契约响应对象
  */
 export async function getState(sessionId) {
   const session = await memoryService.getSession(sessionId);
@@ -198,16 +768,15 @@ export async function getState(sessionId) {
     logger.warn('[Deliberation] getState 会话不存在', { sessionId });
     return null;
   }
-  return session;
+  return buildResponseFromSession(session);
 }
 
 // ============ 自检 ============
 
 /**
- * 自检：模拟 start('我要不要去西藏', 'test_user')
- * 期望：返回 sessionId + state='EXECUTE' + plan.dimensions 非空
+ * 自检：start('我要不要去西藏') 在无记忆时触发 P0 → askUser 非空 → state=WAIT → round=1
  *
- * 跑法: node --input-type=module -e "import('./src/services/deliberationEngine.js').then(m=>m.selfTest())"
+ * 跑法: cd server && node --input-type=module -e "import('./src/services/deliberationEngine.js').then(m=>m.selfTest())"
  *       （需在 server 目录、内存模式即可）
  */
 export async function selfTest() {
@@ -218,9 +787,16 @@ export async function selfTest() {
 
   const result = await start(question, userId);
 
+  // Step 4 断言：travel 类无记忆 → P0 触发 → state=WAIT + askUser 非空 + round=1
   const ok =
     !!result.sessionId &&
-    result.state === 'EXECUTE' &&
+    result.state === 'WAIT' &&
+    Array.isArray(result.askUser) &&
+    result.askUser.length > 0 &&
+    result.round === 1 &&
+    result.maxRound === 2 &&
+    typeof result.openingLine === 'string' &&
+    result.openingLine.length > 0 &&
     Array.isArray(result.plan?.dimensions) &&
     result.plan.dimensions.length > 0;
 
@@ -228,39 +804,178 @@ export async function selfTest() {
     ok,
     sessionId: result.sessionId,
     state: result.state,
+    round: result.round,
+    maxRound: result.maxRound,
     dimCount: result.plan?.dimensions?.length || 0,
     dims: result.plan?.dimensions?.map((d) => `${d.name}(${d.perspective})`),
     askUserCount: result.askUser?.length || 0,
+    askUser: result.askUser,
+    openingLine: result.openingLine,
   });
 
   if (!ok) {
-    throw new Error(`selfTest 失败：sessionId=${result.sessionId}, state=${result.state}, dimCount=${result.plan?.dimensions?.length}`);
+    throw new Error(`selfTest 失败：sessionId=${result.sessionId}, state=${result.state}, round=${result.round}, askUser=${JSON.stringify(result.askUser)}`);
   }
 
-  // 顺便验证 getState 能读回
+  // 验证 askUser 数据契约：每项含 question/reason/source，source ∈ P0-P4
+  for (const q of result.askUser) {
+    if (!q.question || !q.reason || !q.source) {
+      throw new Error(`selfTest 失败：askUser 项缺字段 ${JSON.stringify(q)}`);
+    }
+    if (!['P0', 'P1', 'P2', 'P3', 'P4'].includes(q.source)) {
+      throw new Error(`selfTest 失败：askUser.source 非法 ${q.source}`);
+    }
+  }
+
+  // 验证 getState 读回完整字段
   const restored = await getState(result.sessionId);
-  if (!restored || restored.id !== result.sessionId) {
-    throw new Error(`selfTest 失败：getState 读回异常 restored=${JSON.stringify(restored?.id)}`);
+  if (!restored || restored.sessionId !== result.sessionId) {
+    throw new Error(`selfTest 失败：getState 读回异常 restored=${JSON.stringify(restored?.sessionId)}`);
+  }
+  if (restored.state !== 'WAIT' || restored.round !== 1) {
+    throw new Error(`selfTest 失败：getState 字段异常 state=${restored.state} round=${restored.round}`);
   }
 
   // Step 3 校验：session.tool_results 非空（至少探测了工具）
   //   saveSession 持久化字段为 snake_case: tool_results
-  //   运行时字段为 camelCase: toolResults
-  const toolResults = restored.tool_results || restored.toolResults || [];
+  const rawSession = await memoryService.getSession(result.sessionId);
+  const toolResults = rawSession.tool_results || rawSession.toolResults || [];
   const toolProbeCount = Array.isArray(toolResults) ? toolResults.length : 0;
   logger.info('=== DeliberationEngine selfTest getState 校验通过 ===', {
     restoredState: restored.state,
+    restoredRound: restored.round,
+    restoredAskUserCount: restored.askUser?.length || 0,
     toolProbeCount,
     toolProbeOk: toolResults.filter((r) => r.ok).length,
     toolProbeSummaries: toolResults.map((r) => `${r.tool}:${r.ok ? '✓' : '✗'}`),
   });
 
-  // Step 3 断言：travel 类问题应至少探测了工具（探测本身可能失败，但应有记录）
+  // travel 类问题应至少探测了工具（探测本身可能失败，但应有记录）
   if (toolProbeCount === 0) {
     throw new Error(`selfTest 失败：toolResults 为空，期望至少探测 1 个工具`);
   }
 
-  return { ok, sessionId: result.sessionId, state: result.state, dimCount: result.plan.dimensions.length, toolProbeCount };
+  return {
+    ok,
+    sessionId: result.sessionId,
+    state: result.state,
+    round: result.round,
+    dimCount: result.plan.dimensions.length,
+    askUserCount: result.askUser.length,
+    askUser: result.askUser,
+    openingLine: result.openingLine,
+    toolProbeCount,
+  };
+}
+
+/**
+ * 暂停推演：把 session.state 改为 PAUSED，记录原状态与暂停时间
+ * 触发场景：用户断线、用户主动暂停、app 切后台
+ * @param {string} sessionId
+ * @param {string} reason 暂停原因（user_disconnected/user_paused/system）
+ * @returns {Promise<{sessionId, paused, reason, previousState}>}
+ */
+export async function pause(sessionId, reason = 'user_paused') {
+  logger.info('[Deliberation] pause', { sessionId, reason });
+
+  const session = await memoryService.getSession(sessionId);
+  if (!session) {
+    throw new Error(`会话不存在: ${sessionId}`);
+  }
+
+  // 终态不可暂停
+  const terminalStates = [STATES.COMMIT, STATES.FAILED];
+  if (terminalStates.includes(session.state)) {
+    logger.info('[Deliberation] pause 跳过（终态）', { sessionId, state: session.state });
+    return { sessionId, paused: false, reason: '已结束，无需暂停', previousState: session.state };
+  }
+
+  // 已暂停：幂等返回
+  if (session.state === STATES.PAUSED) {
+    return { sessionId, paused: true, reason, previousState: (session.plan && session.plan._pausedFrom) || 'PLAN' };
+  }
+
+  const previousState = session.state || 'PLAN';
+  const plan = session.plan || {};
+  plan._pausedFrom = previousState;
+  plan._pausedAt = Date.now();
+  plan._pauseReason = reason;
+
+  await memoryService.updateSessionState(sessionId, STATES.PAUSED, { plan });
+
+  eventBus.emit(sessionId, {
+    type: 'STATE_CHANGE',
+    data: { from: previousState, to: STATES.PAUSED, reason },
+  });
+  eventBus.emit(sessionId, {
+    type: 'THOUGHT',
+    data: { step: 'pause', thought: `演·暂停推演（${reason}）` },
+  });
+
+  logger.info('[Deliberation] pause 完成', { sessionId, previousState });
+
+  return { sessionId, paused: true, reason, previousState };
+}
+
+/**
+ * 恢复推演：检查 30 分钟超时，恢复到暂停前的状态
+ * @param {string} sessionId
+ * @returns {Promise<{sessionId, resumed, state, previousState, canContinue}>}
+ */
+export async function resume(sessionId) {
+  logger.info('[Deliberation] resume', { sessionId });
+
+  const session = await memoryService.getSession(sessionId);
+  if (!session) {
+    throw new Error(`会话不存在: ${sessionId}`);
+  }
+
+  if (session.state !== STATES.PAUSED) {
+    logger.info('[Deliberation] resume 跳过（非暂停态）', { sessionId, state: session.state });
+    return { sessionId, resumed: false, state: session.state, canContinue: false };
+  }
+
+  const plan = session.plan || {};
+  const previousState = plan._pausedFrom || 'PLAN';
+  const pausedAt = Number(plan._pausedAt) || 0;
+  const elapsed = Date.now() - pausedAt;
+
+  // 超时：转 FAILED
+  if (pausedAt > 0 && elapsed > PAUSE_TIMEOUT_MS) {
+    await memoryService.updateSessionState(sessionId, STATES.FAILED, { plan });
+    eventBus.emit(sessionId, {
+      type: 'STATE_CHANGE',
+      data: { from: STATES.PAUSED, to: STATES.FAILED, reason: 'pause_timeout' },
+    });
+    logger.warn('[Deliberation] resume 超时，转 FAILED', { sessionId, elapsedMin: Math.floor(elapsed / 60000) });
+    return { sessionId, resumed: false, state: STATES.FAILED, canContinue: false, reason: '暂停超时，需重新开始' };
+  }
+
+  // 清理暂停元信息，恢复原状态
+  delete plan._pausedFrom;
+  delete plan._pausedAt;
+  delete plan._pauseReason;
+  await memoryService.updateSessionState(sessionId, previousState, { plan });
+
+  eventBus.emit(sessionId, {
+    type: 'STATE_CHANGE',
+    data: { from: STATES.PAUSED, to: previousState, reason: 'user_resumed' },
+  });
+  eventBus.emit(sessionId, {
+    type: 'THOUGHT',
+    data: { step: 'resume', thought: `演·续推（暂停前在 ${previousState}）` },
+  });
+
+  logger.info('[Deliberation] resume 完成', { sessionId, previousState });
+
+  return {
+    sessionId,
+    resumed: true,
+    state: previousState,
+    previousState,
+    canContinue: true,
+    elapsedMs: elapsed,
+  };
 }
 
 export default {
@@ -269,6 +984,8 @@ export default {
   answer,
   execute,
   commit,
+  pause,
+  resume,
   getState,
   selfTest,
 };

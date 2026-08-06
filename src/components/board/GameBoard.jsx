@@ -15,7 +15,16 @@ export default function GameBoard({
   showQuestion,
   inference,
   yanOptions,
+  deliberationOracle,
+  deliberationSessionId,
+  fateRevealed = false,
 }) {
+  // 移动端/iPad 3D性能降级
+  const isMobile = typeof window !== 'undefined' && (window.innerWidth <= 768 || /iPad|iPhone|Android/i.test(navigator.userAgent));
+  // iPad 单独降级：DPR 1.5（介于移动端1与桌面2之间）；抗锯齿随 isMobile 一并关闭
+  const isIPad = typeof window !== 'undefined' && (/iPad/i.test(navigator.userAgent) || (window.innerWidth > 768 && window.innerWidth <= 1024));
+  const dpr = isIPad ? 1.5 : (isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+
   return (
     <div className="relative w-full h-full" style={{ background: '#1A1410' }}>
       <Canvas
@@ -26,7 +35,8 @@ export default function GameBoard({
           position: [0, 3, 7],
         }}
         style={{ width: '100%', height: '100%', background: '#1A1410' }}
-        gl={{ antialias: true, alpha: false }}
+        gl={{ antialias: !isMobile, alpha: false, powerPreference: 'high-performance' }}
+        dpr={dpr}
       >
         <color attach="background" args={['#1A1410']} />
 
@@ -56,6 +66,9 @@ export default function GameBoard({
           showQuestion={showQuestion}
           inference={inference}
           yanOptions={yanOptions}
+          deliberationOracle={deliberationOracle}
+          deliberationSessionId={deliberationSessionId}
+          fateRevealed={fateRevealed}
         />
       </Canvas>
     </div>

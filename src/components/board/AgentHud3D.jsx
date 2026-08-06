@@ -142,7 +142,7 @@ function AgentPillar({ agent, index, total, active, retreating, onClick }) {
           textAlign: 'center',
           color: agentColor.glow,
           textShadow: `0 0 8px ${agentColor.glow}, 0 0 4px #000`,
-          fontFamily: '"Ma Shan Zheng", serif',
+          fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", "PingFang SC", serif',
         }}>
           <div style={{
             fontSize: '13px',
@@ -171,18 +171,15 @@ function AgentPillar({ agent, index, total, active, retreating, onClick }) {
  * 3D Agent 容器
  */
 export default function AgentHud3D({ phase, activeAgentIdx, activeAgents, onAgentClick }) {
-  if (phase === 'input' || phase === 'analyzing') return null;
-
   const agents = (activeAgents || []).filter((a) => a.role !== 'master');
-  if (agents.length === 0) return null;
-
+  const showPanel = phase !== 'input' && phase !== 'analyzing' && agents.length > 0;
   const retreating = phase === 'summary' || phase === 'branch_select';
 
   return (
-    <group>
+    <group visible={!!showPanel}>
       {agents.map((agent, index) => (
         <AgentPillar
-          key={agent.id}
+          key={`${agent.id}__idx${index}`}
           agent={agent}
           index={index}
           total={agents.length}

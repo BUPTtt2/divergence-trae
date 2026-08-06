@@ -3,7 +3,7 @@
  * Used for SVG layout rendering and path traversal
  */
 
-export const TOPOLOGY = {
+export let TOPOLOGY = {
   root: {
     x: 0.5,
     y: 0.08,
@@ -64,3 +64,10 @@ export const TOPOLOGY = {
     parent: 'deep_reject',
   },
 };
+
+/**
+ * 动态更新拓扑（含 x/y 坐标）
+ */
+export function setTopology(newTopo) {
+  if (newTopo && typeof newTopo === 'object') TOPOLOGY = newTopo;
+}

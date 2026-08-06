@@ -211,7 +211,7 @@ export async function query(options) {
     const { table, action, data, filter, queryOptions, id } = options;
 
     // 表名白名单校验
-    const ALLOWED_TABLES = ['users', 'refresh_tokens', 'cards', 'community_posts', 'community_replies', 'community_likes', 'achievements', 'user_memories', 'conversations', 'conversation_messages', 'custom_advisors', 'daily_divinations', 'user_levels', 'decision_follow_ups', 'inference_sessions', 'shared_agents', 'agent_usage_log', 'deliberation_sessions', 'session_summaries', 'user_memory'];
+    const ALLOWED_TABLES = ['users', 'refresh_tokens', 'cards', 'community_posts', 'community_replies', 'community_likes', 'achievements', 'user_memories', 'conversations', 'conversation_messages', 'custom_advisors', 'daily_divinations', 'user_levels', 'decision_follow_ups', 'inference_sessions', 'shared_agents', 'agent_usage_log', 'deliberation_sessions', 'session_summaries', 'user_memory', 'deliberation_events', 'deliberation_snapshots', 'session_eval'];
     if (!ALLOWED_TABLES.includes(table)) {
       throw new Error(`非法表名: ${table}`);
     }

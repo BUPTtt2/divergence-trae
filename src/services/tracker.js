@@ -86,18 +86,32 @@ class Tracker {
     this.flushing = true;
     const batch = this.queue.splice(0, this.queue.length);
     try {
-      const resp = await fetch(`${API_BASE_URL}/api/track`, {
+      const body = JSON.stringify({ events: batch });
+      const trackUrl = `${API_BASE_URL}/api/track`;
+      const isSameOrigin = (() => {
+        try {
+          if (!trackUrl.startsWith('http')) return true;
+          const u = new URL(trackUrl, window.location.href);
+          return u.origin === window.location.origin;
+        } catch { return false; }
+      })();
+      // sendBeacon 仅同源可用，跨域会被浏览器 ERR_ABORTED（无 CORS 协商）
+      if (typeof navigator !== 'undefined' && navigator.sendBeacon && isSameOrigin) {
+        const blob = new Blob([body], { type: 'application/json' });
+        if (navigator.sendBeacon(trackUrl, blob)) return;
+      }
+      // fallback 到 fetch
+      const resp = await fetch(trackUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ events: batch }),
-        keepalive: true,
+        body,
+        keepalive: isSameOrigin,
       });
       if (!resp.ok) {
-        // 上报失败：回填队列，写入 localStorage 缓冲
         this._bufferToStorage(batch);
       }
     } catch (e) {
-      // 网络错误：回填到 localStorage 缓冲
+      // 所有网络错误（含 ERR_ABORTED / sendBeacon 失败）统一缓冲到 localStorage，不打 error
       this._bufferToStorage(batch);
     } finally {
       this.flushing = false;
@@ -128,22 +142,27 @@ class Tracker {
         userId: this.userId,
         sessionId: this.sessionId,
       });
-      // 优先用 sendBeacon（页面卸载也能发出去）
-      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      const errUrl = `${API_BASE_URL}/api/track/error`;
+      const isSameOrigin = (() => {
+        try {
+          if (!errUrl.startsWith('http')) return true;
+          const u = new URL(errUrl, window.location.href);
+          return u.origin === window.location.origin;
+        } catch { return false; }
+      })();
+      if (typeof navigator !== 'undefined' && navigator.sendBeacon && isSameOrigin) {
         const blob = new Blob([payload], { type: 'application/json' });
-        const ok = navigator.sendBeacon(`${API_BASE_URL}/api/track/error`, blob);
+        const ok = navigator.sendBeacon(errUrl, blob);
         if (ok) return;
       }
-      // 降级 fetch
-      fetch(`${API_BASE_URL}/api/track/error`, {
+      fetch(errUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
-        keepalive: true,
+        keepalive: isSameOrigin,
       }).catch(() => { /* ignore */ });
     } catch (e) {
       // 埋点失败绝不影响主流程
-      console.warn('[tracker] trackError failed', e);
     }
   }
 

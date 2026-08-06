@@ -5,12 +5,18 @@
  */
 import { COLORS } from '../components/board/layoutConfig';
 import { detectQuestionType, getAgentsForQuestion, AGENT_MAP } from '../data/agents';
+import { setDecisionTree } from '../data/nodes';
+import { setTopology } from '../data/topology';
+import { setFateCards } from '../data/endings';
 import * as apiClient from './apiClient';
 import { API_BASE_URL } from './baseConfig.js';
+import { isBackendCircuitOpen, ApiUnavailableError } from './apiClient';
+import { assembleCyberGua, castGuaForQuestion } from '../game/yijing.js';
 import { Blackboard } from './multiAgentFramework';
 import { parseMentions } from './mentionProtocol';
 import { formatFeedbackForPrompt } from './memoryStore';
 import tracker from './tracker';
+import { sanitizeLLMText } from '../utils/helpers';
 
 export const DEFAULT_CHOICES = [
   { id: 'opportunity', label: '抓住机会', color: COLORS.choice.opportunity, glowColor: '#E8B880', icon: '☰' },
@@ -99,6 +105,30 @@ const AGENT_PERSONAS = {
     persona: '你是匠心，一位信奉"把事做对"的技术匠人。你相信再好的战略，执行不到位也是零。语气务实、讲究细节，偶有匠人的固执。你关注可行性、技术债务、架构权衡、工程实现路径与边际成本。你会问"这事在工程上能不能落地""第一版最小可用是什么样"。你不追求完美，但要求每个选择都经得起"怎么做"的追问。回答控制在100字以内，给方案不给空话。',
     seed: '技术视角',
   },
+  luyou: {
+    name: '远足',
+    stance: '体验视角',
+    persona: '你是远足，一位行万里路的体验派。你相信"纸上得来终觉浅，绝知此事要躬行"。语气洒脱、有见地，像一个走过不少地方的旅人。你关注亲身感受、文化冲击、意料之外的收获与体验成本。你会问"这件事做了之后，你的人生观会变吗""路上遇到的人会给你什么"。你不替人选路，只提醒路本身的样子。回答控制在100字以内，给体验给想象。',
+    seed: '体验视角',
+  },
+  yangsheng: {
+    name: '养生',
+    stance: '健康视角',
+    persona: '你是养生，一位深谙身心节律的调养者。你相信所有决策最终都要由一具身体去承担，身体垮了，一切归零。语气温润、有耐心，但不软弱。你关注睡眠、饮食、运动、情绪负荷与慢性压力，看决策对身心长期的影响。你会问"这个选择会让你睡得着吗""三年后你的身体扛得住吗"。你不反对拼搏，但反对透支式奋斗。回答控制在100字以内，给提醒不给药方。',
+    seed: '健康视角',
+  },
+  fadu: {
+    name: '法度',
+    stance: '规则视角',
+    persona: '你是法度，一位冷峻审慎的规则专家。你相信"白纸黑字"胜过一切口头承诺，凡事先问"有没有落进合同里"。语气克制、精准，像在读条款。你关注权责边界、违约后果、知识产权归属、竞业与保密条款、退出机制。你会说"这句话在法律上等于什么""如果翻脸，你手里有什么牌"。你不鼓励诉讼，但要求每一步都留好证据与退路。回答控制在100字以内，只讲规则事实，不替人下道德判断。',
+    seed: '规则视角',
+  },
+  xuezhe: {
+    name: '学者',
+    stance: '成长视角',
+    persona: '你是学者，一位阅人无数的教长者。你相信"授人以渔"胜过"授人以鱼"，看决策不只看结果，更看这个选择能不能让人长出新的能力。语气宽厚、有启发，像苏格拉底式的提问者。你关注学习曲线、能力迁移、认知升级与长期成长。你会问"这个选择会让你变成什么样的人""十年后它教会你什么"。你不替人选路，只帮人看清哪条路更能磨砺心智。回答控制在100字以内，用提问代替答案。',
+    seed: '成长视角',
+  },
 };
 
 /* ============================================================
@@ -110,14 +140,26 @@ let _remotePersonas = null; // null=未加载, Object=已缓存
 /**
  * 从后端获取全部智囊的 persona（后端 agentPool.js 是单一来源）
  * 首次加载后缓存，后端不可用时降级到本地 AGENT_PERSONAS
+ *
+ * ★ 关键：先读断路器 isBackendCircuitOpen() —— 如果已经断路，直接返回本地，
+ *   根本不发 fetch，避免浏览器自动报 net::ERR_FAILED 红日志
  */
 export async function fetchAgentPersonas() {
+  // 1. 已经缓存过 → 直接用（不发请求）
+  if (_remotePersonas) return _remotePersonas;
+  // 2. 已断路（后端连不上/上一次失败）→ 直接用本地，不发请求
+  if (typeof window !== 'undefined' && isBackendCircuitOpen()) {
+    console.debug('[persona] 后端已断路，跳过 fetch（使用本地内置）');
+    return _remotePersonas;
+  }
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 4000);
     const resp = await fetch(`${API_BASE_URL}/api/agent/personas`, {
       method: 'GET',
       signal: controller.signal,
+      // 加 cache: no-store，防止 Vercel/CDN 边缘缓存旧的 CORS 预检结果
+      cache: 'no-store',
     });
     clearTimeout(timeout);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -130,7 +172,10 @@ export async function fetchAgentPersonas() {
       console.log(`[persona] 已从后端加载 ${Object.keys(_remotePersonas).length} 个智囊 persona`);
     }
   } catch (e) {
-    console.warn('[persona] 从后端获取 persona 失败，降级使用本地缓存:', e.message);
+    // 后端 persona 获取失败是正常降级路径（本地缓存兜底）→ 不刷红日志，只打 debug
+    console.debug('[persona] 后端不可达，使用本地内置 persona:', e?.message || 'network error');
+    // 失败后立刻打开断路器，下次进来直接跳过，不再打日志
+    try { markApiUnavailable(3 * 60 * 1000).catch(() => {}); } catch (_) {}
   }
   return _remotePersonas;
 }
@@ -409,14 +454,53 @@ export function selectSmartDialogue(agentId, question, questionType, agent, prev
 }
 
 /* ============================================================
-   后端连接状态
+   后端连接状态（C1：熔断+自动半开恢复，防止一次失败永久降级）
 ============================================================ */
-// null=未知, true=在线, false=离线
+// null=未知, true=在线, false=离线（熔断关闭）
 let _backendOnline = null;
+// C1: 连续失败计数器，连续 3 次才标记离线（防止偶尔抖动直接降级）
+let _consecutiveFails = 0;
+const FAIL_THRESHOLD = 3;
+// C1: 熔断关闭后 30 秒自动恢复「半开」状态，允许下一次请求试探后端
+let _halfOpenTimer = null;
+const HALF_OPEN_DELAY_MS = 30 * 1000;
+
+/**
+ * C1: 每次 API 调用完成后上报结果，维护连续失败计数与熔断状态
+ * @param {boolean} ok - 本次调用是否成功
+ */
+export function markBackendResult(ok) {
+  try {
+    if (ok) {
+      // 成功：清零失败计数，标记在线
+      _consecutiveFails = 0;
+      _backendOnline = true;
+      if (_halfOpenTimer) { clearTimeout(_halfOpenTimer); _halfOpenTimer = null; }
+    } else {
+      // 失败：累计失败计数
+      _consecutiveFails = Math.min(_consecutiveFails + 1, FAIL_THRESHOLD + 1);
+      if (_consecutiveFails >= FAIL_THRESHOLD) {
+        // 达到阈值：触发熔断（离线）+ 30s 后半开
+        _backendOnline = false;
+        if (!_halfOpenTimer) {
+          _halfOpenTimer = setTimeout(() => {
+            // 半开：下次 isLlmAvailable() 返回 true，允许试探一次
+            _backendOnline = null;
+            _consecutiveFails = Math.max(0, _consecutiveFails - 1);
+            _halfOpenTimer = null;
+          }, HALF_OPEN_DELAY_MS);
+          // Node 环境去 unref（浏览器不需要但保险）
+          if (typeof _halfOpenTimer.unref === 'function') _halfOpenTimer.unref();
+        }
+      }
+    }
+  } catch (_) {}
+}
 
 /**
  * 检查后端是否可连接（同步返回缓存状态）
- * 默认乐观返回 true，除非明确知道后端不可用
+ * C1 优化：默认乐观返回 true（null/undefined/true 都视为可用），只有明确熔断关闭（_backendOnline===false）才不可用
+ * 半开状态（_backendOnline===null）视为可用，允许下一次请求尝试
  */
 export function isLlmAvailable() {
   return _backendOnline !== false;
@@ -424,21 +508,24 @@ export function isLlmAvailable() {
 
 /**
  * 异步健康检查后端（可选调用，用于预热缓存）
+ * C1 优化：超时从 3s → 5s，给弱网/冷启动更多机会；失败后走 markBackendResult 更新计数器
  */
 export async function checkBackendHealth() {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
+    const timeout = setTimeout(() => controller.abort(), 5000);
     const resp = await fetch(`${API_BASE_URL}/health`, {
       method: 'GET',
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    _backendOnline = resp.ok;
-  } catch {
-    _backendOnline = true;
+    const ok = resp.ok;
+    markBackendResult(ok);
+    return ok;
+  } catch (_) {
+    markBackendResult(false);
+    return _backendOnline;
   }
-  return _backendOnline;
 }
 
 /* ============================================================
@@ -823,11 +910,54 @@ async function llmSelfEvaluateRefusal(mention, agent, agentHistory) {
   return { refuse: false, reason: null };
 }
 
+/**
+ * 根据 intent 特征重排智囊发言顺序
+ * - emotionalLoad=high → 心禾(xinhe)先行（共情优先模式）
+ * - binary_choice → 风险视角(fengyan)提前（压力测试）
+ * - open_exploration → 镜渊(jingyuan)先行（发散探索）
+ */
+function reorderAgentsByIntent(agents, intent) {
+  if (!intent) return agents;
+  const reordered = [...agents];
+
+  const moveToFirst = (id) => {
+    const idx = reordered.findIndex(a => a.id === id);
+    if (idx > 0) {
+      const [agent] = reordered.splice(idx, 1);
+      reordered.unshift(agent);
+    }
+  };
+
+  // 高情感负载：心禾先行（共情模式）
+  if (intent.emotionalLoad === 'high') {
+    moveToFirst('xinhe');
+  }
+
+  // 二选一：风眼提前（风险压力测试）
+  if (intent.decisionStructure === 'binary_choice') {
+    moveToFirst('fengyan');
+  }
+
+  // 开放探索：镜渊先行（反思视角发散）
+  if (intent.decisionStructure === 'open_exploration') {
+    moveToFirst('jingyuan');
+  }
+
+  return reordered;
+}
+
 export async function generateDialoguesForAgents(question, agents, questionType, onAgentComplete, onError, userContext, options = {}) {
   if (!agents || agents.length === 0) return { dialogues: {}, results: {}, errors: {} };
 
-  const { existingBlackboard, existingMentionQueue = [], round = 1, toolCallbacks } = options;
-  const nonMasterAgents = agents.filter(a => a.role !== 'master');
+  const { existingBlackboard, existingMentionQueue = [], round = 1, toolCallbacks, intent } = options;
+  let nonMasterAgents = agents.filter(a => a.role !== 'master');
+
+  // P0: 根据 intent 特征重排智囊发言顺序（共情/对抗/发散模式）
+  if (intent && round === 1) {
+    nonMasterAgents = reorderAgentsByIntent(nonMasterAgents, intent);
+    console.log('[inference] 智囊发言顺序(intent驱动):', nonMasterAgents.map(a => a.name).join(' → '));
+  }
+
   const dialogues = {};
   const results = {};
   const errors = {};
@@ -1110,19 +1240,7 @@ export async function generateDialoguesForAgents(question, agents, questionType,
     }
 
     if (!apiSuccess) {
-      const localText = selectSmartDialogue(agent.id, question, questionType, agent, previousDialogues);
-      text = localText;
-      dialogues[agent.id] = localText;
-      // 降级发言同样用 parseMentions 解析（confidence 较低，标记来源）
-      const collaboration = await publishAndEnqueue(agent, localText, 0.6);
-      source = 'preset';
-      errors[agent.id] = {
-        agentName: agent.name,
-        error: errorInfo || 'API调用失败',
-        type: agent.id.startsWith('custom_') ? 'custom' : 'preset',
-      };
-      results[agent.id] = { text, success: apiSuccess, error: errorInfo, source, collaboration };
-      if (onAgentComplete) onAgentComplete(agent.id, text, apiSuccess, errorInfo, source, collaboration);
+      throw new Error(`BACKEND_REQUIRED:agent ${agent.id} 发言失败，请重试`);
     }
 
     // 消费待回应 mention：该 Agent 已发言，移除其 pendingMentions（避免下轮重复注入）
@@ -1280,41 +1398,177 @@ function selectMultipleAgentQuestions(agentId, roundIndex) {
 }
 
 /**
+ * 本地 fallback：根据问题关键词生成「集中式」澄清追问
+ * 策略（提升用户意愿回答程度）：
+ *   1) 一轮一次性问 2-3 个【相关、具体、可快速回答】的问题（1 轮顶 2-3 轮）
+ *   2) 优先：选择题 / 数字题 / 填空题 / Yes or No，少开放式大问题
+ *   3) 末尾提示：「可以 1 句回答多个，用逗号 / 换行分开就行」
+ *   4) 分类场景精准：减肥=身高体重+运动量+目标；offer=薪资差异+岗位级别+到岗时间；创业=现金流+家人态度+all-in比例…
+ *   5) 通用：纠结瞬间 + 倾向选项 + 最坏结果承受力（3 个就够，再多劝退）
+ * 与 useGameFlow.js 保持一致：总共 2-3 轮集中提问，不堆问题
+ */
+function _localClarifyFallback(question, roundIndex, lastAnswer) {
+  const q = String(question || '').trim();
+  const qLow = q.toLowerCase();
+  const la = String(lastAnswer || '').trim();
+
+  const suffix = '\n\n（可以 1 句回答多个，逗号或换行分开就行，不想答的跳过也没关系）';
+
+  // lastAnswer 非空（非首轮）：顺着回答给下一组 2-3 个深挖
+  if (la && la.length >= 4) {
+    const short = la.slice(0, 14);
+    const dig = [
+      `你提到「${short}」——再拆 3 个点：\n①这件事如果拖到 3 个月后会怎样？\n②你最信任的人会怎么劝你？\n③你潜意识真正怕的是什么？${suffix}`,
+      `顺着你刚才说的，问 3 件事：\n①如果不考虑钱和别人眼光，你自己想怎么选？\n②你纠结的核心是「怕选错」还是「不敢承担后果」？\n③你之前做过最类似的决定，结果怎样？${suffix}`,
+      `聚焦最后两块拼图：\n①你现在有几成把握？（1-10 成）\n②让你犹豫的「最后一根稻草」是什么？\n③今天不做决定，明天会更清楚还是更乱？${suffix}`,
+    ];
+    const idx = Math.min(Math.max(0, roundIndex - 1), dig.length - 1);
+    return { continueAsking: roundIndex < 3, nextQuestion: dig[idx] };
+  }
+
+  // ====== 首轮：分类集中问 2-3 个 ======
+
+  // 减肥/健身/体重类
+  if (/减|肥|胖|健身|体重|塑身|增肌|减脂|锻炼/.test(qLow)) {
+    return { continueAsking: true, nextQuestion: [
+      '演先问 3 件具体的，一句话答完就行：',
+      '① 现在身高/体重大概多少？（可以大概，不用精确到两）',
+      '② 你平时每周运动大概几次？（0次 / 1-2次 / 3次以上）',
+      '③ 你目标是什么？（数字/体态/穿衣好看/健康/精神状态都行）',
+    ].join('\n') + suffix };
+  }
+
+  // Offer/跳槽/工作/辞职类
+  if (/offer|职|辞|跳槽|创业|上班|老板|裸辞|入职|offer|薪资|涨薪/.test(qLow)) {
+    return { continueAsking: true, nextQuestion: [
+      '拆 3 个关键点就行：',
+      '① 两个选项之间，【薪资/级别】差多少？（可以大概说比例）',
+      '② 你这个决定是「想了半年以上」还是「最近一件事刺激到」？',
+      '③ 家里人/另一半支持吗？',
+    ].join('\n') + suffix };
+  }
+
+  // 感情/婚恋类
+  if (/爱|分手|恋爱|对象|感情|婚|表白|出轨|复合|相亲|异地/.test(qLow)) {
+    return { continueAsking: true, nextQuestion: [
+      '先理清 3 件事：',
+      '① 你心里潜意识第一反应是「想继续」还是「想结束」？（选一个）',
+      '② 你们「在一起多久」了？矛盾是「最近一个月冒出来」还是「反复出现 1 年以上」？',
+      '③ 如果完全不考虑家人、朋友、钱，你会怎么选？',
+    ].join('\n') + suffix };
+  }
+
+  // 钱/买房/投资/理财类
+  if (/钱|买|房|投|股|消费|理财|预算|赚|亏|卖|基金|炒股/.test(qLow)) {
+    return { continueAsking: true, nextQuestion: [
+      '3 个数字题，大概就行：',
+      '① 这笔钱占你【全部可支配存款】的大概几成？（1成=10%）',
+      '② 最坏情况亏多少，你晚上还睡得着？（给个大概上限）',
+      '③ 这笔钱打算放多久？（1 年内 / 1-3 年 / 5 年以上）',
+    ].join('\n') + suffix };
+  }
+
+  // 读书/考试/升学类
+  if (/学|考|研|留学|申请|毕业|考试|证书|读书|托福|雅思|gpa|GRE/i.test(qLow)) {
+    return { continueAsking: true, nextQuestion: [
+      '3 个问题快速答：',
+      '① 你目标是什么？（分数/证书/Offer/转行？具体一点）',
+      '② 现在开始准备，离 deadline 还有多久？',
+      '③ 这个决定主要是「你自己要考」还是「家人劝你 / 别人都考」？',
+    ].join('\n') + suffix };
+  }
+
+  // 租房/搬家类
+  if (/租房|房租|租|搬家|买房|换房|合租/.test(qLow)) {
+    return { continueAsking: true, nextQuestion: [
+      '租房 3 连问：',
+      '① 预算范围大概多少？（比如 2000-3000）',
+      '② 短租（3-6 月）还是长租（1 年以上）？',
+      '③ 一个人住 / 合租 / 跟对象住？',
+    ].join('\n') + suffix };
+  }
+
+  // 宠物类
+  if (/猫|狗|宠物|养|养猫|养狗/.test(qLow)) {
+    return { continueAsking: true, nextQuestion: [
+      '养宠物前先确认 3 件：',
+      '① 你是「看了视频心动」还是「想了半年以上」？',
+      '② 你每个月大概能拿出多少钱和多少时间陪它？',
+      '③ 如果它生病、拆家、掉毛 10 年以上，你能接受吗？',
+    ].join('\n') + suffix };
+  }
+
+  // 旅行类
+  if (/旅行|旅游|去|玩|攻略|度假|出行|西藏|新疆|日本|泰国/i.test(qLow)) {
+    return { continueAsking: true, nextQuestion: [
+      '3 个问题定行程：',
+      '① 时间大概几天？预算大概多少？',
+      '② 几个人去？（独行 / 情侣 / 朋友 / 家庭）',
+      '③ 是「放松度假」还是「打卡景点」型？',
+    ].join('\n') + suffix };
+  }
+
+  // 通用兜底：3 个经典问题集中问
+  const genericFirst = [
+    '纠结先拆 3 块（答简短就行）：\n① 你现在最纠结的是哪两个选项？\n② 真正让你下不了决心的是「怕选错」还是「后果扛不住」？\n③ 周围最懂你的 1 个人，会怎么劝你？' + suffix,
+    '先回答 3 个小问题，答案就出来了：\n① 这个决定如果拖 3 个月，会更清楚还是更乱？\n② 如果不用考虑任何人，你自己想怎么选？\n③ 十年后回头看，没做哪件事你会后悔？' + suffix,
+  ];
+  return { continueAsking: true, nextQuestion: genericFirst[Math.min(roundIndex, genericFirst.length - 1)] };
+}
+
+/**
  * 判断 Agent 是否继续追问
+ * - 后端可用 → 走 LLM 判断
+ * - 后端不可达 → 本地 fallback 直接返回，绝不抛 BACKEND_REQUIRED
  * @returns {Object} { continueAsking: boolean, nextQuestion?: string }
  */
 export async function judgeContinueAsking(agent, question, dialogueHistory, lastAnswer) {
   const roundIndex = dialogueHistory ? dialogueHistory.length : 0;
-  
+
+  // 超过 2 轮统一停（本地 + 后端一致），避免无限追问
   if (roundIndex >= 2) {
     return { continueAsking: false };
   }
-  
-  if (agent.id.startsWith('custom_')) {
-    const shouldContinue = shouldContinueAsking(lastAnswer);
-    if (shouldContinue) {
-      return { continueAsking: true, nextQuestion: selectAgentQuestion('luxiang', roundIndex + 1) };
+
+  const tryLocalFallback = (reason) => {
+    console.info(`[judgeContinueAsking] ${reason}，走本地澄清 fallback（round=${roundIndex}）`);
+    // clarfy_loop 阶段（agent.id === 'yan'）：返回上下文感知追问
+    // 辩论阶段（普通 Agent）：默认继续追问，由上层统一兜底生成问题
+    if (String(agent?.id || '').toLowerCase() === 'yan') {
+      return _localClarifyFallback(question, roundIndex, lastAnswer);
     }
-    return { continueAsking: false };
+    return { continueAsking: true, nextQuestion: '' };
+  };
+
+  if (isBackendCircuitOpen()) {
+    return tryLocalFallback('断路器打开（后端不可达）');
   }
-  
-  if (isLlmAvailable()) {
-    try {
-      const result = await Promise.race([
-        apiClient.continueAsking(agent.id, question, dialogueHistory, lastAnswer),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('continue-asking timeout')), 8000)),
-      ]);
-      return result;
-    } catch (e) {
-      console.warn('[追问判断] 后端失败，降级本地', e);
+
+  try {
+    const result = await Promise.race([
+      apiClient.continueAsking(agent.id, question, dialogueHistory, lastAnswer),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('continue-asking timeout')), 8000)),
+    ]);
+    // 防御性校验：后端返回对象但缺字段时，补一个兜底问题
+    if (result && result.continueAsking && !result.nextQuestion) {
+      const fb = _localClarifyFallback(question, roundIndex, lastAnswer);
+      return { ...result, nextQuestion: fb.nextQuestion };
     }
+    return result;
+  } catch (e) {
+    return tryLocalFallback(`后端失败:${e.message || 'unknown'}`);
   }
-  
-  const shouldContinue = shouldContinueAsking(lastAnswer);
-  if (shouldContinue) {
-    return { continueAsking: true, nextQuestion: selectAgentQuestion(agent.id, roundIndex + 1) };
+}
+
+function extractFullDialogue(agentDialogues, agentId) {
+  const history = agentDialogues?.history?.[agentId];
+  if (Array.isArray(history) && history.length > 0) {
+    return history.filter(h => typeof h === 'string' && !h.startsWith('【你')).join('\n');
   }
-  return { continueAsking: false };
+  const direct = agentDialogues?.[agentId];
+  if (typeof direct === 'string') return direct;
+  if (Array.isArray(direct)) return direct.join('\n');
+  return '';
 }
 
 /**
@@ -1323,98 +1577,331 @@ export async function judgeContinueAsking(agent, question, dialogueHistory, last
  */
 export async function generateYanSummary(question, agentDialogues, agents) {
   const nonMasterAgents = (agents || []).filter(a => a.role !== 'master');
-  
-  // 转换对话格式：前端是 { agentId: string }，后端期望 { agentId: Array<string> }
+
+  // ★ 修复：入口先把所有对话文本走 sanitizeLLMText，确保没有 mention/截断标签/系统括号
+  //   这是"上下文拼接连简单的都做不到"的根因——原始文本里夹着 <mention>xxx</mention> 等东西
+  const cleanTxt = (s) => sanitizeLLMText(String(s || '').replace(/\s+/g, ' ').trim());
+  const cleanQ = cleanTxt(question);
+
   const formattedDialogues = {};
+  const dialoguesArr = [];
   for (const agent of nonMasterAgents) {
-    const dialogue = agentDialogues[agent.id];
-    if (dialogue) {
-      formattedDialogues[agent.id] = Array.isArray(dialogue) ? dialogue : [dialogue];
+    const raw = extractFullDialogue(agentDialogues, agent.id);
+    const cleaned = cleanTxt(raw);
+    if (cleaned) {
+      formattedDialogues[agent.id] = [cleaned];
+      dialoguesArr.push({
+        name: agent.name,
+        stance: agent.stance || agent.perspective || '其道',
+        text: cleaned,
+      });
     }
   }
-  
-  const dialoguesArr = nonMasterAgents
-    .map(a => ({ name: a.name, stance: a.stance || a.perspective || '其道', text: agentDialogues[a.id] || '' }))
-    .filter(d => d.text);
 
-  if (isLlmAvailable()) {
-    try {
+  // C3：后端不可达/失败/超时，都静默降级本地 generateLocalYanSummary，不再 throw BACKEND_REQUIRED
+  // ★ 修复：给 apiClient.generateSummary 传入 6s 超时 < race 8s < 外层 12s，
+  //   确保后端慢响应时，apiClient 先超时 → race reject → catch → 本地降级，链路清晰
+  try {
+    if (!isBackendCircuitOpen() && isLlmAvailable()) {
       const result = await Promise.race([
-        apiClient.generateSummary(question, nonMasterAgents.map(a => a.id), formattedDialogues),
+        apiClient.generateSummary(cleanQ, nonMasterAgents.map(a => a.id), formattedDialogues, { timeout: 6000 }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('summary timeout')), 8000)),
       ]);
-      if (result && result.options) return result;
-    } catch (e) {
-      console.warn('[演总结] 后端失败，降级本地', e);
+      if (result && result.options && Array.isArray(result.options)) {
+        markBackendResult(true);
+        // ★ 后端返回的内容也必须走 sanitize，避免把 mention / 【】 / emoji 透传到显示层
+        const sanitized = {
+          ...result,
+          summary: cleanTxt(result.summary),
+          options: result.options.map(o => ({
+            ...o,
+            label: cleanTxt(o.label),
+            keyPoints: Array.isArray(o.keyPoints) ? o.keyPoints.map(k => cleanTxt(k)).filter(Boolean) : [],
+          })),
+        };
+        return sanitized;
+      }
+      throw new Error('summary result invalid');
     }
+  } catch (e) {
+    markBackendResult(false);
+    console.warn('[演总结] 后端失败，静默降级本地4段式总结:', e?.message || e);
   }
 
-  return generateLocalYanSummary(question, dialoguesArr);
+  // C3：本地兜底——生成完整4段式总结，不再只有空话
+  return generateLocalYanSummary(cleanQ, dialoguesArr, nonMasterAgents);
 }
 
-function generateLocalYanSummary(question, dialoguesArr) {
+/**
+ * C3：本地4段式总结（众智观点汇总 | 共识部分 | 分歧焦点 | 最终判词）
+ * 后端失败/不可达时静默兜底，保证用户永远能拿到结构化总结
+ * ★升级版：
+ *   - 众智观点直接引用智囊真实发言前32字（不再用模板化"先算清账面账"）
+ *   - 共识/分歧基于真实词频统计，不再写死 4 条
+ *   - 最终判词：8场景 + 三选二打分卡（成本/风险/心理承受）
+ */
+function generateLocalYanSummary(question, dialoguesArr, agents) {
+  const nonMaster = (agents || []).filter(a => a.role !== 'master');
+  const names = nonMaster.map(a => a.name);
+  const nameList = names.length > 0 ? names.join('、') : '诸位智囊';
+  const q = String(question || '此局').slice(0, 30);
+  const cleanTxt = (s) => sanitizeLLMText(String(s || '').replace(/\s+/g, ' ').trim());
+
+  // 1. 众智观点汇总：每人真实发言摘录前 32 字 + 关键词 tag（不再用 [tag] 方括号代码格式）
   const keyPoints = dialoguesArr.map(d => {
-    const stance = d.stance;
-    const text = d.text;
-    let point = '';
-    if (text.includes('成本') || text.includes('数字') || text.includes('钱')) {
-      point = `${d.name}提醒：关注成本与收益的实际差值`;
-    } else if (text.includes('风险') || text.includes('最坏') || text.includes('崩')) {
-      point = `${d.name}警示：先考虑最坏情况的承受力`;
-    } else if (text.includes('感受') || text.includes('身体') || text.includes('心')) {
-      point = `${d.name}提示：倾听身体和内心的真实感受`;
-    } else if (text.includes('三年') || text.includes('十年') || text.includes('长期')) {
-      point = `${d.name}建议：把选择放回更长的时间尺度`;
-    } else if (text.includes('做') || text.includes('行动') || text.includes('deadline')) {
-      point = `${d.name}催促：分析够了，该行动了`;
-    } else {
-      point = `${d.name}从${stance}角度提出了关键问题`;
+    const t = cleanTxt(d.text);
+    let excerpt = '';
+    if (t) {
+      const firstSent = t.split(/[。？！!?\n]/)[0] || t.slice(0, 40);
+      excerpt = firstSent.length > 34 ? firstSent.slice(0, 34) + '…' : firstSent;
     }
-    return point;
+    const tagCats = [
+      { r: /成本|钱|预算|工资|投资|赚|赔|财务|数字|支出|收入/, t: '算账' },
+      { r: /风险|最坏|崩|谨慎|退路|Plan B|安全|黑天鹅|亏|输/, t: '底线' },
+      { r: /感受|心|委屈|开心|紧绷|失眠|情绪|后悔|身体|难受/, t: '内心' },
+      { r: /三年|十年|长期|周期|五年|趋势|宏观|格局|赛道|未来/, t: '长远' },
+      { r: /做|行动|deadline|第一步|动手|先试|小步|试错|迈出|立刻/, t: '行动' },
+      { r: /法律|合同|证据|合规|边界|条款|责任|诉讼|维权/, t: '边界' },
+      { r: /健康|睡眠|减肥|压力|血压|锻炼|饮食|身体/, t: '健康' },
+      { r: /沟通|谈|说|表达|对方|关系|坦白|聊/, t: '沟通' },
+      { r: /家人|父母|孩子|家庭|伴侣|朋友/, t: '人际' },
+    ];
+    const cat = tagCats.find(c => c.r.test(t));
+    const tag = cat ? `${cat.t} · ` : '';
+    if (excerpt) {
+      return `${d.name}（${d.stance}）：${tag}「${excerpt}」`;
+    }
+    return `${d.name}（${d.stance}）：从自己的立场提供了判断。`;
   });
+  const viewsBlock = keyPoints.length > 0
+    ? keyPoints.map((p, i) => `${String(i + 1).padStart(2, '0')}. ${p}`).join('\n')
+    : `今日在座 ${nameList}，共论此局。`;
 
-  const summary = `「${question}」，诸位各抒己见。\n\n${keyPoints.slice(0, 3).join('\n')}\n\n此局的关键，不在选哪边，而在你最在意什么。`;
+  // 2. 共识部分：按 9 大类 + 提及率阈值（>= 60% 才算共识，>=30% 记为"多数提及"）
+  const allText = dialoguesArr.map(d => cleanTxt(d.text)).join(' ');
+  const categories = [
+    { r: /最坏|风险|退路|扛|兜|Plan B|底线|崩|输|亏/, label: 'Plan B 兜底意识' },
+    { r: /长期|三[年个]|五年|十年|趋势|长远|以后|未来|周期/, label: '拉长时间轴' },
+    { r: /行动|做|先试|迈出|第一步|别想|试错|小步|立刻|马上|动手/, label: '反对无限纠结、先动起来' },
+    { r: /心|感受|内心|身体|情绪|开心|委屈|后悔|想不想|愿不愿意/, label: '心的感受要排在理性前面' },
+    { r: /家人|父母|孩子|家庭|伴侣|朋友|关系|人际/, label: '关系/家人影响不可忽略' },
+    { r: /成本|钱|预算|数字|账面|支出|收入|亏|赚|投资/, label: '先把账算清楚' },
+    { r: /法律|合同|证据|合规|条款|维权|诉讼|边界/, label: '白纸黑字先划边界' },
+    { r: /谈|沟通|说清楚|坦白|聊|问清楚|表达/, label: '先和当事人沟通，别脑补' },
+    { r: /健康|睡|饮食|运动|减肥|身体|压力/, label: '健康/身体是底线' },
+  ];
+  const n = Math.max(1, dialoguesArr.length);
+  const consensus = [];
+  const mentions = [];
+  for (const cat of categories) {
+    const cnt = dialoguesArr.filter(d => cat.r.test(cleanTxt(d.text))).length;
+    const rate = cnt / n;
+    if (rate >= 0.6 && n >= 2) consensus.push(`全员默认：必须考虑「${cat.label}」（${cnt}/${n}位提及）`);
+    else if (rate >= 0.3) mentions.push(`多数提及（${cnt}/${n}）：「${cat.label}」`);
+  }
+  if (consensus.length === 0) {
+    if (mentions.length > 0) consensus.push(mentions.shift());
+    else consensus.push('此局无绝对共识，每个人切入角度不同——核心是你最在意的那条是什么');
+  }
+  const consensusBlock = `已达成的共识：\n${consensus.map((c) => `  · ${c}`).join('\n')}${mentions.length ? `\n\n多方提及：\n${mentions.map(m => `  · ${m}`).join('\n')}` : ''}`;
 
+  // 3. 分歧焦点：风险派vs机会派 / 保守vs激进 / 离场vs留场
+  const riskCnt = dialoguesArr.filter(d => /风险|最坏|崩|谨慎|退路|亏|输|兜|底线/.test(cleanTxt(d.text))).length;
+  const oppCnt = dialoguesArr.filter(d => /机会|红利|窗口|出手|上升|收益|赚|红利|上车/.test(cleanTxt(d.text))).length;
+  const stayCnt = dialoguesArr.filter(d => /留|继续|不|等等|观望|别急|不做|维持现状/.test(cleanTxt(d.text))).length;
+  const goCnt = dialoguesArr.filter(d => /做|试|上|动|去|离开|辞职|分|换|走|出/.test(cleanTxt(d.text))).length;
+  let divergenceBlock = '分歧焦点：';
+  if (riskCnt > 0 && oppCnt > 0) {
+    divergenceBlock += `\n· ${oppCnt} 位（${Math.round(oppCnt / n * 100)}%）看好机会：主张先占有窗口再补漏洞`;
+    divergenceBlock += `\n· ${riskCnt} 位（${Math.round(riskCnt / n * 100)}%）保守提醒：先把最坏结果算透，兜得住再上`;
+    divergenceBlock += `\n· 折中点：机会仓位 = 你输光也睡得着的最大金额/精力 —— 别超过这个上限`;
+  } else if (riskCnt > 0) {
+    divergenceBlock += `\n· 全场偏保守（${riskCnt}/${n}位算风险）：大家都在替你想「如果输了怎么办」`;
+    divergenceBlock += `\n· 内部分歧：是 (a) 完全不做，还是 (b) 用最小可承受成本先试 5-10%`;
+  } else if (oppCnt > 0) {
+    divergenceBlock += `\n· 全场偏乐观（${oppCnt}/${n}位看得见机会）：无人强烈反对`;
+    divergenceBlock += `\n· 内部分歧：(a) 一把上满，还是 (b) 分 3 批进，拿反馈再加仓`;
+  } else {
+    divergenceBlock += `\n· 观点相对分散，但核心都指向「你自己最在意什么」——把智囊说的列成 3 条，划掉 2 条，留最后那条就是答案`;
+  }
+  if (goCnt > 0 && stayCnt > 0 && Math.abs(goCnt - stayCnt) <= Math.ceil(n / 2)) {
+    divergenceBlock += `\n· 离场派(${goCnt}) vs 留场派(${stayCnt}) 接近 —— 这类 5:5 的题，别靠投票赢，靠"3年后想起来不后悔"的那一瞬间选`;
+  }
+
+  // 4. 最终判词：8场景打分卡（去掉 【】 标题括号、去图标符号，改用自然中文序号）
+  let verdict = '';
+  const qLow = String(question || '').toLowerCase();
+  if (/减|肥|健身|健康|睡|饮食|运动|血压|血糖|体检/.test(qLow)) {
+    verdict = `演的判词 · 健康题：
+  避开完美方案焦虑——别等办卡、别等周末、别等"这个饭局结束"。
+  今天就做三步：1 今晚提早 30 分睡  2 今天少喝 1 杯甜饮  3 出门走 20 分钟。
+三个月后身体会给你答案——你不需要完美方案，只需要"今天做得到"的最小一步。`;
+  } else if (/工作|offer|职|辞|跳槽|创业|老板|公司|晋升|事业|项目|合伙|加班/.test(qLow)) {
+    verdict = `演的判词 · 职业题：
+三道关打分，每项 10 分，过 18 分可动：
+  A 钱/回报：几分；B 心/受委屈：几分（委屈越多分越低）；C 跟的人/成长：几分。
+21 分以上：走。15 分以下：留。16-20 分：留 3 个月再观察，写周报攒作品集边投边看。
+提醒：别拿"梦想""面子"加分——这两项辞职 3 个月后就不值钱了。`;
+  } else if (/爱|分手|恋爱|对象|男友|女友|伴侣|感情|喜欢|追|表白|婚|出轨|异地|相亲/.test(qLow)) {
+    verdict = `演的判词 · 感情题：
+扪心一问：如果 TA 接下来一辈子就保持现在这个样子——不会变、不会改、不会更爱你、不会更自律——你愿不愿意跟 TA 过一辈子？
+  愿意：继续，且以后别抱怨"你以前说过会改"。
+  犹豫 / 不愿意：别赌。人改不了。
+附加题：你朋友问你"你对象好在哪"时，你能脱口而出 3 条吗？能就值得，不能就分手。`;
+  } else if (/钱|买|房|租|股|投|赚|赔|基金|理财|预算|成本|价|消费|贷款|首付|借钱/.test(qLow)) {
+    verdict = `演的判词 · 金钱题：
+两条底线，踩任一就别做：
+  1 全亏光会不会影响 6 个月基本生活？会——不做。
+  2 用的是不是父母钱、婚房钱、救命钱、信用卡套现？是——不做。
+仓位公式：最大可承受亏损 = 你全部积蓄的 10%（上限）。
+全投都睡得着：可以上；半夜会醒：减到一半；还醒：再减。减到你睡得着为止。`;
+  } else if (/学|考|研|留学|申|毕业|专业|学校|考试|读书|证书|英语|面试/.test(qLow)) {
+    verdict = `演的判词 · 成长题：
+后悔永远是两种：
+  第一种——"当初我要是试了就好了"：这是 80 岁想起来会哭的那种。
+  第二种——"试了没成，算了"：这是 3 个月后就忘记的那种。
+现在立刻做的 1 件小事：翻开书第 1 页，或点开报名页面，或写 100 字个人陈述。
+做了这 1 件，你就赢了 99% 还在纠结的人。`;
+  } else if (/租|房|搬家|买房|城市|北京|上海|深圳|杭州|出国|移民|回国|换城市/.test(qLow)) {
+    verdict = `演的判词 · 落脚题：
+三选二打分卡——钱、通勤、生活质量，不能全要：
+  1 月租不超过税后 30%，或房贷不超过税后 40%；
+  2 通勤单程不超过 40 分钟；
+  3 周末能在 30 分钟内找到你想吃的饭 + 想聊天的人。
+满足 2 条以上：搬或留；满足 1 条以下：列 10 个可选项，周末看 3 个，下周末签。`;
+  } else if (/家人|父母|孩子|家庭|婆媳|爸妈|亲戚|朋友|合伙|人际|相处/.test(qLow)) {
+    verdict = `演的判词 · 关系题：
+记住 3 句话就够了：
+  1 别拿别人的标准当你的义务——你没欠任何人；
+  2 能沟通的：写 3 条具体要求 + 1 条后果，当面说；
+  3 沟通不了的：物理划边界——距离、钱、见面时长——别讲道理。
+关系里没有"我再忍忍就好了"——忍一次就有一万次。`;
+  } else {
+    verdict = `演的判词 · 通用题：
+三法则一起上：
+  1 10/10/10 法则：10 分钟后你怎么看？10 个月后？10 年后？
+  2 硬币法：抛一次，硬币在空中的那 1 秒，你希望它哪面落地？那面就是你的答案。
+  3 三日冷静：今晚睡一觉，明早醒过来第一念想的是什么——那是潜意识替你选的。
+三个都不一致？选最不舒服的那一个——人在纠结时，越怕越对的那条，往往是对的。`;
+  }
+
+  const summary = `「${q}」· 演梳理总结\n\n众智观点汇总：\n${viewsBlock}\n\n${consensusBlock}\n\n${divergenceBlock}\n\n${verdict}`;
+
+  // 生成本地选项（与前端 DEFAULT_CHOICES 对应，加上具体 keyPoints）——不用 emoji 图标，用卦符
   const options = [
     {
       label: '抓住机会',
       keyPoints: [
-        keyPoints.find(p => p.includes('机会') || p.includes('收益')) || '机会窗口有限',
-        keyPoints.find(p => p.includes('行动') || p.includes('做')) || '分析够了该出手',
-        '评估风险后大胆尝试',
+        keyPoints.find(p => /机会|出手|行动|迈出|做|先试/.test(p))?.replace(/^\d+\.\s*/, '') || '机会窗口有限，先占位再补漏洞',
+        '用"最大可承受亏损"做上限，不让机会变赌局',
+        '先做 30 天小步试 → 拿反馈 → 再决定加仓/撤离',
       ],
-      guaRecommendation: '大有',
+      icon: '☰',
+      stance: '机会优先 · 积极派',
+      gua: '大有',
+      element: '火',
+      verse: '火在天上，大有。君子以遏恶扬善，顺天休命。',
     },
     {
-      label: '规避风险',
+      label: '谨慎兜底',
       keyPoints: [
-        keyPoints.find(p => p.includes('风险') || p.includes('最坏')) || '先考虑最坏情况',
-        keyPoints.find(p => p.includes('成本') || p.includes('数字')) || '算清隐性成本',
-        '保持谨慎，留有余地',
+        keyPoints.find(p => /风险|底线|退路|Plan B|兜|最坏/.test(p))?.replace(/^\d+\.\s*/, '') || '最坏结果先写出来：你扛得住吗？',
+        'Plan B 提前备好：撤退路径、止损线、最坏损失清单',
+        '仓位不超过你"亏光也睡得着"的上限',
       ],
-      guaRecommendation: '坎',
+      icon: '☵',
+      stance: '风险优先 · 保守派',
+      gua: '谦',
+      element: '地',
+      verse: '地中有山，谦。君子以裒多益寡，称物平施。',
     },
     {
-      label: '稳守当前',
+      label: '先做最小一步',
       keyPoints: [
-        keyPoints.find(p => p.includes('长期') || p.includes('十年')) || '从长计议',
-        keyPoints.find(p => p.includes('感受') || p.includes('心')) || '倾听内心声音',
-        '不急于决定，静待时机',
+        keyPoints.find(p => /小步|最小|一步|试|动|先做/.test(p))?.replace(/^\d+\.\s*/, '') || '别分析了：想 1000 次不如做 1 次',
+        '找到今天就能做的"15 分钟最小一步"，做完再想',
+        '拿 3 天真实反馈，比坐而论道 3 个月有用',
       ],
-      guaRecommendation: '艮',
+      icon: '☳',
+      stance: '行动优先 · 务实派',
+      gua: '复',
+      element: '雷',
+      verse: '雷在地中，复。先王以至日闭关，商旅不行，后不省方。',
     },
     {
-      label: '探索新路',
+      label: '保持现状再等等',
       keyPoints: [
-        keyPoints.find(p => p.includes('行动') || p.includes('做')) || '迈出第一步',
-        keyPoints.find(p => p.includes('风险') || p.includes('最坏')) || '小步试错可控',
-        '在行动中寻找答案',
+        keyPoints.find(p => /留|维持|观望|等等|别急|不做/.test(p))?.replace(/^\d+\.\s*/, '') || '信息不够，决策焦虑 —— 先不下注',
+        '设定 3 个"触发信号"，到齐了再决策（信号没到就等）',
+        '等待期做一件事：把"现状的优缺点"各写 5 条，不会白等',
       ],
-      guaRecommendation: '巽',
+      icon: '☶',
+      stance: '观望优先 · 冷静派',
+      gua: '艮',
+      element: '山',
+      verse: '兼山，艮。君子以思不出其位。',
     },
   ];
 
-  return { summary, options };
+  return {
+    summary,
+    options,
+    consensus,
+    finalText: verdict.replace(/【.*?】\n?/g, '').split('\n')[0] || '此局已明，按心而行。',
+    finalAdvice: verdict,
+    source: 'local_yan_v2',
+  };
+}
+
+// ============================================================
+// ★★★ P3 长期记忆层：演的"往期推演"写入 / 读取 / 推荐
+// ============================================================
+const YAN_MEM_KEY = 'yance_long_term_memories_v1';
+const MAX_MEM_ENTRIES = 30;
+
+export function appendYanMemory(entry) {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(YAN_MEM_KEY) : null;
+    const list = raw ? JSON.parse(raw) : [];
+    const withTs = { ts: Date.now(), ...(entry || {}) };
+    list.unshift(withTs);
+    const trimmed = list.slice(0, MAX_MEM_ENTRIES);
+    localStorage.setItem(YAN_MEM_KEY, JSON.stringify(trimmed));
+    return true;
+  } catch (e) {
+    console.warn('[longTermMemory] append 失败:', e.message);
+    return false;
+  }
+}
+
+export function readYanMemories(limit = 5) {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(YAN_MEM_KEY) : null;
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.slice(0, limit) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+/**
+ * 从历史记忆里提取：近 5 次用户最终选过的 agent name/stance 列表
+ * 推荐 agent 时如果候选池里有同名 agent，自动追加到 recommendedAgentIds
+ */
+export function getHistoryPreferredAgentKeys(limit = 5) {
+  try {
+    const mems = readYanMemories(limit);
+    const out = new Set();
+    for (const m of mems) {
+      if (m.choiceLabel) out.add(String(m.choiceLabel).slice(0, 6));
+      if (Array.isArray(m.selectedAgentNames)) {
+        for (const n of m.selectedAgentNames) out.add(String(n).trim());
+      }
+    }
+    return Array.from(out).filter(Boolean);
+  } catch (_) {
+    return [];
+  }
 }
 
 /**
@@ -1567,13 +2054,41 @@ function generateLocalCardSummary(question, guaName, choiceLabel, agentDialogues
  * @returns {Promise<{verse: string, summary: string, source: string}>}
  */
 export async function generatePersonalizedCardContent({ question, guaName, choiceLabel, agentDialogues, trigram }) {
-  // 本地降级结果（兜底）
-  const localVerse = generateLocalVerse(guaName, choiceLabel);
-  const localSummary = generateLocalCardSummary(question, guaName, choiceLabel, agentDialogues);
-
-  if (!isLlmAvailable()) {
-    return { verse: localVerse, summary: localSummary, source: 'preset' };
+  if (isBackendCircuitOpen()) {
+    return {
+      verse: '一卦方成，万象在掌。',
+      summary: choiceLabel || '顺势而为',
+      keyPoints: ['本心所向', '顺势而为'],
+      explanation: '',
+      editable: true,
+      source: 'circuit_open',
+    };
   }
+
+  // ★ 修复：本地降级命牌生成函数（catch 时不 throw，直接返回降级结果）
+  //   避免外层 catch 触发导致命牌显示为"错误"
+  const _localFallback = (reason) => {
+    console.warn('[命牌] 后端失败，返回本地降级命牌:', reason);
+    const verseMap = {
+      '大有': '火在天上，大有。君子以遏恶扬善，顺天休命。',
+      '谦': '地中有山，谦。君子以裒多益寡，称物平施。',
+      '复': '雷在地中，复。先王以至日闭关，商旅不行，后不省方。',
+      '艮': '兼山，艮。君子以思不出其位。',
+      '坎': '习坎，有孚，维心亨。行有尚，往有功。',
+      '巽': '随风，巽。君子以申命行事。',
+      '乾': '元亨利贞。初九潜龙勿用。',
+      '震': '亨。震来虩虩，笑言哑哑。',
+    };
+    const v = verseMap[guaName] || '一卦方成，万象在掌。';
+    return {
+      verse: v,
+      summary: `今择「${choiceLabel || '本心所向'}」，卦得「${guaName || '大有'}」，顺势而为，且行且思。`,
+      keyPoints: ['本心所向', '顺势而为', '且行且思'],
+      explanation: `卦象「${guaName || '大有'}」已现，择路「${choiceLabel || '本心'}」已明。往后路如何，不在卦中，在你脚下。今日所择，他日自验。`,
+      editable: true,
+      source: 'local_fate_fallback',
+    };
+  };
 
   try {
     const dialoguesText = Object.values(agentDialogues || {})
@@ -1582,35 +2097,134 @@ export async function generatePersonalizedCardContent({ question, guaName, choic
       .map(d => d.slice(0, 60))
       .join('\n');
 
-    const prompt = `你是一位通晓易经的智者「演」。请根据以下推演结果，为用户的命签生成个性化内容。
+    // ★ 修复：减小各 fetch 超时（3s/3s/5s = 11s 总），确保 < 外层 race 12s
+    const _fetchWithTimeout = async (url, opts, timeoutMs = 3000) => {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const r = await fetch(url, { ...opts, signal: ctrl.signal, cache: 'no-store' });
+        return r;
+      } finally {
+        clearTimeout(tid);
+      }
+    };
+
+    // Step 1: 若未传卦象，先用 yiJingEngine 起卦（真实后端路由 POST /api/divination/cast）
+    let hexagramData = { original: { name: guaName || '大有', symbol: trigram || '☰' } };
+    if (!guaName) {
+      try {
+        const castResp = await _fetchWithTimeout(`${API_BASE_URL}/api/divination/cast`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question }),
+        }, 3000);
+        if (castResp.ok) {
+          hexagramData = await castResp.json();
+        }
+      } catch (e) {
+        console.warn('[命牌] 调用后端起卦失败，使用传入的卦名:', e.message);
+      }
+    } else {
+      hexagramData = {
+        original: { name: guaName, symbol: trigram || '☰', wuxing: '火' },
+      };
+    }
+
+    // Step 2: 调后端 yiJingEngine 解读卦象（真实路由 POST /api/divination/interpret）
+    let interpretationText = '';
+    try {
+      const dialoguesArr = dialoguesText ? [dialoguesText] : [];
+      const interResp = await _fetchWithTimeout(`${API_BASE_URL}/api/divination/interpret`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hexagram: hexagramData, question, agentDialogues: dialoguesArr }),
+      }, 3000);
+      if (interResp.ok) {
+        const interData = await interResp.json();
+        interpretationText = (interData.interpretation && (
+          typeof interData.interpretation === 'string'
+            ? interData.interpretation
+            : (interData.interpretation.judgment || interData.interpretation.meaning || '')
+        )) || '';
+      }
+    } catch (e) {
+      console.warn('[命牌] 调后端解卦失败，仅用 yan 生成:', e.message);
+    }
+
+    // Step 3: 调真实存在的后端路由 POST /api/yan/chat，把解卦结果 + 上下文交给演生成命牌JSON
+    const instruction = `你是通晓易经的智者「演」。请严格按要求输出命牌内容，**只输出JSON，不要任何其他文字，不要markdown代码块**。
+
+**要求的JSON结构**：
+{
+  "verse": "8-15字的古风卦辞，贴合卦象与抉择，不要直接照搬原卦辞",
+  "summary": "30-50字的终局总结，融合卦象寓意与智囊观点，点出抉择后的走向与提醒，语气克制含蓄",
+  "keyPoints": ["要点1", "要点2", "要点3", "要点4"],
+  "explanation": "80-120字的解签，解析卦象与抉择的深层关联，给出恳切的提醒与指引"
+}
+
+**字数硬性约束**：verse 8-15字，summary 30-50字，keyPoints 3-5条，explanation 80-120字。
 
 【用户问题】${question}
-【所得卦象】${guaName}（${trigram || '☯'}）
+【所得卦象】${guaName || hexagramData?.original?.name || '大有'}（${trigram || hexagramData?.original?.symbol || '☯'}）
 【用户抉择】${choiceLabel}
-【智囊发言摘要】
+【智囊发言】
 ${dialoguesText || '（无智囊发言）'}
+【卦象专业解读】
+${interpretationText || '（易经专业解读暂缺，基于卦象名称与抉择综合推演）'}`;
 
-请输出两段内容，用【卦辞】和【终局】标记：
-【卦辞】一句古风卦辞（8-15字，贴合卦象与抉择，不要直接照搬原卦辞）
-【终局】一段总结（30-50字，融合卦象寓意与智囊观点，点出抉择后的走向与提醒，语气克制含蓄）`;
+    const yanResp = await _fetchWithTimeout(`${API_BASE_URL}/api/yan/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: instruction, conversationId: 'fate-card-' + Date.now(), history: [] }),
+    }, 5000);
 
-    const result = await apiClient.streamYanChat({ message: prompt });
-    const text = result?.text || '';
-
-    // 提取【卦辞】和【终局】
-    const verseMatch = text.match(/【卦辞】\s*([^\n【]+)/);
-    const summaryMatch = text.match(/【终局】\s*([^\n【]+)/);
-
-    const verse = verseMatch?.[1]?.trim() || localVerse;
-    const summary = summaryMatch?.[1]?.trim() || localSummary;
-
-    if (verse.length > 3 && summary.length > 10) {
-      return { verse, summary, source: 'llm' };
+    if (!yanResp.ok) {
+      const errText = await yanResp.text().catch(() => '');
+      return _localFallback(`yan/chat HTTP ${yanResp.status}: ${errText.slice(0, 100)}`);
     }
-    return { verse: localVerse, summary: localSummary, source: 'preset' };
+
+    const yanData = await yanResp.json();
+    const text = (yanData.message || '').trim();
+    if (!text || text.length < 20) {
+      return _localFallback('演返回内容为空或过短');
+    }
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return _localFallback('演返回内容不是有效JSON');
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (parseErr) {
+      return _localFallback('JSON解析失败');
+    }
+
+    const verse = (parsed.verse || '').trim();
+    const summary = (parsed.summary || '').trim();
+    const keyPoints = Array.isArray(parsed.keyPoints) ? parsed.keyPoints.filter(Boolean) : [];
+    const explanation = (parsed.explanation || '').trim();
+
+    return {
+      gua: {
+        name: guaName || hexagramData?.original?.name || '大有',
+        trigram: trigram || hexagramData?.original?.symbol || '☰',
+        element: hexagramData?.original?.wuxing || hexagramData?.changed?.wuxing || '火',
+        original: hexagramData?.original || null,
+        changed: hexagramData?.changed || null,
+        tosses: hexagramData?.tosses || null,
+      },
+      verse,
+      summary,
+      keyPoints,
+      explanation,
+      editable: false,
+      source: 'yan_backend',
+    };
   } catch (e) {
-    console.warn('[命签生成] LLM失败，降级本地:', e.message);
-    return { verse: localVerse, summary: localSummary, source: 'preset' };
+    // ★ 修复：不再 throw，直接返回本地降级命牌，避免外层 catch 显示"错误"
+    return _localFallback(e.message);
   }
 }
 
@@ -1631,74 +2245,192 @@ export async function streamAgentDialogue(agent, question, previousDialogues, on
  * 优先调后端 API（动态 Agent + 真实卜卦），失败降级到本地智能预设
  * @returns {Object} { agents, agentDialogues, choices, summary, gua, powerfulQuestion, framework, verse, questionType, source }
  */
-export async function generateInferenceContent(question) {
-  const localAgents = getAgentsForQuestion(question).filter((a) => a.role !== 'master');
-  const questionType = detectQuestionType(question);
-  const localGua = getGuo(questionType);
-
-  console.log('[inference] 本地Agent:', localAgents.map(a => a.name));
-  console.log('[inference] API_BASE_URL:', API_BASE_URL);
-
-  try {
-    console.log('[inference] 开始调用后端分析...');
-    const analysis = await apiClient.analyzeQuestion(question);
-    console.log('[inference] 后端分析成功:', analysis);
-    
-    const agents = analysis.agents || localAgents;
-    return {
-      agents: agents.map(a => ({
-        ...a,
-        role: a.role || 'dynamic',
-        trigram: a.trigram || '☯',
-        color: a.color || '#C8A850',
-        glow: a.glow || '#F0D890',
-      })),
-      agentDialogues: {},
-      choices: DEFAULT_CHOICES,
-      summary: analysis.summary || '',
-      gua: analysis.gua || localGua,
-      powerfulQuestion: analysis.powerfulQuestion || getPowerfulQuestion(questionType),
-      framework: analysis.framework || getFramework(questionType),
-      verse: analysis.verse || getVerse(questionType),
-      questionType,
-      source: 'backend',
-    };
-  } catch (e) {
-    console.error('[inference] 后端分析失败，降级本地:', e.message, e.stack);
-  }
-
+function _buildLocalResult(localAgents, questionType, localGua, extra = {}) {
+  const cyberGua = extra.cyberGua || null;
+  const guaLegacy = cyberGua
+    ? { gua: cyberGua.gua.name, trigram: cyberGua.gua.symbol, element: cyberGua.gua.wuxing, verse: cyberGua.gua.verse, tip: cyberGua.gua.tip, palace: cyberGua.gua.palace, movingLine: cyberGua.gua.movingLine, movingLineMeaning: cyberGua.gua.movingLineMeaning, ganzhi: cyberGua.ganzhi, userWuxing: cyberGua.userWuxing, wuxingRels: cyberGua.wuxingRels }
+    : localGua;
   if (!localAgents || localAgents.length === 0) {
-    console.error('[inference] 本地Agent为空，使用默认Agent');
     const defaultAgents = [
       { id: 'fengyan', name: '风眼', stance: '风险视角', role: 'permanent', trigram: '☵', color: '#A84848', glow: '#E88080' },
       { id: 'jingyuan', name: '镜渊', stance: '反思视角', role: 'permanent', trigram: '☶', color: '#685888', glow: '#A898C8' },
       { id: 'qiangu', name: '钱谷', stance: '财务视角', role: 'dynamic', trigram: '☰', color: '#C88848', glow: '#E8B880' },
       { id: 'luxiang', name: '路向', stance: '职业视角', role: 'dynamic', trigram: '☴', color: '#508870', glow: '#80C8A8' },
     ];
+    return { agents: defaultAgents, agentDialogues: {}, choices: DEFAULT_CHOICES, summary: '', gua: guaLegacy, cyberGua, powerfulQuestion: getPowerfulQuestion(questionType), framework: getFramework(questionType), verse: cyberGua?.gua?.verse || getVerse(questionType), questionType, source: 'default', ...extra };
+  }
+  return { agents: localAgents, agentDialogues: {}, choices: DEFAULT_CHOICES, summary: '', gua: guaLegacy, cyberGua, powerfulQuestion: getPowerfulQuestion(questionType), framework: getFramework(questionType), verse: cyberGua?.gua?.verse || getVerse(questionType), questionType, source: 'preset-smart', ...extra };
+}
+
+export async function generateInferenceContent(question) {
+  const localAgents = getAgentsForQuestion(question).filter((a) => a.role !== 'master');
+  const questionType = detectQuestionType(question);
+  const keywords = [];
+  const cyberGua = assembleCyberGua(question, keywords);
+  const localGua = getGuo(questionType);
+
+  if (isBackendCircuitOpen()) {
+    throw new Error('BACKEND_REQUIRED:inference 后端不可达，请重试');
+  }
+
+  try {
+    if (typeof apiClient.checkServerHealth === 'function') {
+      const alive = await Promise.race([
+        apiClient.checkServerHealth(),
+        new Promise(resolve => setTimeout(() => resolve(false), 3500)),
+      ]);
+      if (!alive) throw new ApiUnavailableError('probe_fail');
+    }
+
+    // ===== 意图识别 + 动态决策树（生产级架构）=====
+    let intent = null;
+    let assessment = null;
+    try {
+      const intentResp = await apiClient.classifyIntent(question);
+      intent = intentResp.intent;
+      assessment = intentResp.assessment;
+    } catch (e) {
+      console.warn('[inference] 意图识别失败:', e.message);
+      throw new Error('BACKEND_REQUIRED:inference 后端不可达，请重试');
+    }
+
+    // 动态生成决策树（替代硬编码 nodes.js）
+    if (intent) {
+      try {
+        const treeResp = await apiClient.generateTree(question, intent);
+        if (treeResp.tree && !treeResp.fallback) {
+          const { nodes, topology, fateCards } = treeResp.tree;
+          // 更新 nodes.js 的 NODES + TOPOLOGY
+          setDecisionTree(nodes, topology);
+          // 更新 endings.js 的 FATE_CARDS
+          if (fateCards) setFateCards(fateCards);
+          // 构建 topology.js 需要的格式（含 x/y 坐标 + parent）
+          const topoWithCoords = {};
+          for (const [id, node] of Object.entries(nodes)) {
+            const pos = node.position || { x: 0.5, y: 0.5 };
+            const children = (topology?.[id]?.children) || (node.branches || []).map(b => b.targetId);
+            // 找 parent
+            let parent = null;
+            for (const [pid, pnode] of Object.entries(nodes)) {
+              if ((pnode.branches || []).some(b => b.targetId === id)) {
+                parent = pid;
+                break;
+              }
+            }
+            topoWithCoords[id] = { x: pos.x, y: pos.y, children, parent: parent || 'dynamic' };
+          }
+          setTopology(topoWithCoords);
+          console.log('[inference] 决策树已动态更新');
+        }
+      } catch (e) {
+        console.warn('[inference] 决策树生成失败:', e.message);
+        throw new Error('BACKEND_REQUIRED:inference 后端不可达，请重试');
+      }
+    }
+
+    // ===== 演·深度分析：调用后端 analyze-v2（已有智囊推荐 + 新维度Agent动态生成）=====
+    const v2 = await apiClient.analyzeQuestionV2(question);
+    console.log('[inference] 后端analyze-v2分析成功:', {
+      dimensions: v2.dimensions?.length || 0,
+      seedAgents: v2.seedAgents?.length || 0,
+      generatedAgents: v2.generatedAgents?.length || 0,
+      recommendedIds: v2.recommendedIds || [],
+    });
+
+    // 合并后端返回的三类Agent，给新生成的Agent打上 isGenerated 标签
+    const v2Seed = (v2.seedAgents || []).map(normalizeAgent).filter(Boolean);
+    const v2Shared = (v2.sharedAgents || []).map(a => normalizeAgent({ ...a, _fromSharedPool: true })).filter(Boolean);
+    const v2Generated = (v2.generatedAgents || []).map(a => normalizeAgent({ ...a, isGenerated: true, _srcLabel: '演·新维度' })).filter(Boolean);
+    // 演推荐的已有智囊ID（不包含新生成的）
+    const recommendedAgentIds = Array.isArray(v2.recommendedIds) ? [...v2.recommendedIds] : [];
+    // 新生成的Agent也默认推荐
+    const generatedIds = v2Generated.map(a => a.id);
+
+    // 合并Agent池：先演推荐→再新生成→再shared→再seed→最后本地补充
+    const mergedPool = [
+      ...v2Seed.filter(a => recommendedAgentIds.includes(a.id)),
+      ...v2Seed.filter(a => !recommendedAgentIds.includes(a.id)),
+      ...v2Shared,
+      ...v2Generated,
+    ];
+
+    // 按id去重
+    const seenIds = new Set();
+    const dedupedPool = mergedPool.filter(a => {
+      if (!a?.id) return false;
+      if (seenIds.has(a.id)) return false;
+      seenIds.add(a.id);
+      return true;
+    });
+
+    // 补充后端缺失但本地相关的Agent（按名称和ID双重去重）
+    const backendIds = new Set(dedupedPool.map(a => a.id));
+    const backendNames = new Set(dedupedPool.map(a => a.name).filter(Boolean));
+    const missingLocal = localAgents.filter(a =>
+      !backendNames.has(a.name) && !backendIds.has(a.id)
+    );
+
+    const finalAgents = [...dedupedPool, ...missingLocal];
+    const finalAgentsDeDup = [];
+    const finalIds = new Set();
+    for (const a of finalAgents) {
+      if (!a?.id) continue;
+      if (finalIds.has(a.id)) continue;
+      finalIds.add(a.id);
+      finalAgentsDeDup.push(a);
+    }
+    console.log(`[inference] Agent池最终: 推荐${recommendedAgentIds.length}个 · 新生成${v2Generated.length}个 · 池内${v2Seed.length}个 · 本地补充${missingLocal.length}个 = 合计${finalAgentsDeDup.length}个（去重后）`);
+
+    const backendGua = {};
+    const mergedGua = cyberGua
+      ? {
+          gua: cyberGua.gua.name,
+          trigram: cyberGua.gua.symbol,
+          element: cyberGua.gua.wuxing,
+          verse: cyberGua.gua.verse,
+          tip: cyberGua.gua.tip,
+          palace: cyberGua.gua.palace,
+          movingLine: cyberGua.gua.movingLine,
+          movingLineMeaning: cyberGua.gua.movingLineMeaning,
+          ganzhi: cyberGua.ganzhi,
+          userWuxing: cyberGua.userWuxing,
+          wuxingRels: cyberGua.wuxingRels,
+        }
+      : localGua;
+
+    // 演分析的关键维度：用于UI展示 "分析进度 / 视角覆盖"
+    const perspectiveCoverage = v2.coverage ? {
+      covered: v2.coverage.covered || 0,
+      total: v2.coverage.total || 0,
+      ratio: v2.coverage.ratio || 0,
+      gaps: v2.coverage.gaps || [],
+      dimensions: v2.dimensions || [],
+    } : null;
+
     return {
-      agents: defaultAgents,
+      agents: finalAgentsDeDup,
+      generatedAgents: v2Generated,
+      recommendedAgentIds: [...recommendedAgentIds, ...generatedIds], // 已有推荐 + 新生成的都视为推荐
+      perspectiveCoverage,
+      analysis: v2.analysis || '',
+      reasoning: v2.reasoning || '',
       agentDialogues: {},
       choices: DEFAULT_CHOICES,
       summary: '',
-      gua: localGua,
+      gua: mergedGua,
+      cyberGua,
       powerfulQuestion: getPowerfulQuestion(questionType),
       framework: getFramework(questionType),
-      verse: getVerse(questionType),
+      verse: mergedGua?.verse || getVerse(questionType),
       questionType,
-      source: 'default',
+      intent,
+      assessment,
+      source: 'backend-v2',
     };
+  } catch (e) {
+    if (e?.message?.startsWith('BACKEND_REQUIRED:')) {
+      throw e;
+    }
+    throw new Error('BACKEND_REQUIRED:inference 后端不可达，请重试');
   }
-
-  return {
-    agents: localAgents,
-    agentDialogues: {},
-    choices: DEFAULT_CHOICES,
-    summary: '',
-    gua: localGua,
-    powerfulQuestion: getPowerfulQuestion(questionType),
-    framework: getFramework(questionType),
-    verse: getVerse(questionType),
-    questionType,
-    source: 'preset-smart',
-  };
 }

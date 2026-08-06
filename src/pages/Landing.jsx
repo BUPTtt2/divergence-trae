@@ -669,7 +669,7 @@ function CouncilOrbit() {
   const agents = AGENT_ORDER.slice(0, 8).map(key => AGENT_MAP[key]);
   // 决策问题循环 - 每 4s 切换
   const questions = [
-    '要不要接那个新 Offer？',
+    '要不要去西藏旅行？',
     '该不该离开熟悉的城市？',
     '创业还是继续打工？',
     '这段感情还要不要继续？',

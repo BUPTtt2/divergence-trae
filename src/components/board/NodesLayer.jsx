@@ -114,12 +114,11 @@ function ChoiceBlock({ branch, index, total, nodeId, onClick }) {
     groupRef.current.rotation.y = Math.sin(t * 0.1 + index) * 0.08 + pos.angle * 0.3;
   });
 
-  if (!visible) return null;
-
   return (
     <group
       ref={groupRef}
       position={[pos.x, pos.y, pos.z]}
+      visible={!!visible}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       onPointerOver={(e) => {
         e.stopPropagation();

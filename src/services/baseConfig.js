@@ -11,7 +11,11 @@ export const getApiBase = () => {
   if (import.meta.env.VITE_API_BASE) {
     return import.meta.env.VITE_API_BASE;
   }
-  return import.meta.env.PROD ? '/api' : 'http://localhost:8787';
+  // DEV / PROD 都走同源相对路径（空字符串 = 当前 origin）：
+  // - `${API_BASE_URL}/api/xxx` → `/api/xxx`（vite proxy / prod nginx 转发到 Railway 公网后端）
+  // - `${API_BASE_URL}/health` → `/health`（vite proxy 里单独加的转发）
+  // 不再写死 http://localhost:3001，避免本机没启 backend 时 ERR_ABORTED
+  return '';
 };
 
 export const API_BASE_URL = getApiBase();
@@ -74,10 +78,27 @@ export const getCurrentUserIdSync = () => {
   if (userStr) {
     try {
       const user = JSON.parse(userStr);
-      if (user.id) return user.id;
+      if (user.id) {
+        storage.setItem(TOKEN_KEYS.USER_ID, user.id);
+        return user.id;
+      }
     } catch {}
   }
-  return null;
+  // 兜底：生成一个匿名用户ID并存起来（保证新轨各端点userId不为空）
+  const anonId = 'anon_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  try {
+    storage.setItem(TOKEN_KEYS.USER_ID, anonId);
+  } catch {}
+  return anonId;
+};
+
+/**
+ * 确保 userId 存在并返回（同步，带持久化）
+ * 前端所有调用 deliberation/* 端点时统一用这个，避免硬编码 'default-user'
+ */
+export const ensureUserId = () => {
+  const id = getCurrentUserIdSync();
+  return id || 'default-user';
 };
 
 export const isTokenExpiringSoonSync = () => {

@@ -74,10 +74,8 @@ function generateStairBlocks(targetPos, blockCount = 10) {
 function StairPath({ targetPos, color, visible }) {
   const blocks = useMemo(() => generateStairBlocks(targetPos, 10), [targetPos]);
 
-  if (!visible) return null;
-
   return (
-    <group>
+    <group visible={!!visible}>
       {blocks.map((block, i) => (
         <StairBlock
           key={i}

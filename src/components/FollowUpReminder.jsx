@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getFollowUps, completeFollowUp } from '../services/apiClient';
+import { getFollowUps, completeFollowUp, isBackendCircuitOpen } from '../services/apiClient';
 import { getPendingFollowUps, updateEpisodeOutcome } from '../services/memoryStore';
 import { useNavigate } from 'react-router-dom';
 import './FollowUpReminder.css';
@@ -30,6 +30,20 @@ export default function FollowUpReminder() {
   const [showResultInput, setShowResultInput] = useState(null);
 
   const loadFollowUps = useCallback(async () => {
+    // ★ 先查断路器：后端断了就直接走本地，不发 fetch，避免浏览器 net::ERR_FAILED 红日志
+    if (isBackendCircuitOpen()) {
+      console.debug('[FollowUpReminder] 后端已断路，跳过 API fetch，直接使用本地回访');
+      try {
+        const localPending = getPendingFollowUps();
+        if (localPending.length > 0) {
+          setFollowUps(localPending.map(ep => ({
+            id: ep.id, question: ep.question, decision: ep.decision,
+            hexagram: ep.guaName || ep.hexagram, createdAt: ep.createdAt, source: 'local',
+          })));
+        }
+      } catch (_) {}
+      return;
+    }
     try {
       const data = await getFollowUps('pending');
       if (data && data.items && data.items.length > 0) {
@@ -37,7 +51,7 @@ export default function FollowUpReminder() {
         return;
       }
     } catch (e) {
-      console.warn('[FollowUpReminder] 后端回访失败，降级本地:', e.message);
+      console.debug('[FollowUpReminder] 后端回访不可达，使用本地：', e?.message || 'network');
     }
     // 本地降级：从分层记忆系统获取到期回访
     try {
@@ -52,8 +66,8 @@ export default function FollowUpReminder() {
           source: 'local',
         })));
       }
-    } catch (e) {
-      console.warn('[FollowUpReminder] 本地回访加载失败:', e.message);
+    } catch (e2) {
+      console.debug('[FollowUpReminder] 本地回访加载失败:', e2?.message);
     }
   }, []);
 
@@ -91,8 +105,8 @@ export default function FollowUpReminder() {
         setShowResultInput(null);
         setResultText('');
       } catch (e2) {
-        console.warn('[FollowUpReminder] 本地降级也失败:', e2.message);
-      }
+      console.debug('[FollowUpReminder] 本地回访加载失败:', e2?.message);
+    }
     } finally {
       setCompletingId(null);
     }

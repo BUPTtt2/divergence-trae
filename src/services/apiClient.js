@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 后端 API 封装模块
  * 统一管理所有后端接口调用，包含 SSE 流式处理
  *
@@ -24,7 +24,56 @@ const PRIMARY_API = API_BASE_URL;
 const FALLBACK_API = PRIMARY_API;
 
 let _activeApi = PRIMARY_API;
+const CIRCUIT_KEY = 'cyber_yan_api_circuit_until';
 let _apiUnavailableUntil = 0;
+(function _restoreCircuitFromStorage() {
+  try {
+    if (typeof window !== 'undefined') {
+      const raw = window.localStorage.getItem(CIRCUIT_KEY);
+      if (raw) {
+        const ts = parseInt(raw, 10);
+        if (!Number.isNaN(ts) && ts > Date.now()) _apiUnavailableUntil = ts;
+      }
+    }
+  } catch (_) {}
+})();
+
+class ApiUnavailableError extends Error {
+  constructor(msg = '后端暂不可用，已静默降级本地模式') {
+    super(msg);
+    this.name = 'ApiUnavailableError';
+    this.silent = true;
+  }
+}
+
+const BACKOFF_MS = 30 * 1000; // 30 秒（原 3 分钟太长，国内访问 Vercel 偶尔超时就会断 3 分钟）
+
+function isBackendCircuitOpen() {
+  return Date.now() < _apiUnavailableUntil;
+}
+function tripBackendCircuit(reason = '') {
+  if (!isBackendCircuitOpen()) {
+    _apiUnavailableUntil = Date.now() + BACKOFF_MS;
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(CIRCUIT_KEY, String(_apiUnavailableUntil));
+        if (window.__circuitTripped !== true) {
+          window.__circuitTripped = true;
+          console.info(`⚡ [赛博推演台] 后端暂不可连 → 启动本地沙盘模式（${Math.round(BACKOFF_MS/60000)} 分钟内不再重试）${reason ? ' · ' + reason : ''}`);
+        }
+      }
+    } catch (_) {}
+  }
+}
+function resetBackendCircuit() {
+  _apiUnavailableUntil = 0;
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(CIRCUIT_KEY);
+      window.__circuitTripped = false;
+    }
+  } catch (_) {}
+}
 
 // 内联实现 refreshAccessToken，不依赖 auth.js
 async function refreshAccessToken() {
@@ -53,7 +102,11 @@ async function refreshAccessToken() {
     }
     throw new Error('响应缺少 accessToken');
   } catch (e) {
-    console.warn('[apiClient] 刷新 token 失败:', e.message);
+    // 匿名模式下 refresh token 本身就不存在，401 是预期行为——静默就行，不要刷红日志
+    if (typeof window !== 'undefined') {
+      const log = window.__circuitTripped ? console.debug : console.info;
+      log('[apiClient] token refresh skipped / failed:', e?.message || 'no refresh token');
+    }
     storageRemove(TOKEN_KEYS.ACCESS_TOKEN);
     storageRemove(TOKEN_KEYS.REFRESH_TOKEN);
     storageRemove(TOKEN_KEYS.TOKEN_EXPIRY);
@@ -70,16 +123,27 @@ function clearAuth() {
 }
 
 export { PRIMARY_API, FALLBACK_API };
+export { isBackendCircuitOpen, resetBackendCircuit, ApiUnavailableError };
 
 export const API_TIMEOUT = 15000;
 export const SSE_TIMEOUT = 30000;
 
 async function tryFetch(url, options = {}, timeout = API_TIMEOUT) {
+  if (isBackendCircuitOpen()) {
+    throw new ApiUnavailableError();
+  }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   try {
     const resp = await fetch(url, { ...options, signal: controller.signal });
     return resp;
+  } catch (e) {
+    const name = e?.name || '';
+    const msg = e?.message || String(e);
+    if (name === 'AbortError' || msg.includes('abort') || msg.includes('Failed to fetch') || msg.includes('NetworkError') || name === 'TypeError') {
+      tripBackendCircuit(name || 'connect_fail');
+    }
+    throw e;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -104,7 +168,7 @@ export async function checkServerHealth() {
       const resp = await tryFetch(`${url}/health`, {}, 3000);
       if (resp.ok) {
         _activeApi = url;
-        _apiUnavailableUntil = 0;
+        resetBackendCircuit();
         return true;
       }
     } catch {
@@ -273,6 +337,41 @@ export async function analyzeQuestion(question) {
 }
 
 /**
+ * 演·深度分析：维度拆解 → 匹配已有智囊 + 动态生成新维度 Agent
+ * POST /api/agent/analyze-v2 → { analysis, dimensions, seedAgents, sharedAgents, generatedAgents, recommendedIds, ... }
+ * 返回的 generatedAgents: 后端新生成的 Agent（新维度，不在 pool 中）
+ * 返回的 recommendedIds: 演推荐的已有智囊 ID（从 seedAgents/sharedAgents 中挑出的推荐）
+ */
+export async function analyzeQuestionV2(question, options = {}) {
+  return request('/api/agent/analyze-v2', {
+    method: 'POST',
+    body: JSON.stringify({ question, useSharedPool: true, ...options }),
+  });
+}
+
+/**
+ * 通用意图识别（5 维特征提取 + 澄清问题）
+ * POST /api/agent/intent/classify → { intent, assessment }
+ */
+export async function classifyIntent(question) {
+  return request('/api/agent/intent/classify', {
+    method: 'POST',
+    body: JSON.stringify({ question }),
+  });
+}
+
+/**
+ * LLM 动态生成决策树（替代硬编码 nodes.js）
+ * POST /api/agent/tree/generate → { tree, fallback }
+ */
+export async function generateTree(question, intent = null, userMemory = '') {
+  return request('/api/agent/tree/generate', {
+    method: 'POST',
+    body: JSON.stringify({ question, intent, userMemory }),
+  });
+}
+
+/**
  * 流式获取单个 Agent 的对话（SSE）
  * POST /api/agent/dialogue
  * @param {Object} agent - Agent 对象（含 id/name/stance/persona 等）
@@ -312,13 +411,39 @@ export async function streamAgentDialogue(agent, question, previousDialogues, on
   }
   
   if (typeof agent === 'object' && agent !== null) {
+    // ★ glm5.2 级强个性注入：三层 persona + 写作风格 guardrail
+    // 防止高质量模型退化成"通用对话助手"风格
+    const personaFromAgent = agent.persona || '';
+    const stance = agent.stance || agent.perspective || '旁观者视角';
+    const name = agent.name || '智囊';
+    // 强约束（写作风格 guardrail）——无论模型多强，这些是红线
+    const STRONG_GUARDRAIL = `
+【身份约束】
+你现在的名字是「${name}」，站在「${stance}」立场思考问题。你不是通用 AI 助手，你是一个有血有肉、有性格偏见的幕僚/长者/朋友。
+- 永远不要说「作为AI助手」「我理解你的困惑」「这需要你自己决定」这类通用开场白
+- 永远不要同时列出 A/B 两面然后说"各有利弊，你自己选"——这是骑墙派，你的立场必须鲜明
+- 不要用"首先/其次/最后"这种八股结构，像真人一样自然说
+- 不要说"希望对你有帮助""加油""祝你好运"这种客服式结尾
+
+【说话风格】
+- 用第一人称「我」说话，直接给判断，不要绕弯子
+- 前 3 句之内必须亮出你的核心观点，不要铺垫
+- 用具体的追问、具体的数字、具体的场景举例，不要讲空泛大道理
+- 偶尔可以犀利、可以毒舌、可以拍桌子，但不能恶意攻击，要像真朋友掏心窝子说话
+- 100 字以内解决问题，不要长篇大论
+
+【禁止】
+- 禁止【】《》这类代码括号
+- 禁止 Markdown 标题、序号列表格式
+- 禁止 emoji、图标、特殊符号
+- 禁止道德说教和政治正确套话`;
+    const mergedPersona = [personaFromAgent, STRONG_GUARDRAIL].filter(Boolean).join('\n\n');
     requestBody.agentConfig = {
       name: agent.name,
       stance: agent.stance || agent.perspective,
-      persona: agent.persona,
+      persona: mergedPersona,
       color: agent.color,
       icon: agent.icon,
-      // 铸造智囊的扩展字段 - 让后端 LLM 理解真实语境
       relation: agent.relation,
       relationLabel: agent.relationLabel,
       contextSummary: agent.contextSummary,
@@ -473,10 +598,11 @@ export async function continueAsking(agentId, originalQuestion, dialogueHistory 
  * @param {Object} dialogueHistory - 完整对话历史 { agentId: Array<string> }
  * @returns {Promise<{summary, options}>}
  */
-export async function generateSummary(originalQuestion, agentIds = [], dialogueHistory = {}) {
+export async function generateSummary(originalQuestion, agentIds = [], dialogueHistory = {}, options = {}) {
   return request('/api/agent/summary', {
     method: 'POST',
     body: JSON.stringify({ originalQuestion, agentIds, dialogueHistory }),
+    timeout: options.timeout,
   });
 }
 
@@ -653,15 +779,41 @@ export async function getAchievements(userId) {
  *   meta: { suggest_inference?: boolean, inference_question?: string } 推演台推荐信号
  */
 export async function streamYanChat({ message, conversationId, history }, onChunk) {
+  if (isBackendCircuitOpen()) {
+    return {
+      text: '',
+      conversationId: conversationId || `local-${Date.now()}`,
+      suggest_inference: false,
+      inference_question: '',
+      _silentFallback: true,
+    };
+  }
   const streamHeaders = { 'Content-Type': 'application/json' };
   await injectAuthHeader(streamHeaders);
 
   const api = await getActiveApi();
-  const resp = await fetch(`${api}/api/yan/chat/stream`, {
-    method: 'POST',
-    headers: streamHeaders,
-    body: JSON.stringify({ message, conversationId, history }),
-  });
+  let resp;
+  try {
+    resp = await fetch(`${api}/api/yan/chat/stream`, {
+      method: 'POST',
+      headers: streamHeaders,
+      body: JSON.stringify({ message, conversationId, history }),
+      signal: AbortSignal.timeout(SSE_TIMEOUT),
+    });
+  } catch (e) {
+    const name = e?.name || '';
+    const msg = e?.message || String(e);
+    if (name === 'AbortError' || name === 'TimeoutError' || msg.includes('Failed to fetch') || msg.includes('abort') || name === 'TypeError') {
+      tripBackendCircuit(name || 'sse_fail');
+    }
+    return {
+      text: '',
+      conversationId: conversationId || `local-${Date.now()}`,
+      suggest_inference: false,
+      inference_question: '',
+      _silentFallback: true,
+    };
+  }
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
@@ -722,7 +874,7 @@ export async function streamYanChat({ message, conversationId, history }, onChun
               inference_question: inferenceQuestion,
             });
           } else if (data.type === 'error') {
-            console.error('[yan] 服务端流式错误:', data.message);
+            console.warn('[yan] 服务端流式错误:', data.message);
             fullText += `\n\n[服务端错误: ${data.message || '未知'}]`;
           }
         } catch (e) {

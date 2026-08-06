@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getCustomAgents, saveCustomAgent, deleteCustomAgent, getMarketAgents, subscribeAgent, publishAgent, isPublished } from '../utils/customAgent';
+import { getMarketAgents, subscribeAgent, publishAgent, isPublished } from '../utils/customAgent';
+import { getAdvisors, deleteAdvisor } from '../services/deliberationClient';
+import { getCurrentUserIdSync } from '../services/baseConfig';
 import { getAgents } from '../data/agents';
 import AgentCreator from '../components/AgentCreator';
 
@@ -14,6 +17,8 @@ const COLORS = {
 };
 
 export default function Agents() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [customAgents, setCustomAgents] = useState([]);
   const [presetAgents, setPresetAgents] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState(null);
@@ -22,36 +27,75 @@ export default function Agents() {
   const [marketAgents, setMarketAgents] = useState([]);
   const [loadError, setLoadError] = useState(null);
 
+  // 从 location.state 或 sessionStorage 取 snapshotSid，有就显示返回按钮
+  const snapshotSid =
+    location.state?.snapshotSid ||
+    (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('resume_session_id') : null);
+  const snapshotLabel = location.state?.snapshotLabel || '推演仍在进行中';
+
+  // 把后端 custom_advisors 行映射为前端卡片展示格式
+  const mapAdvisorsToDisplay = useCallback((advisors) => {
+    return (advisors || []).map(adv => ({
+      id: adv.id,
+      name: adv.name,
+      stance: adv.perspective,
+      persona: adv.persona,
+      trigram: adv.trigram || '☯',
+      isCustom: true,
+      forged: true,
+      color: '#C8A850',
+      glow: '#F0D890',
+      desc: adv.perspective,
+    }));
+  }, []);
+
   useEffect(() => {
     try {
       const agents = (getAgents() || []).filter(a => a && a.role !== 'master');
       setPresetAgents(agents);
-      setCustomAgents(getCustomAgents() || []);
       setMarketAgents(getMarketAgents() || []);
     } catch (e) {
       console.error('[Agents] 加载失败:', e);
       setLoadError(e?.message || '加载失败');
-      // 至少给空数组，避免后续 map 崩溃
       setPresetAgents([]);
-      setCustomAgents([]);
       setMarketAgents([]);
     }
-  }, []);
+    // 异步从后端拉取铸造智囊
+    const userId = getCurrentUserIdSync();
+    if (userId) {
+      getAdvisors(userId)
+        .then(advisors => setCustomAgents(mapAdvisorsToDisplay(advisors)))
+        .catch(e => {
+          console.warn('[Agents] 拉取铸造智囊失败:', e);
+          setCustomAgents([]);
+        });
+    } else {
+      setCustomAgents([]);
+    }
+  }, [mapAdvisorsToDisplay]);
 
   const refreshList = useCallback(() => {
+    const userId = getCurrentUserIdSync();
+    if (!userId) { setCustomAgents([]); return; }
+    getAdvisors(userId)
+      .then(advisors => setCustomAgents(mapAdvisorsToDisplay(advisors)))
+      .catch(e => console.warn('[Agents] 刷新失败:', e));
     try {
-      setCustomAgents(getCustomAgents() || []);
       setMarketAgents(getMarketAgents() || []);
     } catch (e) {
-      console.warn('[Agents] 刷新失败:', e);
+      console.warn('[Agents] 市集刷新失败:', e);
     }
-  }, []);
+  }, [mapAdvisorsToDisplay]);
 
-  const handleDelete = useCallback((agentId) => {
-    if (confirm('确定要送走这位智囊吗？')) {
-      deleteCustomAgent(agentId);
+  const handleDelete = useCallback(async (agentId) => {
+    if (!confirm('确定要送走这位智囊吗？')) return;
+    try {
+      await deleteAdvisor(agentId);
       refreshList();
       setSelectedAgent(null);
+    } catch (e) {
+      console.warn('[Agents] 删除失败:', e);
+      alert('送走失败：' + (e.message || '未知错误'));
     }
   }, [refreshList]);
 
@@ -66,6 +110,79 @@ export default function Agents() {
       paddingTop: '80px',
     }}>
       <div className="max-w-5xl mx-auto">
+        {/* 从推演中跳过来的：显示「返回推演台」按钮 */}
+        <AnimatePresence>
+          {snapshotSid && (
+            <motion.div
+              initial={{ opacity: 0, y: -12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              style={{
+                position: 'sticky',
+                top: 16,
+                zIndex: 50,
+                marginBottom: '20px',
+              }}
+            >
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '10px 14px',
+                background: 'linear-gradient(135deg, rgba(200,168,80,0.14), rgba(168,71,46,0.10))',
+                border: `1px solid ${COLORS.gold}60`,
+                borderRadius: '10px',
+                boxShadow: '0 4px 18px rgba(168,71,46,0.08)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: '50%',
+                    background: COLORS.gold, color: COLORS.ink,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontFamily: '"Ma Shan Zheng", serif', fontWeight: 700, fontSize: 14,
+                    flexShrink: 0,
+                  }}>演</div>
+                  <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, color: COLORS.ink, fontWeight: 600 }}>
+                        {snapshotLabel}
+                      </div>
+                      <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        点击右侧按钮继续回到推演流程
+                      </div>
+                    </div>
+                </div>
+                <button
+                  onClick={() => {
+                    // 把 snapshotSid 存到 sessionStorage（location.state在刷新后会丢）
+                    try { sessionStorage.setItem('resume_session_id', snapshotSid); } catch {}
+                    // BUG2b修复：路由路径错误！推演台路径是/sandbox，不是/game！
+                    // 原来写的navigate('/game')根本找不到路由，用户就卡住了
+                    navigate('/sandbox', {
+                      state: { returnToSandbox: true, snapshotSid },
+                      replace: true,
+                    });
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    background: `linear-gradient(135deg, ${COLORS.primary}, ${COLORS.gold})`,
+                    color: '#FFF',
+                    border: 'none',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    letterSpacing: '0.1em',
+                    fontFamily: '"Ma Shan Zheng", serif',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(168,71,46,0.25)',
+                    flexShrink: 0,
+                    whiteSpace: 'nowrap',
+                  }}
+                >← 返回推演台</button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {loadError && (
           <div style={{
             marginBottom: '16px', padding: '12px 16px',

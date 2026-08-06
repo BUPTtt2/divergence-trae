@@ -3,6 +3,9 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import LightOrb from './LightOrb';
 import AgentGhosts from './AgentGhosts';
+import PhaseTransitFX from './PhaseTransitFX';
+import YaolinesFormation from './YaolinesFormation';
+import DestinyRevealFX from './DestinyRevealFX';
 import { COLORS } from './layoutConfig';
 import { createGlowTexture } from '../../utils/trigramTextures';
 
@@ -70,10 +73,13 @@ export default function Board3D({
   selectedChoice,
   inference,
   yanOptions,
+  deliberationOracle,
+  deliberationSessionId,
+  fateRevealed = false,
 }) {
   return (
     <group>
-      {/* 灯光 */}
+      {/* 全局氛围灯 */}
       <ambientLight intensity={0.12} color={'#3A3530'} />
       <directionalLight position={[2, 5, 3]} intensity={0.2} color={'#C8A850'} />
       <pointLight position={[0, 2, 1]} intensity={1.0} color={'#F0D890'} distance={10} decay={2} />
@@ -81,7 +87,10 @@ export default function Board3D({
       {/* 远处星点 */}
       <StarField />
 
-      {/* 中心光球 - 演 (final 阶段会展示命运卡) */}
+      {/* 【全新动画 1/3】阶段切换：卦符粒子爆炸 + 全局光脉冲 */}
+      <PhaseTransitFX phase={phase} />
+
+      {/* 中心光球 - 演 */}
       <LightOrb
         phase={phase}
         position={[0, 1.5, 0]}
@@ -91,6 +100,14 @@ export default function Board3D({
         yanOptions={yanOptions}
       />
 
+      {/* 【全新动画 2/3】立卦：6 爻线从外围旋转汇入，到达朱砂闪烁后 halo 爆发 */}
+      <YaolinesFormation
+        phase={phase}
+        oracle={deliberationOracle || inference?.oracle || null}
+        question={userInput || ''}
+        sessionId={deliberationSessionId || inference?.sessionId || ''}
+      />
+
       {/* Agent 虚影 - 围绕光球上方分布 */}
       <AgentGhosts
         phase={phase}
@@ -98,6 +115,16 @@ export default function Board3D({
         activeAgents={activeAgents}
         agentDialogues={agentDialogues}
         onAgentClick={onAgentClick}
+      />
+
+      {/* 【全新动画 3/3】命牌：3D 升起 → Y 轴翻牌 → 朱砂印 + 金字 + 金色 halo 环绕
+          只有 fateRevealed=true（点击"揭示命签"）后才显示浮起命牌 */}
+      <DestinyRevealFX
+        phase={phase}
+        oracle={deliberationOracle || inference?.oracle || null}
+        dynamicChoices={inference?.dynamicChoices || []}
+        selectedChoice={selectedChoice || null}
+        revealed={fateRevealed}
       />
     </group>
   );

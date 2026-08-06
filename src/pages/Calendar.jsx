@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
 import { getCalendar, getUserId } from '../services/apiClient';
-import AppNav from '../components/AppNav';
 
 const T = {
   paper: '#F2EDE0',
@@ -23,8 +22,6 @@ const F = {
   regular: '"ZCOOL XiaoWei", "Noto Serif SC", serif',
 };
 
-const EASE = [0.16, 1, 0.3, 1];
-
 export default function Calendar() {
   const navigate = useNavigate();
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -37,18 +34,16 @@ export default function Calendar() {
       const remote = await getCalendar(getUserId());
       if (Array.isArray(remote)) {
         setCollection(remote);
-        // 同步 localStorage 缓存
-        try { localStorage.setItem('yance_collection', JSON.stringify(remote)); } catch (e) { /* ignore */ }
+        try { localStorage.setItem('yance_collection', JSON.stringify(remote)); } catch {}
         return;
       }
     } catch (e) {
-      // 后端不可用，降级到 localStorage
       console.warn('[Calendar] 后端不可用，降级 localStorage:', e.message);
     }
     try {
       const saved = JSON.parse(localStorage.getItem('yance_collection') || '[]');
       setCollection(saved);
-    } catch (e) { /* ignore */ }
+    } catch {}
   }, []);
 
   useEffect(() => {

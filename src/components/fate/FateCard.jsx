@@ -81,6 +81,7 @@ export default function FateCard() {
   return (
     <motion.div
       className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ perspective: 1200 }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
     >
@@ -90,7 +91,7 @@ export default function FateCard() {
       {/* Card */}
       <motion.div
         className="relative z-10 w-[360px] bg-paper border-3 border-terminal-gray font-mono overflow-hidden"
-        style={{ border: '3px solid #1A1A1A' }}
+        style={{ border: '3px solid #1A1A1A', transformStyle: 'preserve-3d' }}
         initial={{ rotateY: 180, scale: 0.8 }}
         animate={{ rotateY: 0, scale: 1 }}
         transition={{ type: 'spring', damping: 15, stiffness: 100 }}

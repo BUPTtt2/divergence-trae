@@ -1,0 +1,148 @@
+:root {
+  /* === 赛博玄学 · 底色层 === */
+  --cyber-ink-0: #050304;
+  --cyber-ink-1: #0A0708;
+  --cyber-ink-2: #120D10;
+  --cyber-ink-3: #1A1418;
+  --cyber-ink-4: #261E22;
+
+  /* === 赛博玄学 · 金线双层发光 === */
+  --gold-core: #FFE89A;
+  --gold-warm: #E8C670;
+  --gold-deep: #B88A2E;
+  --gold-rust: #8A5A1C;
+  --gold-halo-outer: #FFD56B33;
+  --gold-halo-inner: #FFE89A55;
+
+  /* === 赛博霓虹辅色 === */
+  --cyber-purple: #8A5CFF;
+  --cyber-purple-soft: #B89EFF40;
+  --cyber-cyan: #4FD6FF;
+  --cyber-cyan-soft: #4FD6FF30;
+  --cyber-vermilion: #FF5C6E;
+  --cyber-vermilion-soft: #FF5C6E30;
+  --cyber-jade: #4ADE99;
+  --cyber-jade-soft: #4ADE9930;
+
+  /* === 纸张/铭文色 === */
+  --paper: #F0E8D8;
+  --paper-dim: #B8AE9A;
+  --ink-stamp: #A83028;
+
+  /* === 字体契约 === */
+  --font-seal: "Ma Shan Zheng", "ZCOOL XiaoWei", serif;
+  --font-script: "ZCOOL XiaoWei", "Noto Serif SC", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* === 动画时程 === */
+  --ease-out-cyber: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-glitch: cubic-bezier(0.6, -0.28, 0.735, 0.045);
+}
+
+/* === CRT 屏幕全局覆盖层：扫描线+颗粒噪点+微闪 === */
+.crt-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.6;
+  mix-blend-mode: overlay;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 2px,
+      rgba(255, 255, 255, 0.03) 3px,
+      transparent 4px
+    );
+}
+.crt-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.9 0 0 0 0 0.82 0 0 0 0 0.55 0 0 0 0.35 0'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.5'/></svg>");
+  opacity: 0.4;
+  animation: crt-flicker 7s infinite steps(1);
+}
+.crt-overlay::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+@keyframes crt-flicker {
+  0%, 97%, 100% { opacity: 0.4; }
+  97.5% { opacity: 0.22; }
+  98% { opacity: 0.58; }
+  98.5% { opacity: 0.32; }
+}
+
+/* === 霓虹金线双层边框（通用） === */
+.neon-border-gold {
+  position: relative;
+  border: 1px solid var(--gold-deep);
+  box-shadow:
+    inset 0 0 0 1px var(--gold-halo-inner),
+    inset 0 0 16px var(--gold-halo-outer),
+    0 0 12px var(--gold-halo-outer),
+    0 0 36px transparent;
+}
+.neon-border-gold::before {
+  content: "";
+  position: absolute;
+  top: -1px; left: 10%; right: 10%; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--gold-core), transparent);
+  opacity: 0.85;
+  filter: drop-shadow(0 0 4px var(--gold-core));
+}
+
+/* === 印章文字样式（标题/卦名用） === */
+.seal-text {
+  font-family: var(--font-seal);
+  color: var(--gold-core);
+  text-shadow:
+    0 0 6px var(--gold-core),
+    0 0 14px var(--gold-warm),
+    0 0 28px var(--gold-rust);
+  letter-spacing: 0.25em;
+}
+
+/* === 卦象 glitch 翻转动效 === */
+@keyframes trigram-glitch {
+  0%   { transform: translateY(0) skewX(0deg); filter: hue-rotate(0deg); }
+  18%  { transform: translateY(-1px) skewX(-8deg); filter: hue-rotate(-20deg) saturate(1.4); }
+  36%  { transform: translateY(1px) skewX(7deg); }
+  54%  { transform: translateY(0) skewX(-3deg); filter: hue-rotate(10deg); }
+  72%  { transform: translateY(0.5px) skewX(2deg); }
+  100% { transform: translateY(0) skewX(0deg); filter: hue-rotate(0deg); }
+}
+.trigram-flip { animation: trigram-glitch 0.7s var(--ease-out-cyber); }
+
+/* === 铭文竖向微滚动（超长内容用） === */
+.ingot-scroll {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gold-deep) transparent;
+}
+.ingot-scroll::-webkit-scrollbar { width: 5px; }
+.ingot-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--gold-rust), var(--gold-deep));
+  border-radius: 3px;
+}
+
+/* === 进场/退场：上下行扫描显隐 === */
+@keyframes scan-reveal {
+  from { clip-path: inset(0 0 100% 0); }
+  to   { clip-path: inset(0 0 0% 0); }
+}
+.scan-reveal { animation: scan-reveal 0.8s var(--ease-out-cyber) both; }
+
+/* === 全局按钮悬停：金线呼吸 === */
+button { transition: box-shadow 0.35s var(--ease-out-cyber), transform 0.2s var(--ease-out-cyber); }
+button:hover:not(:disabled) {
+  box-shadow:
+    inset 0 0 0 1px var(--gold-halo-inner),
+    0 0 16px var(--gold-halo-outer),
+    0 0 48px var(--gold-halo-outer) !important;
+}

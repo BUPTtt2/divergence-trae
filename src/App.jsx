@@ -9,7 +9,8 @@ import { extendTHREE } from './utils/extendThree';
 import DraggableCompass from './components/fx/DraggableCompass';
 import AchievementToast from './components/AchievementToast';
 import FollowUpReminder from './components/FollowUpReminder';
-import YanChat from './components/YanChat';
+// 已废弃：旧轨
+// import YanChat from './components/YanChat';
 import AppNav from './components/AppNav';
 import { fetchAgentPersonas } from './services/inferenceEngine';
 import { tracker, initWebVitals } from './services/tracker';
@@ -19,17 +20,16 @@ function lazyRetry(fn, retries = 2) {
   return lazy(() =>
     fn().catch(async (err) => {
       if (retries <= 0) throw err;
-      // 等待 600ms 后重试一次
-      await new Promise((r) => setTimeout(r, 600));
-      // 若仍是 chunk 加载失败，强制刷新页面让浏览器拉到新 index.html
       if (err && /Failed to fetch dynamically imported module|Importing a module script failed/i.test(err.message || '')) {
         if (retries === 1) {
           console.warn('[lazyRetry] chunk 加载失败，强制刷新页面');
           if (typeof window !== 'undefined') window.location.reload();
-          return new Promise(() => {}); // 永远不 resolve，等刷新
+          return new Promise(() => {});
         }
+        await new Promise((r) => setTimeout(r, 600));
+        return fn();
       }
-      return lazyRetry(fn, retries - 1)();
+      throw err;
     })
   );
 }
@@ -287,7 +287,7 @@ export default function App() {
                 <DraggableCompass />
                 <AchievementToast />
                 <FollowUpReminder />
-                <YanChat />
+                {/* 已废弃：旧轨 <YanChat /> */}
               </GameProvider>
             </AuthProvider>
           </BrowserRouter>

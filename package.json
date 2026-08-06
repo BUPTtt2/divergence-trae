@@ -1,7 +1,8 @@
 {
-  "name": "sandbox-app",
+  "name": "yance-frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "演策 Yance · 八卦推演引擎前端 | 多智囊辩论 + 铜钱立卦 + 命签收藏（Vercel 项目代号: divergence-trae）",
   "type": "module",
   "scripts": {
     "dev": "vite",

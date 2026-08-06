@@ -1,919 +1,353 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
-import tracker from '../services/tracker';
 import Board from '../components/board/GameBoard';
 import ChoiceHud from '../components/board/ChoiceHud';
 import AgentDialogueOverlay from '../components/board/AgentDialogueOverlay';
 import ProcessStepper from '../components/board/ProcessStepper';
-import { getAgentsForQuestion, detectQuestionType, QUESTION_TYPES } from '../data/agents';
+import FateCardPanel from '../components/fate/FateCardPanel';
+import ConfirmedInfoPanel from '../components/yan/ConfirmedInfoPanel';
+import CaseFilePanel from '../components/yan/CaseFilePanel';
 import { COLORS } from '../components/board/layoutConfig';
-import { generateInferenceContent, generateDialoguesForAgents, generateYanSummary, judgeContinueAsking, isLlmAvailable, generatePersonalizedCardContent } from '../services/inferenceEngine';
-import { detectConvergenceFromBlackboard } from '../services/multiAgentFramework';
-import { getCustomAgents, recommendSubscribedAgents } from '../utils/customAgent';
-import { streamYanChat, addYanMemory, getYanMemories } from '../services/apiClient';
-import { recallRelevantMemories, formatMemoriesForPrompt, saveWorkingMemory, saveEpisode, inferFactsFromSession, saveAgentFeedback, detectChoicePattern } from '../services/memoryStore';
+import { detectQuestionType } from '../data/agents';
+import { generateDialoguesForAgents } from '../services/inferenceEngine';
+import { saveAgentFeedback } from '../services/memoryStore';
+import { sanitizeLLMText } from '../utils/helpers';
+import useGameFlow from '../game/useGameFlow';
 
-const BORDER_COLOR = '#C8A850';
-const GLOW_COLOR = '#F0D890';
-const RUST_COLOR = '#A8472E';
-const PAPER_COLOR = '#FAF6EC';
+const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
+const GLOW_COLOR = 'var(--gold-core, #F0D890)';
+const RUST_COLOR = 'var(--ink-stamp, #A8472E)';
+const PAPER_COLOR = 'var(--paper, #FAF6EC)';
 const DEFAULT_CHOICES = [
-  { id: 'opportunity', label: '抓住机会', color: COLORS.choice.opportunity, glowColor: '#E8B880', icon: '☰', gua: '大有' },
-  { id: 'risk', label: '规避风险', color: COLORS.choice.risk, glowColor: '#E88080', icon: '☵', gua: '坎' },
-  { id: 'stable', label: '稳守当前', color: COLORS.choice.stable, glowColor: '#80C8A8', icon: '☶', gua: '艮' },
-  { id: 'explore', label: '探索新路', color: COLORS.choice.explore, glowColor: '#D8A8C8', icon: '☴', gua: '巽' },
+  { id: 'opportunity', label: '抓住机会', color: COLORS.choice.opportunity, glowColor: '#E8B880', icon: '☰', gua: '大有',
+    verse: '元亨。先据要津，后补疏漏。',
+    keyPoints: ['先占位置再说', '错过窗口更难补', '核心：先动再完善'] },
+  { id: 'risk', label: '规避风险', color: COLORS.choice.risk, glowColor: '#E88080', icon: '☵', gua: '坎',
+    verse: '习坎有孚。维心亨，行有尚。',
+    keyPoints: ['先算最坏结果', '兜住底再看机会', '核心：不退不进先稳'] },
+  { id: 'stable', label: '稳守当前', color: COLORS.choice.stable, glowColor: '#80C8A8', icon: '☶', gua: '艮',
+    verse: '艮其背。时止则止，时行则行。',
+    keyPoints: ['守住已有成果', '等信号齐了再动', '核心：不动如山'] },
+  { id: 'explore', label: '探索新路', color: COLORS.choice.explore, glowColor: '#D8A8C8', icon: '☴', gua: '巽',
+    verse: '小亨。利有攸往，利见大人。',
+    keyPoints: ['30天小范围试验', '换定义重新看题', '核心：另辟蹊径'] },
 ];
 
-export default function Game() {
-  const navigate = useNavigate();
-  const [phase, setPhase] = useState('input');
-  const [userInput, setUserInput] = useState('');
-  const [inputValue, setInputValue] = useState('要不要接那个新 Offer?');
-  const [inference, setInference] = useState(null);
-  const [showInput, setShowInput] = useState(true);
-  const [showQuestion, setShowQuestion] = useState(false);
-  const [activeAgentIdx, setActiveAgentIdx] = useState(-1);
-  const [selectedChoice, setSelectedChoice] = useState(null);
-  const [agentDialogues, setAgentDialogues] = useState({ history: {} });
-  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
-  // 用户推进控制 - 是否等待用户点击"继续"
-  const [awaitingUser, setAwaitingUser] = useState(false);
-  // 用户对当前 Agent 的回应(可空)
-  const [currentResponse, setCurrentResponse] = useState('');
-  // 用户在 committing 阶段写下的一句承诺
-  const [currentCommit, setCurrentCommit] = useState('');
-  // oracle 阶段: 投三枚铜钱立卦
-  const [oracleThrowing, setOracleThrowing] = useState(false);
-  const [oracleResult, setOracleResult] = useState(null);
-  // 浮动提示 (替代 alert)
-  const [floatTip, setFloatTip] = useState(null);
-  const [selectedAgentIds, setSelectedAgentIds] = useState(new Set());
-  const [agentCallResults, setAgentCallResults] = useState({});
-  // Step 4: 工具调用状态（当前发言智囊的工具调用过程与结果，供 Overlay 可视化）
-  const [toolCallState, setToolCallState] = useState({
-    agentId: null, tools: [], currentTool: null, results: [], status: 'idle',
-  });
-  // D3 DebateConvergence - 自适应收敛
-  const MAX_DEBATE_ROUNDS = 3;
-  const [debateRound, setDebateRound] = useState(1);
-  const [debateConvergence, setDebateConvergence] = useState(null);
-  const debateBlackboardRef = useRef(null);
-  // Step 6: 持久化 mentionQueue — 跨轮次保留待回应 @ 列表
-  const debateMentionQueueRef = useRef([]);
-  const [showAgentErrorModal, setShowAgentErrorModal] = useState(false);
-  const [agentErrors, setAgentErrors] = useState({});
-  const [yanMemories, setYanMemories] = useState([]);
-  const [yanConversationId, setYanConversationId] = useState(null);
-  const floatTipTimer = useRef(null);
-  const stageTimersRef = useRef([]);
-  // path_reveal 阶段的命牌内容 (提前 LLM 生成)
-  const [fateContent, setFateContent] = useState(null);
-
-  const activeAgents = useMemo(() => {
-    try {
-      if (!userInput) return [];
-      const presetAgents = getAgentsForQuestion(userInput) || [];
-      const customAgentsList = getCustomAgents();
-      const allAgents = [...presetAgents, ...customAgentsList];
-      if ((phase === 'agent_debate' || phase === 'reflecting' || phase === 'summary' || phase === 'committing' || phase === 'final') && inference?.agents) {
-        return inference.agents;
-      }
-      return allAgents;
-    } catch (e) {
-      console.error('[activeAgents] 生成失败:', e);
-      return [];
+const _normalizeMsg = (raw) => {
+  if (raw == null) return '';
+  const rawToStr = (r) => {
+    if (typeof r === 'string') return r;
+    if (typeof r === 'object') {
+      if (r.text) return String(r.text);
+      try { return JSON.stringify(r).slice(0, 200); } catch { return ''; }
     }
-  }, [userInput, phase, inference]);
-
-  const questionType = useMemo(() => {
-    if (!userInput) return null;
-    const type = detectQuestionType(userInput);
-    return QUESTION_TYPES[type];
-  }, [userInput]);
-
-  const choices = useMemo(() => {
-    if (activeAgents.length <= 2) return DEFAULT_CHOICES.slice(0, 3);
-    if (activeAgents.length >= 5) return DEFAULT_CHOICES;
-    return DEFAULT_CHOICES.slice(0, 3);
-  }, [activeAgents.length]);
-
-  const clearTimers = useCallback(() => {
-    stageTimersRef.current.forEach(t => clearTimeout(t));
-    stageTimersRef.current = [];
-    if (floatTipTimer.current) { clearTimeout(floatTipTimer.current); floatTipTimer.current = null; }
-  }, []);
-
-  // 阶段埋点：监听 phase 变化，触发 phase_exit / phase_enter
-  const prevPhaseRef = useRef(phase);
-  useEffect(() => {
-    const prev = prevPhaseRef.current;
-    if (prev !== phase) {
-      try {
-        tracker.track('phase_exit', { phase: prev });
-        tracker.track('phase_enter', { phase });
-      } catch (e) { /* 埋点失败不影响主流程 */ }
-      prevPhaseRef.current = phase;
-    }
-  }, [phase]);
-
-  // 挂载时记录初始 input 阶段的 phase_enter
-  useEffect(() => {
-    tracker.track('phase_enter', { phase: 'input' });
-  }, []);
-
-  // handleRestart 必须在 handleStart 之前定义，避免 TDZ 错误
-  const handleRestart = useCallback(() => {
-    clearTimers();
-    setPhase('input');
-    setShowInput(true);
-    setShowQuestion(false);
-    setUserInput('');
-    setActiveAgentIdx(-1);
-    setSelectedChoice(null);
-    setAgentDialogues({ history: {} });
-    setShowHistoryPanel(false);
-    setAwaitingUser(false);
-    setCurrentResponse('');
-    setInference(null);
-    setDebateRound(1);
-    setDebateConvergence(null);
-    debateBlackboardRef.current = null;
-    debateMentionQueueRef.current = [];
-  }, [clearTimers]);
-
-  const handleStart = useCallback(async () => {
-    try {
-      if (!inputValue.trim()) return;
-      const question = inputValue.trim();
-      setUserInput(question);
-      setShowInput(false);
-      setShowQuestion(true);
-      setPhase('casting');
-      setActiveAgentIdx(-1);
-      setSelectedChoice(null);
-      setAgentDialogues({ history: {} });
-      setAwaitingUser(false);
-      setCurrentResponse('');
-
-      let inf = null;
-      try {
-        inf = await generateInferenceContent(question);
-      } catch (e) {
-        console.error('[handleStart] 生成推演内容异常:', e);
-        inf = null;
-      }
-      
-      if (!inf || !inf.agents || inf.agents.length === 0) {
-        console.warn('[handleStart] 生成推演内容失败，使用默认配置');
-        inf = {
-          agents: [
-            { id: 'fengyan', name: '风眼', stance: '风险视角', role: 'permanent', trigram: '☵', color: '#A84848', glow: '#E88080' },
-            { id: 'jingyuan', name: '镜渊', stance: '反思视角', role: 'permanent', trigram: '☶', color: '#685888', glow: '#A898C8' },
-            { id: 'qiangu', name: '钱谷', stance: '财务视角', role: 'dynamic', trigram: '☰', color: '#C88848', glow: '#E8B880' },
-            { id: 'luxiang', name: '路向', stance: '职业视角', role: 'dynamic', trigram: '☴', color: '#508870', glow: '#80C8A8' },
-          ],
-          agentDialogues: {},
-          powerfulQuestion: '细细思索，你最在意的是什么？',
-        };
-      }
-      setInference(inf);
-
-      clearTimers();
-
-      const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-      await delay(4000);
-      setPhase('analyzing');
-
-      await delay(3000);
-      setPhase('summoning');
-
-      await delay(2500);
-      setPhase('yan_analyze');
-      
-      // 立即设置演的初始对话，防止白页
-      setAgentDialogues(prev => ({
-        ...prev,
-        yan: '演 · 正在思索……',
-        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), '演 · 正在思索……'] },
-      }));
-      
-      let yanText = '';
-      let source = 'preset';
-      
-      try {
-        let backendMemories = [];
-        try {
-          backendMemories = await getYanMemories(question.slice(0, 20));
-          setYanMemories(backendMemories || []);
-        } catch (e) {
-          console.warn('[演分析] 后端记忆失败:', e);
-        }
-
-        // 本地分层记忆召回（工作/事实/情景/语义四类）
-        const localMemories = recallRelevantMemories(question);
-        const localMemoryContext = formatMemoriesForPrompt(localMemories);
-        const backendMemoryContext = (backendMemories || []).slice(0, 5)
-          .map(m => `【记忆】${m.title}: ${m.content.slice(0, 50)}`).join('\n');
-        const memoryContext = [localMemoryContext, backendMemoryContext].filter(Boolean).join('\n\n');
-        const fullQuestion = memoryContext ? `${question}\n\n用户过往相关信息:\n${memoryContext}` : question;
-
-        if (isLlmAvailable()) {
-          setFloatTip('演 · 正在思考分析...');
-          try {
-            const result = await streamYanChat({ 
-              message: `请分析用户的问题，并提出一个关键的追问来帮助深入了解用户的真实情况。\n\n用户问题：${fullQuestion}`,
-              conversationId: yanConversationId 
-            }, (chunk, fullText, convId) => {
-              setYanConversationId(convId);
-            });
-            
-            if (result && result.text && result.text.length > 5) {
-              yanText = result.text;
-              source = 'llm';
-              if (result.conversationId) {
-                setYanConversationId(result.conversationId);
-              }
-            }
-          } catch (e) {
-            console.warn('[演分析] streamYanChat失败:', e);
-          }
-        }
-      } catch (e) {
-        console.warn('[演分析] 整体处理失败，降级本地:', e);
-      }
-
-      if (!yanText || yanText.length <= 5) {
-        const currentInf = inf || {};
-        if (currentInf.reasoning && currentInf.analysis) {
-          yanText = `${currentInf.analysis}\n\n${currentInf.reasoning}\n\n${currentInf.powerfulQuestion || '细细思索，你最在意的是什么？'}`;
-        } else if (currentInf.reasoning) {
-          yanText = `${currentInf.reasoning}\n\n${currentInf.powerfulQuestion || '细细思索，你最在意的是什么？'}`;
-        } else if (currentInf.analysis) {
-          yanText = `${currentInf.analysis}\n\n${currentInf.powerfulQuestion || '细细思索，你最在意的是什么？'}`;
-        } else {
-          yanText = currentInf.powerfulQuestion || '此问关乎抉择，让我细细思索……';
-        }
-        source = 'preset';
-      }
-      
-      setFloatTip(null);
-      
-      setAgentDialogues(prev => ({
-        ...prev,
-        yan: yanText,
-        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), { text: yanText, source }] },
-      }));
-      setAwaitingUser(true);
-    } catch (e) {
-      console.error('[handleStart] 推演启动失败:', e);
-      setFloatTip('推演启动失败，请重试');
-      setTimeout(() => {
-        handleRestart();
-      }, 2000);
-    }
-  }, [inputValue, clearTimers, yanConversationId, handleRestart]);
-
-  // 用户点击"继续" - 推进到下一位 Agent 或下一阶段
-  const handleUserAdvance = useCallback(async () => {
-    if (!inference) return;
-
-    if (phase === 'yan_analyze') {
-      // 保存用户对演追问的回答
-      const yanAnswer = currentResponse.trim();
-      if (yanAnswer) {
-        setAgentDialogues(prev => {
-          const history = { ...(prev.history || {}) };
-          const arr = history.yan || [];
-          history.yan = [...arr, `【你】${yanAnswer}`];
-          return { ...prev, yan: `【你】${yanAnswer}`, history };
-        });
-        setCurrentResponse('');
-
-        // 将用户回答发送给演，获取提炼后的分析
-        try {
-          setFloatTip('演 · 正在消化你的回答...');
-          const result = await streamYanChat({
-            message: `用户对你的追问回答如下：\n"${yanAnswer}"\n\n请基于这个回答，用2-3句话提炼关键信息，这些信息将传递给智囊团作为分析背景。直接输出提炼结果，不要寒暄。`,
-            conversationId: yanConversationId
-          }, (chunk, fullText, convId) => {
-            setYanConversationId(convId);
-          });
-
-          if (result && result.text && result.text.length > 5) {
-            setYanConversationId(result.conversationId);
-            // 将提炼的信息保存，供Agent使用
-            setInference(prev => prev ? { ...prev, userContext: result.text } : prev);
-            // 更新演的发言
-            setAgentDialogues(prev => ({
-              ...prev,
-              yan: result.text,
-              history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), { text: result.text, source: 'llm' }] },
-            }));
-          }
-        } catch (e) {
-          console.warn('[演追问] 处理用户回答失败:', e);
-        }
-        setFloatTip(null);
-      }
-
-      setPhase('agent_select');
-      const agents = inference.agents || [];
-      // 演·推荐：基于问题关键词匹配订阅智囊，自动预选中（最多1个，避免过多）
-      const recommended = recommendSubscribedAgents(userInput);
-      const preSelected = new Set(agents.slice(0, 2).map(a => a.id));
-      if (recommended.length > 0) {
-        preSelected.add(recommended[0].id);
-        // 推荐提示
-        setFloatTip(`演荐 · ${recommended[0].name} 或可参议`);
-        setTimeout(() => setFloatTip(null), 3000);
-      }
-      setSelectedAgentIds(preSelected);
-      setAwaitingUser(true);
-      return;
-    }
-    
-    const agents = inference.agents;
-    const dialogues = inference.agentDialogues;
-    const currentIdx = activeAgentIdx;
-    const currentAgent = agents[currentIdx];
-
-    // 保存用户对当前 Agent 的回应(如有)
-    const userAnswer = currentResponse.trim();
-    if (userAnswer && currentIdx >= 0) {
-      const agentId = currentAgent.id;
-      setAgentDialogues(prev => {
-        const history = { ...(prev.history || {}) };
-        const arr = history[agentId] || [];
-        history[agentId] = [...arr, `【你】${userAnswer}`];
-        return { ...prev, [agentId]: `【你】${userAnswer}`, history };
-      });
-      setCurrentResponse('');
-    }
-
-    setAwaitingUser(false);
-
-    // 获取当前Agent的对话历史
-    const dialogueHistory = [];
-    if (currentIdx >= 0) {
-      const agentHistory = agentDialogues.history?.[currentAgent.id] || [];
-      dialogueHistory.push(...agentHistory);
-    }
-
-    // 判断当前Agent是否需要继续追问（最后一位智囊跳过，直接进总结）
-    if (currentIdx >= 0 && currentIdx < agents.length - 1) {
-      const continueResult = await judgeContinueAsking(currentAgent, userInput, dialogueHistory, userAnswer);
-      if (continueResult.continueAsking && continueResult.nextQuestion) {
-        const nextQuestion = continueResult.nextQuestion;
-        setAgentDialogues(prev => {
-          const history = { ...(prev.history || {}) };
-          const arr = history[currentAgent.id] || [];
-          history[currentAgent.id] = [...arr, nextQuestion];
-          return { ...prev, [currentAgent.id]: nextQuestion, history };
-        });
-        setAwaitingUser(true);
-        return;
-      }
-    }
-
-    // 不需要追问，切换到下一位 Agent
-    if (currentIdx < agents.length - 1) {
-      const nextIdx = currentIdx + 1;
-      const t = setTimeout(() => {
-        setActiveAgentIdx(nextIdx);
-        const dialogue = dialogues[agents[nextIdx].id] || '...';
-        setAgentDialogues(prev => {
-          const history = { ...(prev.history || {}) };
-          const existing = history[agents[nextIdx].id] || [];
-          if (existing.includes(dialogue)) {
-            return prev;
-          }
-          history[agents[nextIdx].id] = [...existing, dialogue];
-          return { ...prev, [agents[nextIdx].id]: dialogue, history };
-        });
-        setAwaitingUser(true);
-      }, 800);
-      stageTimersRef.current.push(t);
-    } else {
-      setAwaitingUser(false);
-      
-      const yanSummary = await generateYanSummary(userInput, agentDialogues || {}, agents);
-      setInference(prev => ({ ...(prev || {}), summary: yanSummary.summary || '诸位各抒己见,皆有道理。' }));
-
-      // 动态分支：基于分歧度调整反思时长（分歧大→反思久，文案强调分歧）
-      const consensusScore = debateConvergence?.consensusScore ?? 0.6;
-      const isDivergent = !debateConvergence?.converged || consensusScore < 0.6;
-      const reflectDelay = isDivergent ? 6500 : 4300;
-      const reflectingText = isDivergent
-        ? `诸位的分歧颇大,各执一词。\n${yanSummary.keyPoints?.join('、') || '各方视角,碰撞激烈'}\n分歧之中,常藏真意。让我再细加梳理……`
-        : `诸位所议,皆有道理。\n${yanSummary.keyPoints?.join('、') || '各方视角,各有见地'}\n听罢,让我再思量一卦……`;
-
-      const t1 = setTimeout(() => {
-        setPhase('reflecting');
-        setActiveAgentIdx(-1);
-        setShowQuestion(false);
-        setAgentDialogues(prev => ({
-          ...prev,
-          yan: reflectingText,
-          history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), reflectingText] },
-        }));
-      }, 800);
-      const t2 = setTimeout(() => {
-        setPhase('summary');
-        let summaryText = yanSummary.summary || `诸位各抒己见,我已梳理完毕。\n此局无定论,关键在你自己。\n请做出你的抉择。`;
-        // 演·点出模式：检测用户历史选择模式，连续≥3次同倾向时演主动提醒
-        try {
-          const pattern = detectChoicePattern();
-          if (pattern.hint) {
-            summaryText = `${summaryText}\n\n——\n${pattern.hint}`;
-          }
-        } catch (e) { /* ignore */ }
-        setAgentDialogues(prev => ({
-          ...prev,
-          yan: summaryText,
-          history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), summaryText] },
-        }));
-        setAwaitingUser(true);
-      }, reflectDelay);
-      stageTimersRef.current.push(t1, t2);
-    }
-  }, [activeAgentIdx, inference, currentResponse, userInput, agentDialogues, debateConvergence]);
-
-  // Step 4: 工具调用回调 — 转发给 generateDialoguesForAgents，更新 toolCallState 供 Overlay 可视化
-  // 使用 useCallback 保证引用稳定，避免重渲染打字机
-  const handleToolStart = useCallback((agentId, tools) => {
-    setToolCallState({ agentId, tools, currentTool: null, results: [], status: 'calling' });
-  }, []);
-  const handleToolCall = useCallback((agentId, tool, params) => {
-    setToolCallState(prev => prev.agentId === agentId
-      ? { ...prev, currentTool: tool, status: 'calling' }
-      : prev);
-  }, []);
-  const handleToolResult = useCallback((agentId, tool, summary, status) => {
-    setToolCallState(prev => prev.agentId === agentId
-      ? { ...prev, results: [...prev.results, { tool, summary, status }] }
-      : prev);
-  }, []);
-  const toolCallbacks = useMemo(() => ({
-    onToolStart: handleToolStart,
-    onToolCall: handleToolCall,
-    onToolResult: handleToolResult,
-  }), [handleToolStart, handleToolCall, handleToolResult]);
-
-  const handleConfirmAgents = useCallback(async () => {
-    if (!inference) return;
-    const customAgentsList = getCustomAgents();
-    const allAgents = [...(inference.agents || []), ...customAgentsList];
-    const selected = allAgents.filter(a => selectedAgentIds.has(a.id));
-    if (selected.length === 0) {
-      setFloatTip('请至少选择一位智囊');
-      return;
-    }
-    setInference(prev => prev ? { ...prev, agents: selected } : { agents: selected });
-    setAwaitingUser(false);
-    
-    clearTimers();
-    setPhase('agent_debate');
-    setActiveAgentIdx(0);
-    setFloatTip('智囊正在斟酌发言…');
-
-    const question = userInput;
-    const qType = detectQuestionType(question);
-    const newDialogues = {};
-    const callResults = {};
-    let hasErrors = false;
-    let allErrors = {};
-
-    // Step 4: 重置工具调用状态（新一轮辩论开始）
-    setToolCallState({ agentId: null, tools: [], currentTool: null, results: [], status: 'idle' });
-
-    const onAgentComplete = (agentId, text, success, error, source, collaboration) => {
-      newDialogues[agentId] = text;
-      callResults[agentId] = { success, error, source, collaboration };
-      if (!success) {
-        hasErrors = true;
-        allErrors[agentId] = { agentName: selected.find(a => a.id === agentId)?.name || agentId, error: error || '未知错误' };
-      }
-      setInference(prev => prev ? { ...prev, agentDialogues: { ...newDialogues } } : { agentDialogues: newDialogues });
-      // Step 4: 标记该智囊工具调用完成（触发 loading 卡片淡出，脚注数据已就绪）
-      setToolCallState(prev => prev.agentId === agentId ? { ...prev, status: 'done' } : prev);
-    };
-
-    const onError = (errors) => {
-      setAgentErrors(errors);
-      setShowAgentErrorModal(true);
-    };
-
-    const result = await generateDialoguesForAgents(question, selected, qType, onAgentComplete, onError, inference.userContext, { round: 1, toolCallbacks });
-    setAgentCallResults(callResults);
-
-    // D3 收敛检测 - 决定是否提示用户「再辩一轮」
-    if (result.blackboard) {
-      debateBlackboardRef.current = result.blackboard;
-      // Step 6: 持久化 mentionQueue，供多轮辩论复用
-      debateMentionQueueRef.current = result.mentionQueue || [];
-      const convergence = detectConvergenceFromBlackboard(result.blackboard, { currentRound: 1 });
-      setDebateRound(1);
-      setDebateConvergence(convergence);
-    }
-    
-    if (hasErrors && Object.keys(allErrors).length > 0) {
-      setAgentErrors(allErrors);
-      setShowAgentErrorModal(true);
-    }
-    
-    setFloatTip(null);
-    
-    const firstDialogue = newDialogues[selected[0].id] || '...';
-    setAgentDialogues(prev => {
-      const history = { ...(prev.history || {}) };
-      const existing = history[selected[0].id] || [];
-      if (existing.includes(firstDialogue)) return prev;
-      history[selected[0].id] = [...existing, { text: firstDialogue, source: callResults[selected[0].id]?.source || 'preset' }];
-      return { ...prev, [selected[0].id]: firstDialogue, history };
-    });
-    setAwaitingUser(true);
-  }, [inference, selectedAgentIds, userInput, clearTimers, toolCallbacks]);
-
-  // D3: 再辩一轮 - 复用 blackboard 上下文，让智囊基于前轮分歧深入
-  const handleRunAnotherRound = useCallback(async () => {
-    if (!inference || !inference.agents) return;
-    const selected = inference.agents;
-    const nextRound = debateRound + 1;
-    if (nextRound > MAX_DEBATE_ROUNDS) return;
-
-    setAwaitingUser(false);
-    setActiveAgentIdx(0);
-    setFloatTip(`第 ${nextRound} 轮辩论中…`);
-
-    const question = userInput;
-    const qType = detectQuestionType(question);
-    const newDialogues = {};
-    const callResults = {};
-    const existingBlackboard = debateBlackboardRef.current;
-    const existingMentionQueue = debateMentionQueueRef.current;
-
-    // Step 4: 重置工具调用状态（新一轮辩论开始）
-    setToolCallState({ agentId: null, tools: [], currentTool: null, results: [], status: 'idle' });
-
-    const onAgentComplete = (agentId, text, success, error, source, collaboration) => {
-      newDialogues[agentId] = text;
-      callResults[agentId] = { success, error, source, collaboration };
-      setInference(prev => prev ? { ...prev, agentDialogues: { ...(prev.agentDialogues || {}), [agentId]: text } } : prev);
-      // Step 4: 标记该智囊工具调用完成
-      setToolCallState(prev => prev.agentId === agentId ? { ...prev, status: 'done' } : prev);
-    };
-
-    const result = await generateDialoguesForAgents(
-      question, selected, qType, onAgentComplete, undefined, inference.userContext,
-      { existingBlackboard, existingMentionQueue, round: nextRound, toolCallbacks }
-    );
-    setAgentCallResults(prev => ({ ...prev, ...callResults }));
-
-    if (result.blackboard) {
-      debateBlackboardRef.current = result.blackboard;
-      // Step 6: 跨轮次持久化 mentionQueue
-      debateMentionQueueRef.current = result.mentionQueue || [];
-      const convergence = detectConvergenceFromBlackboard(result.blackboard, { currentRound: nextRound });
-      setDebateRound(nextRound);
-      setDebateConvergence(convergence);
-    }
-
-    // 把本轮新发言追加到 history，并显示第一位智囊的新发言
-    const firstId = selected[0]?.id;
-    if (firstId && newDialogues[firstId]) {
-      setAgentDialogues(prev => {
-        const history = { ...(prev.history || {}) };
-        for (const a of selected) {
-          const t = newDialogues[a.id];
-          if (t) {
-            const arr = history[a.id] || [];
-            history[a.id] = [...arr, { text: t, source: callResults[a.id]?.source || 'preset', round: nextRound }];
-          }
-        }
-        return { ...prev, [firstId]: newDialogues[firstId], history };
-      });
-    }
-
-    setFloatTip(null);
-    setAwaitingUser(true);
-  }, [inference, userInput, debateRound, toolCallbacks]);
-
-  useEffect(() => () => clearTimers(), [clearTimers]);
-
-  const handleChoiceClick = useCallback(async (choice, index) => {
-    setSelectedChoice(choice);
-    setPhase('path_reveal');
-    setAwaitingUser(false);
-    setFateContent(null); // 重置
-
-    // path_reveal 阶段演 的总结 - 优先用 inference 真实数据
-    setAgentDialogues(prev => {
-      // 从 inference 中取出该选择对应的推演成果
-      const realGua = inference?.gua;
-      const realVerse = inference?.verse;
-      const summary = realGua
-        ? `诸位所见,皆因视角不同。\n卦成${realGua.gua}（${realGua.element}行）,辞曰「${realVerse || '此中深意,待你细品'}」。\n择「${choice.label}」之路,是你的本心所向,亦是天命所归。\n往后的路,且行且思。`
-        : `诸位所见,皆因视角不同。\n择「${choice.label}」之路,是你的本心所向,亦是当下最合适的回响。\n卦已成,辞已立,往后路如何,且行且思。`;
-      return {
-        ...prev,
-        yan: summary,
-        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), summary] },
-      };
-    });
-
-    // 异步提前生成命牌内容 (LLM 个性化卦辞+终局), 不阻塞主流程
-    try {
-      const realGua = inference?.gua;
-      const guaName = realGua?.gua || choice.gua || '大有';
-      const trigram = realGua?.trigram || choice.icon || '☰';
-      const personalized = await generatePersonalizedCardContent({
-        question: userInput,
-        guaName,
-        choiceLabel: choice.label,
-        agentDialogues: inference?.agentDialogues || {},
-        trigram,
-      });
-      setFateContent(personalized);
-    } catch (e) {
-      console.warn('[命牌生成] 失败, 降级:', e.message);
-      setFateContent({ verse: inference?.verse || choice.gua || '', summary: '', source: 'preset' });
-    }
-
-    // 4.5s 后等用户点"揭示命签"
-    const t = setTimeout(() => {
-      setAwaitingUser(true);
-    }, 4500);
-    stageTimersRef.current.push(t);
-  }, [inference, userInput]);
-
-  // 用户点击"揭示命签" - 从 path_reveal 进入 final
-  const handleRevealFate = useCallback(() => {
-    setAwaitingUser(false);
-    setPhase('final');
-  }, []);
-
-  // 总结 -> 决心 -> 抉择: 用户点"看分岔" -> 决心 -> 写承诺 -> oracle_prompt
-  const handleShowChoices = useCallback(() => {
-    setPhase('committing');
-    setAwaitingUser(false);
-    setAgentDialogues(prev => {
-      const reflectingAck = '卦已成,辞已立。\n在分岔之前,请落笔一句你的本心所向。\n不拘长短,只为后日回看。';
-      return {
-        ...prev,
-        yan: reflectingAck,
-        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), reflectingAck] },
-      };
-    });
-  }, []);
-
-  // 决心 -> oracle_prompt
-  const handleCommit = useCallback(() => {
-    if (currentCommit.trim()) {
-      setAgentDialogues(prev => ({
-        ...prev,
-        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), `【你 · 决】${currentCommit.trim()}`] },
-      }));
-      setCurrentCommit('');
-    }
-    setPhase('oracle_prompt');
-    setAgentDialogues(prev => {
-      const oracleAsk = '分岔在前,诸路尚未分明。\n——「需为这一卦再投三枚铜钱,借一束天光吗？」\n也许一卦之后,你自然开解。';
-      return {
-        ...prev,
-        yan: oracleAsk,
-        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), oracleAsk] },
-      };
-    });
-  }, [currentCommit]);
-
-  // 算一卦
-  const handleStartOracle = useCallback(() => {
-    setPhase('oracle');
-    setOracleThrowing(true);
-    setOracleResult(null);
-    setAwaitingUser(false);
-    setTimeout(() => {
-      const ORACLE_GUAS = [
-        { gua: '乾', trigram: '☰', element: '天', verse: '元亨。利贞。', gloss: '天行健, 君子以自强不息。' },
-        { gua: '坤', trigram: '☷', element: '地', verse: '元亨。利牝马之贞。', gloss: '地势坤, 君子以厚德载物。' },
-        { gua: '震', trigram: '☳', element: '雷', verse: '亨。震来虩虩, 笑言哑哑。', gloss: '洊雷, 君子以恐惧修省。' },
-        { gua: '巽', trigram: '☴', element: '风', verse: '小亨。利有攸往。利见大人。', gloss: '随风, 君子以申命行事。' },
-        { gua: '坎', trigram: '☵', element: '水', verse: '习坎, 有孚, 维心亨。', gloss: '习坎, 行有尚。险中可通。' },
-        { gua: '离', trigram: '☲', element: '火', verse: '利贞。亨。畜牝牛, 吉。', gloss: '明两作, 大人以继明照四方。' },
-        { gua: '艮', trigram: '☶', element: '山', verse: '艮其背, 不获其身。', gloss: '兼山, 止其所也。静观其变。' },
-        { gua: '兑', trigram: '☱', element: '泽', verse: '亨。利贞。', gloss: '丽泽, 君子以朋友讲习。' },
-      ];
-      const r = ORACLE_GUAS[Math.floor(Math.random() * ORACLE_GUAS.length)];
-      setOracleResult(r);
-      setOracleThrowing(false);
-      setInference(prev => ({ ...(prev || {}), gua: { gua: r.gua, trigram: r.trigram, element: r.element }, verse: r.verse, oracleGloss: r.gloss }));
-      setAgentDialogues(prev => {
-        const oracleResp = `此卦${r.gua}（${r.trigram}·属${r.element}）。\n${r.verse}\n——${r.gloss}\n请将此天光带入分岔。`;
-        return {
-          ...prev,
-          yan: oracleResp,
-          history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), oracleResp] },
-        };
-      });
-    }, 1800);
-  }, []);
-
-  // 算完,继续到分岔
-  const handleProceedToChoices = useCallback(() => {
-    setPhase('path_reveal');
-    setAgentDialogues(prev => ({
-      ...prev,
-      yan: '卦已成,天光已借。\n分岔在前,请选择你的路径。',
-      history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), '卦已成,天光已借。分岔在前,请选择你的路径。'] },
-    }));
-  }, []);
-
-  // 跳过占卜,直接看分岔
-  const handleSkipOracle = useCallback(() => {
-    setPhase('path_reveal');
-    setAgentDialogues(prev => {
-      const skipMsg = '「也罢。心已明, 便不必再劳烦天机。分岔就在眼前。」';
-      return {
-        ...prev,
-        yan: skipMsg,
-        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), skipMsg] },
-      };
-    });
-  }, []);
-
-  const handleAgentClick = useCallback((agent) => {
-    setShowHistoryPanel(true);
-  }, []);
-
-  // handleRestart 已在前面定义
-
-  // 保存到卡牌册 - 用 inference 真实数据,3 件实用品随卡入册
-  const handleSaveToCollection = useCallback(async () => {
-    try {
-      // 兜底卦象映射
-      const fallbackMap = {
-        opportunity: { gua: '大有', trigram: '☰', verse: '元亨。柔得尊位,大亨以正。', element: '火', style: '机会型' },
-        risk:        { gua: '坎',  trigram: '☵', verse: '习坎,有孚,维心亨。', element: '水', style: '稳健型' },
-        stable:      { gua: '艮',  trigram: '☶', verse: '艮其背,不获其身。', element: '山', style: '稳健型' },
-        explore:     { gua: '巽',  trigram: '☴', verse: '小亨,利有攸往。', element: '风', style: '机会型' },
-      };
-      const fb = fallbackMap[selectedChoice?.id] || fallbackMap.opportunity;
-      // 优先使用 inference 生成的真实数据
-      const realGua = inference?.gua;
-      const advisors = (activeAgents || []).filter(a => a && a.role !== 'master').map(a => a.name).filter(Boolean);
-      const guaName = realGua?.gua || fb.gua;
-      const trigram = realGua?.trigram || fb.trigram;
-      const choiceLabel = selectedChoice?.label || '抓住机会';
-
-      // 命签生成深化：优先复用 path_reveal 阶段已生成的个性化内容, 否则现生成
-      let personalized = fateContent;
-      if (!personalized || !personalized.verse) {
-        try {
-          personalized = await generatePersonalizedCardContent({
-            question: userInput,
-            guaName,
-            choiceLabel,
-            agentDialogues: inference?.agentDialogues || {},
-            trigram,
-          });
-        } catch (e) {
-          personalized = { verse: inference?.verse || fb.verse, summary: '', source: 'preset' };
-        }
-      }
-
-      // 完整推演路径 - 供收藏后回看 + 分享卡生成
-      const agentNotes = (activeAgents || [])
-        .filter(a => a && a.role !== 'master')
-        .map(a => {
-          const arr = inference?.agentDialogues?.history?.[a.id] || inference?.agentDialogues?.[a.id] || [];
-          const last = Array.isArray(arr) ? arr[arr.length - 1] : null;
-          const text = typeof last === 'string' ? last : (last?.text || '');
-          return { id: a.id, name: a.name, color: a.color || '#C8A850', note: (text || '').slice(0, 80) };
-        })
-        .filter(a => a.note)
-        .slice(0, 6);
-
-      const card = {
-        id: `card-${Date.now()}`,
-        gua: guaName,
-        trigram,
-        element: realGua?.element || fb.element,
-        title: choiceLabel,
-        question: userInput,
-        decision: choiceLabel,
-        style: realGua?.element ? `${realGua.element}行` : fb.style,
-        advisors: advisors.length > 0 ? advisors : ['演'],
-        // 3 件实用品 - 推演成果随卡保存（verse/summary 用 LLM 个性化生成）
-        verse: personalized.verse || inference?.verse || fb.verse,
-        powerfulQuestion: inference?.powerfulQuestion || '',
-        framework: inference?.framework || '',
-        summary: personalized.summary || inference?.summary || '此卦已入卡牌册,留作后日之镜。',
-        cardSource: personalized.source,
-        // 卦象元素
-        guaElement: realGua?.element || fb.element,
-        // 完整推演路径 - 供回看 + 分享
-        yanSummary: inference?.summary || personalized.summary || '',
-        agentNotes,
-        choice: selectedChoice ? { id: selectedChoice.id, label: selectedChoice.label, icon: selectedChoice.icon } : null,
-        commit: currentCommit || '',
-        // 时间
-        date: new Date().toISOString().split('T')[0],
-        pillars: (() => {
-          const now = new Date();
-          const stems = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸'];
-          const branches = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
-          const pillar = (n) => stems[n % 10] + branches[n % 12];
-          return {
-            year: pillar(now.getFullYear() + 4),
-            month: pillar(now.getMonth() + 1 + now.getFullYear()),
-            day: pillar(now.getDate() + (now.getMonth() + 1) * 3),
-            hour: pillar(now.getHours() + now.getDate() * 2),
-          };
-        })(),
-        hasAchievement: false,
-      };
-      const saved = JSON.parse(localStorage.getItem('yance_collection') || '[]');
-      saved.unshift(card);
-      localStorage.setItem('yance_collection', JSON.stringify(saved));
-      
-      addYanMemory({
-        category: 'deduction',
-        title: userInput.slice(0, 20) + (userInput.length > 20 ? '...' : ''),
-        content: `问题：${userInput}\n决策：${selectedChoice?.label || '未选择'}\n卦象：${card.gua}\n总结：${card.summary.slice(0, 100)}`,
-        source: '推演台',
-        confidence: 0.8,
-      }).catch(e => console.warn('[记忆保存] 失败', e));
-
-      // 本地分层记忆：保存情景记忆 + 提取事实记忆
-      try {
-        saveEpisode({
-          question: userInput,
-          decision: selectedChoice?.label || '未选择',
-          hexagram: card.gua || '',
-          guaName: card.title || '',
-          agents: (inference?.agents || []).map(a => a.id),
-          choice: selectedChoice?.id || '',
-        });
-        inferFactsFromSession({
-          question: userInput,
-          choice: selectedChoice?.id,
-          agents: inference?.agents || [],
-        });
-      } catch (e) {
-        console.warn('[情景记忆保存] 失败', e);
-      }
-      
-      setFloatTip(`命签「${card.gua} · ${card.title}」已入卡牌册`);
-      if (floatTipTimer.current) clearTimeout(floatTipTimer.current);
-      floatTipTimer.current = setTimeout(() => setFloatTip(null), 2400);
-    } catch (e) {
-      console.error('保存失败', e);
-    }
-  }, [selectedChoice, userInput, activeAgents, inference, fateContent]);
-
-  // 顶栏提示文字
-  const phaseLabel = useMemo(() => {
-    try {
-      const agents = activeAgents || [];
-      const nonMasterAgents = agents.filter(a => a.role !== 'master');
-      switch (phase) {
-        case 'casting': return '演 · 起卦 · 投三枚铜钱';
-        case 'analyzing': return '演 · 理解问题';
-        case 'summoning': return `演 · 召唤顾问 · ${nonMasterAgents.length} 位`;
-        case 'agent_debate': return activeAgentIdx >= 0 ? `${nonMasterAgents[activeAgentIdx]?.name || ''} 发言中 · ${activeAgentIdx + 1}/${nonMasterAgents.length}` : '诸智集结';
-        case 'reflecting': return '演 · 反思汇聚';
-        case 'summary': return '演 · 梳理总结';
-        case 'committing': return '演 · 落笔本心';
-        case 'oracle_prompt': return '演 · 借天光否';
-        case 'oracle': return oracleThrowing ? '演 · 落卦中' : (oracleResult ? `演 · 天机已现 · ${oracleResult.gua}` : '演 · 借天光否');
-        case 'branch_select': return '请选择你的路径';
-        case 'path_reveal': return '路径已定';
-        case 'final': return '推演完成';
-        default: return '';
-      }
-    } catch (e) {
-      console.error('[phaseLabel] 生成失败:', e);
-      return '';
-    }
-  }, [phase, activeAgentIdx, activeAgents, oracleThrowing, oracleResult]);
-
-  const historyCount = useMemo(() => {
-    const h = agentDialogues?.history || {};
-    return Object.values(h).reduce((sum, arr) => sum + arr.length, 0);
-  }, [agentDialogues]);
-
-  // Step 6: 从 blackboard 提取 mention 消息（isMention 或 refusalReason），传给 overlay 做可视化
-  // 依赖 debateRound/phase/agentDialogues 触发重算（blackboard 是 ref，需要靠 state 变化驱动）
-  const mentionMessages = useMemo(() => {
-    const msgs = debateBlackboardRef.current?.messages;
-    if (!Array.isArray(msgs)) return [];
-    return msgs.filter(m => m && (m.isMention || m.refusalReason));
-  }, [debateRound, phase, agentDialogues]);
+    return String(r);
+  };
+  let s = rawToStr(raw);
+  // 把内部前缀【你】统一翻译成自然前缀「你：」，避免【】代码括号出现在UI
+  if (s.startsWith('【你】')) {
+    s = '你：' + s.slice('【你】'.length);
+  }
+  return sanitizeLLMText(s);
+};
+
+const VIRTUAL_ROLES = [
+  { id: 'yan', name: '演', stance: '提问·析理', color: '#E8C670', glow: '#FFE89A', role: 'virtual', font: 'seal' },
+  { id: 'jingyuan', name: '镜渊', stance: '反省·审查', color: '#A898C8', glow: '#C8B8FF', role: 'virtual', font: 'script' },
+];
+
+// ========= 卦镜 · 赛博八卦盘 SVG 组件 =========
+// 接收：name(卦名), symbol(八卦字符/卦象), trigram(单卦符), palace(宫), wuxing(五行),
+//       ganzhi(干支短串), movingLine(动爻数 1-6), movingLineMeaning(动爻辞), verse(卦辞首行)
+function GuaMirror({
+  size = 260,
+  name = '大有',
+  symbol = '☰',
+  trigram,
+  palace,
+  wuxing,
+  ganzhi,
+  movingLine,
+  movingLineMeaning,
+  verse,
+  accent = GLOW_COLOR,
+  rust = RUST_COLOR,
+  gold = BORDER_COLOR,
+}) {
+  // 8 外卦名（后天文王顺序：乾坎艮震巽离坤兑）
+  const BAGUA = ['乾', '坎', '艮', '震', '巽', '离', '坤', '兑'];
+  const BAGUA_SYMBOLS = ['☰', '☵', '☶', '☳', '☴', '☲', '☷', '☱'];
+  const center = size / 2;
+  const outerR = size * 0.48;    // 最外环
+  const ring8R = size * 0.41;    // 8卦环
+  const ring8innerR = size * 0.33;
+  const taijiR = size * 0.23;    // 太极（中心环）半径
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: '#1A1410' }}>
+    <div style={{
+      position: 'relative',
+      width: size,
+      height: size,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      filter: `drop-shadow(0 0 28px ${accent}55) drop-shadow(0 0 8px ${accent}88)`,
+    }}>
+      {/* 背景发光晕 */}
+      <motion.div
+        aria-hidden
+        animate={{ opacity: [0.4, 0.75, 0.4], scale: [1, 1.04, 1] }}
+        transition={{ duration: 4.5, repeat: Infinity, ease: 'easeInOut' }}
+        style={{
+          position: 'absolute', inset: '6%',
+          borderRadius: '50%',
+          background: `radial-gradient(circle, ${accent}22 0%, transparent 70%)`,
+        }}
+      />
+
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ position: 'absolute', inset: 0 }}>
+        <defs>
+          <radialGradient id="gua-disc-bg" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="rgba(26,18,12,0.92)" />
+            <stop offset="75%" stopColor="rgba(30,22,14,0.96)" />
+            <stop offset="100%" stopColor="rgba(12,8,4,1)" />
+          </radialGradient>
+          <linearGradient id="gua-ring-gold" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#F8E4B0" />
+            <stop offset="45%" stopColor={gold} />
+            <stop offset="100%" stopColor="#7A5A24" />
+          </linearGradient>
+          <filter id="gua-glow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="2.5" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+
+        {/* 最外环圆（金） */}
+        <circle cx={center} cy={center} r={outerR} fill="url(#gua-disc-bg)" stroke="url(#gua-ring-gold)" strokeWidth="2.5" />
+        <circle cx={center} cy={center} r={outerR - 6} fill="none" stroke={`${gold}55`} strokeWidth="0.8" strokeDasharray="2 3" />
+
+        {/* 外围 24 节刻度 (节气感) */}
+        {Array.from({ length: 36 }).map((_, i) => {
+          const a = (i / 36) * Math.PI * 2 - Math.PI / 2;
+          const isMajor = i % 3 === 0;
+          const r1 = outerR - (isMajor ? 18 : 13);
+          const r2 = outerR - 5;
+          const x1 = center + Math.cos(a) * r1;
+          const y1 = center + Math.sin(a) * r1;
+          const x2 = center + Math.cos(a) * r2;
+          const y2 = center + Math.sin(a) * r2;
+          return (
+            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke={isMajor ? accent : `${gold}77`}
+              strokeWidth={isMajor ? 1.6 : 0.7}
+              opacity={isMajor ? 0.95 : 0.5}
+            />
+          );
+        })}
+
+        {/* 8 卦环（缓慢旋转组） */}
+        <motion.g
+          animate={{ rotate: 360 }}
+          transition={{ duration: 90, repeat: Infinity, ease: 'linear' }}
+          style={{ transformOrigin: `${center}px ${center}px` }}
+        >
+          {/* 8 卦分割线（8 条径向虚线） */}
+          {BAGUA.map((_, i) => {
+            const a = (i / 8) * Math.PI * 2;
+            const x1 = center + Math.cos(a) * ring8innerR;
+            const y1 = center + Math.sin(a) * ring8innerR;
+            const x2 = center + Math.cos(a) * (ring8R + 6);
+            const y2 = center + Math.sin(a) * (ring8R + 6);
+            return (
+              <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={`${gold}33`} strokeWidth="0.6" strokeDasharray="1 2" />
+            );
+          })}
+
+          {/* 8 卦字符 沿环排布 */}
+          {BAGUA.map((guaName, i) => {
+            const a = (i / 8) * Math.PI * 2 - Math.PI / 2;
+            const rText = (ring8R + ring8innerR) / 2;
+            const x = center + Math.cos(a) * rText;
+            const y = center + Math.sin(a) * rText;
+            const rotDeg = (a * 180) / Math.PI + 90;
+            return (
+              <g key={guaName} transform={`translate(${x}, ${y}) rotate(${rotDeg})`}>
+                <text textAnchor="middle" y="-5"
+                  fontSize={size * 0.046}
+                  fill={accent}
+                  style={{ fontFamily: '"Ma Shan Zheng", serif', filter: 'url(#gua-glow)', letterSpacing: '0.05em' }}
+                >
+                  {BAGUA_SYMBOLS[i]}
+                </text>
+                <text textAnchor="middle" y={size * 0.028}
+                  fontSize={size * 0.032}
+                  fill="#E6D4A8"
+                  opacity="0.85"
+                  style={{ fontFamily: '"Noto Serif SC", serif', letterSpacing: '0.05em' }}
+                >
+                  {guaName}
+                </text>
+              </g>
+            );
+          })}
+        </motion.g>
+
+        {/* 中心太极环（外圈） */}
+        <circle cx={center} cy={center} r={taijiR + 8} fill="none" stroke={`${gold}88`} strokeWidth="1" />
+        <circle cx={center} cy={center} r={taijiR} fill="rgba(16,10,4,0.85)" stroke={`${accent}AA`} strokeWidth="1.2" />
+
+        {/* 太极鱼（反色旋转） */}
+        <motion.g
+          animate={{ rotate: -360 }}
+          transition={{ duration: 70, repeat: Infinity, ease: 'linear' }}
+          style={{ transformOrigin: `${center}px ${center}px` }}
+        >
+          <path
+            d={
+              (() => {
+                const R = taijiR - 2;
+                const yTop = center - R;
+                // 标准太极路径（右半白上→左半白下，两个点）
+                const d = [
+                  `M ${center} ${yTop}`,
+                  `A ${R} ${R} 0 0 1 ${center} ${center + R}`,
+                  `A ${R / 2} ${R / 2} 0 0 1 ${center} ${center}`,
+                  `A ${R / 2} ${R / 2} 0 0 0 ${center} ${yTop}`,
+                  'Z',
+                ].join(' ');
+                return d;
+              })()
+            }
+            fill={accent}
+            opacity="0.92"
+          />
+          <circle cx={center} cy={center - taijiR / 2 + 1} r={Math.max(1.5, taijiR * 0.12)} fill="rgba(16,10,4,1)" />
+          <circle cx={center} cy={center + taijiR / 2 - 1} r={Math.max(1.5, taijiR * 0.12)} fill={accent} />
+        </motion.g>
+      </svg>
+
+      {/* 中心卦名/卦符文字层（不随旋转动） */}
+      <div style={{
+        position: 'relative', zIndex: 2,
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        width: taijiR * 1.4,
+        height: taijiR * 1.4,
+        pointerEvents: 'none',
+        color: '#FFF7E0',
+        textAlign: 'center',
+      }}>
+        <motion.div
+          initial={{ scale: 0, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.7, delay: 0.15, type: 'spring', bounce: 0.25 }}
+          style={{
+            fontSize: size * 0.10,
+            fontFamily: '"Ma Shan Zheng", serif',
+            lineHeight: 1,
+            color: accent,
+            textShadow: `0 0 14px ${accent}CC, 0 0 4px #fff8`,
+            marginBottom: 2,
+          }}
+        >
+          {trigram || symbol}
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.35 }}
+          style={{
+            fontSize: size * 0.048,
+            fontFamily: '"Ma Shan Zheng", serif',
+            letterSpacing: '0.2em',
+            color: '#FFF2CC',
+            textShadow: `0 0 6px ${accent}`,
+          }}
+        >
+          {name}卦
+        </motion.div>
+      </div>
+
+      {/* 底部信息横条（宫 · 五行 · 干支） */}
+      <div style={{
+        position: 'absolute',
+        left: 0, right: 0,
+        bottom: size * 0.03,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+        pointerEvents: 'none',
+      }}>
+        {ganzhi && (
+          <div style={{
+            fontSize: Math.max(9, size * 0.03),
+            color: '#D4C090',
+            letterSpacing: '0.3em',
+            fontFamily: '"Noto Serif SC", serif',
+            background: 'rgba(16,10,4,0.5)',
+            padding: '2px 10px',
+            borderRadius: 2,
+            border: `1px solid ${gold}44`,
+            backdropFilter: 'blur(2px)',
+          }}>
+            {ganzhi}
+          </div>
+        )}
+        {(palace || wuxing) && (
+          <div style={{
+            fontSize: Math.max(9, size * 0.028),
+            color: accent,
+            letterSpacing: '0.18em',
+            fontFamily: '"Ma Shan Zheng", serif',
+            textShadow: `0 0 6px ${accent}77`,
+            marginTop: ganzhi ? 0 : size * 0.02,
+          }}>
+            {palace ? `${palace}宫 · ` : ''}
+            {wuxing ? `属${wuxing}` : ''}
+            {movingLine ? ` · 第${movingLine}爻动` : ''}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function Game() {
+  const flow = useGameFlow({ DEFAULT_CHOICES });
+  const {
+    phase, userInput, inputValue, setInputValue, inference, showInput,
+    showQuestion, activeAgentIdx, selectedChoice, agentDialogues,
+    showHistoryPanel, setShowHistoryPanel, awaitingUser, currentResponse,
+    setCurrentResponse, currentCommit, setCurrentCommit, oracleThrowing,
+    oracleResult, floatTip, selectedAgentIds, setSelectedAgentIds,
+    agentCallResults, setAgentCallResults, toolCallState, debateRound,
+    debateConvergence, showAgentErrorModal, setShowAgentErrorModal,
+    agentErrors, fateContent, activeAgents, choices, phaseLabel,
+    historyCount, mentionMessages, setFloatTip, setInference,
+    caseFile, yanQuestionRounds, progress, memoryLayers, mirrorReview,
+    debateAutoPlay, setDebateAutoPlay, handleSkipToSummary,
+    handleRestart, handleStart, handleUserAdvance, handleSkipClarify, handleConfirmAgents,
+    handleRunAnotherRound, handleChoiceClick, handleRevealFate,
+    handleShowChoices, handleCommit, handleStartOracle,
+    handleProceedToChoices, handleSkipOracle, handleAgentClick,
+    handleSaveToCollection, handleConfirmCaseFile, handleBackFromCaseFile,
+    infoProgress, MAX_CLARIFY_ROUNDS, saveGameState, fateRevealed,
+  } = flow;
+
+  // ★ Fix: 全局反馈 toast — 受用/失言按钮按下后任何阶段都立刻显示"生效了"
+  const [feedbackToast, setFeedbackToast] = useState(null); // { text, color, key }
+  const feedbackToastTimerRef = useRef(null);
+  const handleShowFeedbackToast = useCallback((text, color) => {
+    if (feedbackToastTimerRef.current) {
+      clearTimeout(feedbackToastTimerRef.current);
+      feedbackToastTimerRef.current = null;
+    }
+    setFeedbackToast({ text, color, key: Date.now() });
+    feedbackToastTimerRef.current = setTimeout(() => setFeedbackToast(null), 1600);
+  }, []);
+
+  return (
+    <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)' }}>
+      <div className="crt-overlay" />
       <div className="flex-1 min-h-0 overflow-hidden relative">
         <div className="w-full h-full relative">
           <Board
@@ -926,13 +360,214 @@ export default function Game() {
             showQuestion={showQuestion}
             selectedChoice={selectedChoice}
             inference={inference}
+            fateRevealed={fateRevealed}
           />
         </div>
 
-        {/* 流程指示器 - 顶部居中 */}
         <ProcessStepper phase={phase} />
 
-        {/* 阶段提示 - 流程指示器下方（活动 Agent 名） */}
+        {/* ★ 修复：信息收集/推演横幅浓缩到左下角（原顶部遮挡内容）
+            桌面端：左下角小卡片，悬浮不挡主视角；移动端：顶部半透明窄条 */}
+        {(phase === 'clarify_loop' || phase === 'agent_debate') && infoProgress > 5 && (
+          <div
+            className="fixed z-[60]"
+            style={{
+              // 桌面端：左下角；移动端(<768px)：顶部窄条
+              left: typeof window !== 'undefined' && window.innerWidth > 768 ? 16 : '50%',
+              bottom: typeof window !== 'undefined' && window.innerWidth > 768 ? 24 : 'auto',
+              top: typeof window !== 'undefined' && window.innerWidth > 768 ? 'auto' : 56,
+              transform: typeof window !== 'undefined' && window.innerWidth > 768 ? 'none' : 'translateX(-50%)',
+              width: typeof window !== 'undefined' && window.innerWidth > 768 ? 'auto' : 'min(520px, 92vw)',
+            }}
+          >
+            <div
+              className="px-3 py-2"
+              style={{
+                background: 'linear-gradient(135deg, rgba(30, 20, 10, 0.92) 0%, rgba(50, 34, 18, 0.96) 100%)',
+                border: '1px solid rgba(232, 198, 112, 0.3)',
+                borderRadius: 6,
+                boxShadow: '0 4px 18px rgba(0,0,0,0.45), inset 0 0 10px rgba(232,198,112,0.04)',
+                backdropFilter: 'blur(6px)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              {/* 浓缩标签 + 进度（百分比内联） */}
+              <div style={{
+                fontFamily: '"Ma Shan Zheng", serif',
+                color: infoProgress >= 80 ? '#F5D488' : '#D7B466',
+                letterSpacing: '0.1em',
+                fontSize: 11,
+                whiteSpace: 'nowrap',
+              }}>
+                {phase === 'agent_debate'
+                  ? `☯ 推演 ${infoProgress}%`
+                  : `析理 ${infoProgress}%`}
+              </div>
+              {/* 迷你进度条 */}
+              <div style={{
+                width: typeof window !== 'undefined' && window.innerWidth > 768 ? 60 : '100%',
+                flex: typeof window !== 'undefined' && window.innerWidth > 768 ? 'none' : 1,
+                height: 3,
+                background: 'rgba(232,198,112,0.12)',
+                borderRadius: 2,
+                overflow: 'hidden',
+              }}>
+                <motion.div
+                  animate={{ width: `${infoProgress}%` }}
+                  transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+                  style={{
+                    height: '100%',
+                    background: infoProgress >= 80
+                      ? 'linear-gradient(90deg, #E8A050, #F5D488)'
+                      : 'linear-gradient(90deg, #806A4A, #E8C670)',
+                    boxShadow: infoProgress >= 80 ? '0 0 8px rgba(245,212,136,0.5)' : 'none',
+                  }}
+                />
+              </div>
+              {/* 跳过按钮（仅桌面端内联；移动端单独处理） */}
+              {typeof window !== 'undefined' && window.innerWidth > 768 && (
+                phase === 'clarify_loop' ? (
+                  <button
+                    onClick={handleSkipClarify}
+                    title="跳过澄清，直接召智囊"
+                    style={{
+                      padding: '2px 8px',
+                      fontSize: 10,
+                      fontFamily: '"Ma Shan Zheng", serif',
+                      letterSpacing: '0.08em',
+                      color: '#1A1410',
+                      background: 'linear-gradient(135deg, #E8C670, #D7A44A)',
+                      border: 'none',
+                      borderRadius: 3,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    跳过→
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSkipToSummary}
+                    title="跳过辩论，看演的总结"
+                    style={{
+                      padding: '2px 8px',
+                      fontSize: 10,
+                      fontFamily: '"Ma Shan Zheng", serif',
+                      letterSpacing: '0.08em',
+                      color: '#1A1410',
+                      background: 'linear-gradient(135deg, #E8C670, #D7A44A)',
+                      border: 'none',
+                      borderRadius: 3,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    总结→
+                  </button>
+                )
+              )}
+              {/* 移动端单独显示跳过按钮 */}
+              {typeof window !== 'undefined' && window.innerWidth <= 768 && (
+                phase === 'clarify_loop' ? (
+                  <button onClick={handleSkipClarify}
+                    style={{
+                      padding: '2px 8px', fontSize: 10,
+                      fontFamily: '"Ma Shan Zheng", serif',
+                      color: '#1A1410',
+                      background: 'linear-gradient(135deg, #E8C670, #D7A44A)',
+                      border: 'none', borderRadius: 3, cursor: 'pointer',
+                    }}>跳过→</button>
+                ) : (
+                  <button onClick={handleSkipToSummary}
+                    style={{
+                      padding: '2px 8px', fontSize: 10,
+                      fontFamily: '"Ma Shan Zheng", serif',
+                      color: '#1A1410',
+                      background: 'linear-gradient(135deg, #E8C670, #D7A44A)',
+                      border: 'none', borderRadius: 3, cursor: 'pointer',
+                    }}>总结→</button>
+                )
+              )}
+            </div>
+          </div>
+        )}
+
+        <AnimatePresence>
+          {phase === 'yan_analyze' && !showHistoryPanel && (
+            <motion.div
+              className="absolute z-20 hidden md:block"
+              style={{ left: '12px', top: '100px' }}
+              initial={{ opacity: 0, x: -30 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -30 }}
+              transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <ConfirmedInfoPanel
+                caseFile={caseFile}
+                progress={progress || { done: 0, total: 4, missing: [] }}
+                roundCount={yanQuestionRounds?.length || 0}
+                minRounds={2}
+                maxRounds={5}
+                onManualJump={() => {
+                  if (typeof handleUserAdvance === 'function') handleUserAdvance();
+                }}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {phase === 'yan_analyze' && !showHistoryPanel && (
+            <motion.div
+              className="absolute z-20 md:hidden"
+              style={{ left: '8px', right: '8px', top: '76px' }}
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.5 }}
+            >
+              <ConfirmedInfoPanel
+                compact
+                caseFile={caseFile}
+                progress={progress || { done: 0, total: 4, missing: [] }}
+                roundCount={yanQuestionRounds?.length || 0}
+                minRounds={2}
+                maxRounds={5}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {phase === 'case_file_confirm' && (
+            <motion.div
+              className="fixed inset-0 z-40 z-[70] flex items-center justify-center"
+              style={{ backgroundColor: 'rgba(5,3,4,0.82)' }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                initial={{ opacity: 0, y: 20, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -14, scale: 0.97 }}
+                transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+                style={{ width: 'min(760px, 94vw)', maxHeight: 'clamp(56vh, 78vh, 86vh)', display: 'flex', flexDirection: 'column' }}
+                className="neon-border-gold scan-reveal"
+              >
+                <CaseFilePanel
+                  caseFile={caseFile}
+                  keywords={[]}
+                  historyCards={memoryLayers?.l1Cards || []}
+                  bioL2={memoryLayers?.bioL2 || ''}
+                  onConfirm={handleConfirmCaseFile}
+                  onBack={handleBackFromCaseFile}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <AnimatePresence>
           {phaseLabel && !showInput && phase === 'agent_debate' && activeAgentIdx >= 0 && (
             <motion.div
@@ -959,31 +594,102 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        {/* casting 投币提示 */}
         <AnimatePresence>
           {phase === 'casting' && (
             <motion.div
               className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20"
-              style={{ marginTop: '120px' }}
+              style={{ marginTop: '80px', width: 'min(560px, 86vw)', textAlign: 'center' }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
             >
-              <div style={{
-                color: GLOW_COLOR,
-                fontSize: '12px',
-                fontFamily: '"Ma Shan Zheng", serif',
-                letterSpacing: '0.3em',
-                textShadow: `0 0 10px ${GLOW_COLOR}`,
-                opacity: 0.85,
-              }}>
-                投三枚铜钱,立此一卦……
-              </div>
+              {(() => {
+                const cyberGua = inference?.cyberGua;
+                if (cyberGua?.gua) {
+                  const g = cyberGua.gua;
+                  const gz = cyberGua.ganzhi?.short || '';
+                  const verse = (g.verse || '').split('\n')[0] || '';
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                      <motion.div
+                        key={`gua-disc-${g.name}-${gz}`}
+                        initial={{ opacity: 0, y: 16, scale: 0.92 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{ duration: 0.85, ease: [0.16, 1, 0.3, 1] }}
+                      >
+                        <GuaMirror
+                          size={300}
+                          name={g.name}
+                          symbol={g.symbol}
+                          trigram={g.symbol}
+                          palace={g.palace}
+                          wuxing={g.wuxing}
+                          ganzhi={gz}
+                          movingLine={g.movingLine}
+                          verse={verse}
+                        />
+                      </motion.div>
+
+                      {verse && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.8, delay: 0.7 }}
+                          style={{
+                            fontSize: '11px',
+                            fontFamily: '"Noto Serif SC", serif',
+                            letterSpacing: '0.15em',
+                            color: '#E6D4A8',
+                            opacity: 0.9,
+                            maxWidth: '460px',
+                            textAlign: 'center',
+                            lineHeight: 1.9,
+                            padding: '8px 14px',
+                            borderTop: `1px solid ${BORDER_COLOR}44`,
+                            borderBottom: `1px solid ${BORDER_COLOR}44`,
+                            background: 'rgba(16,10,4,0.4)',
+                          }}
+                        >
+                          【卦辞】{verse}
+                        </motion.div>
+                      )}
+
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: [0, 1, 0.7, 1] }}
+                        transition={{ duration: 2.2, delay: 1.1 }}
+                        style={{
+                          fontSize: '12px',
+                          color: GLOW_COLOR,
+                          fontFamily: '"Noto Serif SC", serif',
+                          letterSpacing: '0.18em',
+                          opacity: 0.92,
+                          lineHeight: 1.9,
+                        }}
+                      >
+                        三枚铜钱已落 · 卦镜已明<br />
+                        {g.movingLine ? `第${g.movingLine}爻动 · ` : ''}静待智囊启卷……
+                      </motion.div>
+                    </div>
+                  );
+                }
+                return (
+                  <div style={{
+                    color: GLOW_COLOR,
+                    fontSize: '12px',
+                    fontFamily: '"Ma Shan Zheng", serif',
+                    letterSpacing: '0.3em',
+                    textShadow: `0 0 10px ${GLOW_COLOR}`,
+                    opacity: 0.85,
+                  }}>
+                    投三枚铜钱,立此一卦……
+                  </div>
+                );
+              })()}
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* reflecting 反思提示 */}
         <AnimatePresence>
           {phase === 'reflecting' && (
             <motion.div
@@ -1007,7 +713,6 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        {/* Agent 对话 - 无框浮动文字 */}
         <AgentDialogueOverlay
           phase={phase}
           question={userInput}
@@ -1030,12 +735,13 @@ export default function Game() {
           onFeedback={(agentId, feedbackType, dialogue) => {
             saveAgentFeedback(agentId, feedbackType, userInput, dialogue);
           }}
+          onShowFeedbackToast={handleShowFeedbackToast}
           debateConvergence={debateConvergence}
           mentions={mentionMessages}
           toolCallState={toolCallState}
+          onSaveGameState={saveGameState}
         />
 
-        {/* D3 收敛状态徽标 */}
         {phase === 'agent_debate' && debateConvergence && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -1054,9 +760,6 @@ export default function Game() {
           </motion.div>
         )}
 
-        {/* D3 再辩一轮入口 - 已移至底部输入框下方，临近继续按钮 */}
-
-        {/* 选择项 HUD - 浮在屏幕下方 */}
         <ChoiceHud
           phase={phase}
           choices={choices}
@@ -1064,7 +767,6 @@ export default function Game() {
           selectedChoice={selectedChoice}
         />
 
-        {/* 历史对话收起按钮 - 右上角 */}
         {historyCount > 0 && !showHistoryPanel && (
           <motion.div
             className="absolute top-4 right-4 z-20"
@@ -1090,7 +792,6 @@ export default function Game() {
           </motion.div>
         )}
 
-        {/* 历史对话侧边栏 */}
         <AnimatePresence>
           {showHistoryPanel && (
             <motion.div
@@ -1115,42 +816,91 @@ export default function Game() {
                     style={{ color: '#807870', fontSize: '16px', cursor: 'pointer', background: 'transparent', border: 'none' }}
                   >×</button>
                 </div>
-                <div className="flex-1 overflow-y-auto">
-                  {activeAgents.filter(a => a.role !== 'master').map(agent => {
-                    const msgs = agentDialogues?.history?.[agent.id] || [];
-                    if (msgs.length === 0) return null;
-                    const agentColor = COLORS.agent[agent.id] || { main: '#C8A850', glow: '#F0D890' };
-                    return (
-                      <div key={agent.id} className="mb-4">
-                        <div style={{
-                          fontSize: '10px',
-                          color: agentColor.glow,
-                          fontFamily: '"Ma Shan Zheng", serif',
-                          letterSpacing: '0.2em',
-                          marginBottom: '4px',
-                          textShadow: `0 0 6px ${agentColor.glow}80`,
-                        }}>
-                          {agent.name} · {agent.stance}
-                        </div>
-                        {msgs.map((msg, i) => (
-                          <div key={i} style={{
-                            fontSize: '11px',
-                            color: '#E0DDD5',
-                            fontFamily: '"Noto Serif SC", serif',
-                            lineHeight: 1.8,
-                            padding: '6px 10px',
-                            borderLeft: `2px solid ${agentColor.glow}80`,
-                            marginBottom: '6px',
-                            background: 'rgba(255,255,255,0.03)',
+                <div className="flex-1 overflow-y-auto ingot-scroll">
+                  {(() => {
+                    const history = agentDialogues?.history || {};
+                    const allRoles = [
+                      ...VIRTUAL_ROLES,
+                      ...(activeAgents || []).filter(a => a && a.role !== 'master'),
+                    ];
+                    let anyShown = false;
+                    const blocks = [];
+                    for (const role of allRoles) {
+                      if (!role || !role.id) continue;
+                      const rawArr = history[role.id] || [];
+                      const msgs = Array.isArray(rawArr)
+                        ? rawArr.map(_normalizeMsg).filter(Boolean)
+                        : [];
+                      if (msgs.length === 0) continue;
+                      anyShown = true;
+                      const isVirtual = role.role === 'virtual';
+                      const agentColor = isVirtual
+                        ? { main: role.color, glow: role.glow }
+                        : (COLORS.agent[role.id] || { main: '#C8A850', glow: '#F0D890' });
+                      const fontFamily = isVirtual && role.font === 'seal'
+                        ? '"Ma Shan Zheng", serif'
+                        : '"Ma Shan Zheng", serif';
+                      blocks.push(
+                        <div key={role.id} className="mb-4">
+                          <div style={{
+                            fontSize: '10px',
+                            color: agentColor.glow,
+                            fontFamily,
+                            letterSpacing: '0.2em',
+                            marginBottom: '4px',
+                            textShadow: `0 0 6px ${agentColor.glow}80`,
                           }}>
-                            {msg}
+                            {role.name} · {role.stance}
                           </div>
-                        ))}
-                      </div>
-                    );
-                  })}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {msgs.map((msg, i) => (
+                              <div key={i} style={{
+                                fontSize: '11px',
+                                color: msg.startsWith('你：') ? 'var(--cyber-jade, #8CD8B8)' : '#E0DDD5',
+                                fontFamily: '"Noto Serif SC", serif',
+                                lineHeight: 1.8,
+                                padding: '6px 10px',
+                                borderLeft: `2px solid ${msg.startsWith('你：') ? 'var(--cyber-jade, #4ADE99)80' : (agentColor.glow + '80')}`,
+                                background: msg.startsWith('你：')
+                                  ? 'rgba(74, 222, 153, 0.04)'
+                                  : 'rgba(255,255,255,0.03)',
+                              }}>
+                                {msg}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
+                    if (!anyShown) {
+                      return (
+                        <div style={{
+                          padding: '24px 12px',
+                          textAlign: 'center',
+                          fontSize: '10px',
+                          color: '#6A645A',
+                          fontFamily: '"Noto Serif SC", serif',
+                          letterSpacing: '0.15em',
+                          lineHeight: 2,
+                        }}>
+                          <div style={{
+                            fontSize: '28px',
+                            fontFamily: '"Ma Shan Zheng", serif',
+                            color: 'var(--gold-deep)',
+                            opacity: 0.35,
+                            marginBottom: '10px',
+                          }}>☰</div>
+                          尚无推演记录<br />
+                          <span style={{ fontSize: '9px', opacity: 0.7 }}>
+                            先回答演的问题，智囊发言后会在此凝结为铭文
+                          </span>
+                        </div>
+                      );
+                    }
+                    return blocks;
+                  })()}
                   {selectedChoice && (
-                    <div className="mt-4 pt-4" style={{ borderTop: `1px solid ${BORDER_COLOR}40` }}>
+                    <div className="mt-4 pt-4 scan-reveal" style={{ borderTop: `1px solid ${BORDER_COLOR}40` }}>
                       <div style={{
                         fontSize: '10px',
                         color: GLOW_COLOR,
@@ -1158,7 +908,7 @@ export default function Game() {
                         letterSpacing: '0.2em',
                         marginBottom: '4px',
                       }}>
-                        最终选择
+                        · 最 · 终 · 抉 · 择 ·
                       </div>
                       <div style={{
                         fontSize: '13px',
@@ -1176,9 +926,8 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        {/* 用户推进控制 - yan_analyze、agent_debate 和 summary 阶段 */}
         <AnimatePresence>
-          {awaitingUser && (phase === 'yan_analyze' || phase === 'agent_debate' || phase === 'summary') && (
+          {awaitingUser && (phase === 'clarify_loop' || phase === 'yan_analyze' || phase === 'agent_debate' || phase === 'summary') && (
             <motion.div
               className="absolute left-1/2 -translate-x-1/2 z-20 flex flex-col items-center"
               style={{ bottom: '24px', width: 'min(640px, 90vw)' }}
@@ -1187,23 +936,90 @@ export default function Game() {
               exit={{ opacity: 0, y: 16 }}
               transition={{ duration: 0.6, ease: 'easeOut' }}
             >
-              {/* 用户回应输入 - yan_analyze 和 agent_debate 阶段都有 */}
-              {(phase === 'yan_analyze' || phase === 'agent_debate') && (
+              {phase === 'clarify_loop' && (() => {
+                const lastRound = yanQuestionRounds?.[yanQuestionRounds.length - 1];
+                return (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5 }}
+                    style={{
+                      width: '100%',
+                      marginBottom: '16px',
+                      padding: '16px 20px',
+                      background: 'rgba(232, 198, 112, 0.06)',
+                      border: '1px solid rgba(232, 198, 112, 0.35)',
+                      borderRadius: '4px',
+                      boxShadow: '0 0 20px rgba(232, 198, 112, 0.15)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{
+                          width: '28px', height: '28px',
+                          borderRadius: '50%',
+                          background: 'radial-gradient(circle at 30% 30%, #FFE89A, #E8C670)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          color: '#231A10', fontWeight: 700, fontSize: '13px',
+                          fontFamily: '"Ma Shan Zheng", serif',
+                          boxShadow: '0 0 12px #FFE89A80',
+                        }}>演</div>
+                        <span style={{ color: '#E8C670', fontSize: '13px', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.15em' }}>
+                          澄清追问
+                        </span>
+                      </div>
+                      <button
+                        onClick={handleSkipClarify}
+                        style={{
+                          fontSize: '10px',
+                          color: '#F0EBDD',
+                          opacity: 0.65,
+                          background: 'transparent',
+                          border: '1px solid rgba(240, 235, 221, 0.3)',
+                          borderRadius: '3px',
+                          padding: '4px 10px',
+                          cursor: 'pointer',
+                          fontFamily: '"Noto Serif SC", serif',
+                          letterSpacing: '0.1em',
+                        }}
+                      >跳过 · 直接召唤智囊</button>
+                      </div>
+                    <div style={{
+                      color: '#F0EBDD',
+                      fontSize: '13px',
+                      fontFamily: '"Noto Serif SC", serif',
+                      lineHeight: 1.9,
+                      letterSpacing: '0.06em',
+                    }}>
+                      {lastRound?.question || '正在斟酌提问...'}
+                    </div>
+                  </motion.div>
+                );
+              })()}
+
+              {(phase === 'clarify_loop' || phase === 'yan_analyze' || phase === 'agent_debate') && (
                 <div className="w-full mb-2 flex items-center gap-2">
-                  <input
-                    type="text"
+                  <textarea
                     value={currentResponse}
-                    onChange={(e) => setCurrentResponse(e.target.value.slice(0, 120))}
+                    onChange={(e) => setCurrentResponse(e.target.value.slice(0, 200))}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
+                        if (e.nativeEvent.isComposing) return;
                         e.preventDefault();
                         handleUserAdvance();
                       }
                     }}
-                    placeholder={phase === 'yan_analyze' ? '回答演的问题，帮助智囊团更好分析...' : '可以补充信息,也可留空直接翻牌'}
-                    maxLength={120}
+                    placeholder={
+                      phase === 'clarify_loop' ? '在此回答演的澄清问题...（ENTER 提交，最多200字）' :
+                      phase === 'yan_analyze' ? '回答演的问题，帮助智囊团更好分析...' :
+                      '可以补充信息,也可留空直接翻牌'
+                    }
+                    rows={2}
                     style={{
                       flex: 1,
+                      maxHeight: '18vh',
+                      minHeight: '38px',
+                      overflowY: 'auto',
                       padding: '8px 12px',
                       background: 'rgba(8,8,12,0.7)',
                       backdropFilter: 'blur(8px)',
@@ -1213,12 +1029,79 @@ export default function Game() {
                       border: `1px solid ${BORDER_COLOR}40`,
                       outline: 'none',
                       letterSpacing: '0.05em',
+                      lineHeight: 1.7,
+                      resize: 'none',
+                      scrollbarWidth: 'thin',
+                      scrollbarColor: 'var(--gold-deep, #C8A850) transparent',
                     }}
                   />
                 </div>
               )}
 
-              {/* 继续按钮 */}
+              {/* B5: agent_debate 阶段体验优化：自动播放 + 跳过到总结 */}
+              {phase === 'agent_debate' && (
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  marginBottom: '10px', width: '100%', maxWidth: '440px',
+                  gap: '8px',
+                }}>
+                  {/* 左：自动播放开关 */}
+                  <label
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '6px',
+                      cursor: 'pointer', userSelect: 'none',
+                      fontSize: '11px', letterSpacing: '0.1em',
+                      color: debateAutoPlay ? GLOW_COLOR : '#888',
+                      fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
+                      padding: '6px 10px',
+                      border: `1px solid ${debateAutoPlay ? `${BORDER_COLOR}80` : '#3A3530'}`,
+                      borderRadius: '4px',
+                      background: debateAutoPlay ? `${GLOW_COLOR}10` : 'rgba(60,55,50,0.4)',
+                      transition: 'all 0.3s ease',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={debateAutoPlay}
+                      onChange={(e) => setDebateAutoPlay(e.target.checked)}
+                      style={{
+                        accentColor: GLOW_COLOR,
+                        width: '13px', height: '13px',
+                        cursor: 'pointer',
+                      }}
+                    />
+                    {debateAutoPlay ? '⏵ 自动播放中（自动下一位）' : '⏸ 自动播放（手滑救星）'}
+                  </label>
+
+                  {/* 右：跳过到总结按钮（人多了说不过来） */}
+                  <button
+                    onClick={handleSkipToSummary}
+                    style={{
+                      padding: '6px 12px',
+                      background: 'rgba(138, 57, 37, 0.2)',
+                      color: '#E8A888',
+                      fontSize: '11px',
+                      fontFamily: '"Ma Shan Zheng", serif',
+                      letterSpacing: '0.2em',
+                      border: '1px solid #8A392580',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.3s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(138, 57, 37, 0.4)';
+                      e.currentTarget.style.boxShadow = '0 0 16px rgba(138, 57, 37, 0.5)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(138, 57, 37, 0.2)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    ⏭ 跳过至·演总结
+                  </button>
+                </div>
+              )}
+
               <button
                 onClick={phase === 'summary' ? handleShowChoices : handleUserAdvance}
                 style={{
@@ -1243,12 +1126,16 @@ export default function Game() {
                   e.currentTarget.style.background = 'rgba(8,8,12,0.85)';
                 }}
               >
-                {phase === 'yan_analyze' ? '召唤智囊' : phase === 'summary' ? '看分岔 · 抉择' : (activeAgentIdx < activeAgents.filter(a => a.role !== 'master').length - 1 ? '下一位发言' : '请演总结')}
+                {
+                  phase === 'clarify_loop' ? '继续回答 · 或点跳过召智囊' :
+                  phase === 'yan_analyze' ? '召唤智囊' :
+                  phase === 'summary' ? '看分岔 · 抉择' :
+                  (activeAgentIdx < activeAgents.filter(a => a.role !== 'master').length - 1 ? '下一位发言' : '请演总结')
+                }
                 <span style={{ marginLeft: '12px', opacity: 0.6, fontSize: '11px' }}>·  ENTER</span>
               </button>
 
-              {/* D3 再辩一轮 - 仅当所有智囊发言完毕且未收敛时显示，紧贴"请演总结"按钮下方 */}
-              {phase === 'agent_debate' && debateConvergence && !debateConvergence.converged && debateRound < MAX_DEBATE_ROUNDS && activeAgentIdx >= activeAgents.filter(a => a.role !== 'master').length - 1 && (
+              {phase === 'agent_debate' && debateConvergence && !debateConvergence.converged && debateRound < 3 && activeAgentIdx >= activeAgents.filter(a => a.role !== 'master').length - 1 && (
                 <motion.button
                   initial={{ opacity: 0, y: -6 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -1278,7 +1165,6 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        {/* 命牌浮层 - path_reveal 阶段, 右侧滑入, 不挡演总结 */}
         <AnimatePresence>
           {phase === 'path_reveal' && selectedChoice && (
             <FateCardPanel
@@ -1293,7 +1179,6 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        {/* 揭示命签 - path_reveal 阶段 */}
         <AnimatePresence>
           {awaitingUser && phase === 'path_reveal' && (
             <motion.div
@@ -1332,7 +1217,6 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        {/* oracle_prompt - 借天光否 */}
         <AnimatePresence>
           {phase === 'oracle_prompt' && (
             <motion.div
@@ -1387,7 +1271,6 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        {/* oracle - 投币立卦 */}
         <AnimatePresence>
           {phase === 'oracle' && (
             <motion.div
@@ -1399,7 +1282,6 @@ export default function Game() {
               transition={{ duration: 0.7, ease: 'easeOut' }}
             >
               {!oracleResult ? (
-                // 投币中
                 <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
                   {[0, 1, 2].map((i) => (
                     <motion.div
@@ -1438,29 +1320,20 @@ export default function Game() {
                   ))}
                 </div>
               ) : (
-                // 落卦结果 + 继续
                 <motion.div
                   key="result"
                   initial={{ opacity: 0, scale: 0.92 }}
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ duration: 0.7, ease: 'easeOut' }}
-                  className="flex flex-col items-center gap-3"
+                  className="flex flex-col items-center gap-5"
                 >
-                  <div
-                    className="px-5 py-3 flex items-center gap-3"
-                    style={{
-                      background: `linear-gradient(135deg, ${RUST_COLOR} 0%, #8A3925 100%)`,
-                      color: PAPER_COLOR,
-                      borderRadius: 2,
-                      boxShadow: `0 4px 24px ${RUST_COLOR}80`,
-                    }}
-                  >
-                    <span style={{ fontSize: 24, fontFamily: '"Ma Shan Zheng", serif' }}>{oracleResult.trigram}</span>
-                    <div className="flex flex-col">
-                      <span style={{ fontSize: 16, fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.2em' }}>{oracleResult.gua}</span>
-                      <span style={{ fontSize: 10, opacity: 0.85, letterSpacing: '0.15em' }}>五行属 {oracleResult.element}</span>
-                    </div>
-                  </div>
+                  <GuaMirror
+                    size={210}
+                    name={oracleResult.gua || '大有'}
+                    symbol={oracleResult.trigram || '☰'}
+                    trigram={oracleResult.trigram || '☰'}
+                    wuxing={oracleResult.element}
+                  />
                   <button
                     onClick={handleProceedToChoices}
                     className="px-6 py-2.5 text-[13px]"
@@ -1473,9 +1346,10 @@ export default function Game() {
                       borderRadius: 2,
                       cursor: 'pointer',
                       transition: 'all 0.3s ease',
+                      boxShadow: `0 0 18px ${GLOW_COLOR}22`,
                     }}
-                    onMouseEnter={(e) => { e.currentTarget.style.boxShadow = `0 0 16px ${GLOW_COLOR}`; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.boxShadow = 'none'; }}
+                    onMouseEnter={(e) => { e.currentTarget.style.boxShadow = `0 0 20px ${GLOW_COLOR}AA, 0 0 6px ${GLOW_COLOR}`; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.boxShadow = `0 0 18px ${GLOW_COLOR}22`; }}
                   >
                     携 此 天 光 · 看 分 岔
                   </button>
@@ -1500,6 +1374,7 @@ export default function Game() {
                 onChange={(e) => setCurrentCommit(e.target.value.slice(0, 60))}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
+                    if (e.nativeEvent.isComposing) return;
                     e.preventDefault();
                     handleCommit();
                   }
@@ -1552,7 +1427,6 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        {/* 最终阶段操作按钮 - z-40 高于推演记录侧栏(z-30), 保证可点击 */}
         <AnimatePresence>
           {phase === 'final' && (
             <motion.div
@@ -1622,7 +1496,6 @@ export default function Game() {
         </AnimatePresence>
       </div>
 
-      {/* 输入遮罩 */}
       <AnimatePresence>
         {showInput && (
           <motion.div
@@ -1681,7 +1554,6 @@ export default function Game() {
         )}
       </AnimatePresence>
 
-      {/* Agent调用失败弹窗 */}
       <AnimatePresence>
         {showAgentErrorModal && (
           <motion.div
@@ -1783,17 +1655,17 @@ export default function Game() {
         )}
       </AnimatePresence>
 
-      {/* 浮动提示 (替代 alert) */}
       <AnimatePresence>
         {floatTip && (
           <motion.div
             className="fixed left-1/2 -translate-x-1/2 z-[100] px-6 py-3"
             style={{
               bottom: 56,
-              background: 'linear-gradient(135deg, #A8472E 0%, #8A3925 100%)',
-              color: '#FAF6EC',
+              background: 'linear-gradient(135deg, rgba(30, 20, 10, 0.92) 0%, rgba(50, 34, 18, 0.96) 100%)',
+              color: '#E8C670',
+              border: '1px solid rgba(232, 198, 112, 0.45)',
               borderRadius: 2,
-              boxShadow: '0 8px 28px rgba(168,71,46,0.4)',
+              boxShadow: '0 8px 36px rgba(232, 198, 112, 0.15), inset 0 0 18px rgba(232, 198, 112, 0.06)',
               fontFamily: '"Ma Shan Zheng", serif',
               letterSpacing: '0.2em',
               fontSize: 13,
@@ -1808,296 +1680,40 @@ export default function Game() {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
-  );
-}
 
-/* ============================================================
-   命牌浮层 - path_reveal 阶段
-   水墨风格卡片, 右侧滑入, 显示完整推演成果
-   卦象 / 卦名 / 卦辞 / 四柱 / 智囊批注 / 抉择 / 终局 / 承诺
-============================================================ */
-function FateCardPanel({ choice, inference, userInput, agentDialogues, activeAgents, currentCommit, fateContent }) {
-  const [trigramFlipped, setTrigramFlipped] = useState(false);
-  const [sharing, setSharing] = useState(false);
-  const [shareTip, setShareTip] = useState('');
-  const realGua = inference?.gua;
-  const guaName = realGua?.gua || choice?.gua || '大有';
-  const trigram = realGua?.trigram || choice?.icon || '☰';
-  const element = realGua?.element || choice?.element || '火';
-
-  // 四柱计算（与 handleSaveToCollection 同算法, 复现方便浮层展示）
-  const pillars = useMemo(() => {
-    const now = new Date();
-    const stems = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸'];
-    const branches = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
-    const pillar = (n) => stems[n % 10] + branches[n % 12];
-    return {
-      year: pillar(now.getFullYear() + 4),
-      month: pillar(now.getMonth() + 1 + now.getFullYear()),
-      day: pillar(now.getDate() + (now.getMonth() + 1) * 3),
-      hour: pillar(now.getHours() + now.getDate() * 2),
-    };
-  }, []);
-
-  // 智囊批注：每位智囊最近一句发言精要（≤30字）
-  const advisorNotes = useMemo(() => {
-    try {
-      const history = agentDialogues?.history || {};
-      return (activeAgents || [])
-        .filter(a => a && a.role !== 'master')
-        .map(a => {
-          const arr = history[a.id] || [];
-          if (arr.length === 0) return null;
-          const last = arr[arr.length - 1];
-          const text = typeof last === 'string' ? last : (last?.text || '');
-          return { name: a.name, color: a.color || '#C8A850', glow: a.glow || '#F0D890', note: (text || '').slice(0, 36) };
-        })
-        .filter(Boolean)
-        .slice(0, 4);
-    } catch (e) {
-      return [];
-    }
-  }, [agentDialogues, activeAgents]);
-
-  const verse = fateContent?.verse || inference?.verse || '';
-  const summary = fateContent?.summary || '';
-  const loading = !fateContent;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, x: 80 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 80 }}
-      transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-      style={{
-        position: 'absolute',
-        right: 'max(12px, 2vw)',
-        top: '50%',
-        transform: 'translateY(-50%)',
-        width: 'min(340px, 92vw)',
-        maxWidth: '340px',
-        zIndex: 18,
-        pointerEvents: 'auto',
-      }}
-    >
-      <div
-        style={{
-          background: 'linear-gradient(180deg, rgba(20, 16, 12, 0.92) 0%, rgba(14, 10, 8, 0.96) 100%)',
-          backdropFilter: 'blur(12px)',
-          border: `1px solid ${BORDER_COLOR}50`,
-          borderRadius: '4px',
-          padding: '20px 18px',
-          boxShadow: `0 8px 32px rgba(0,0,0,0.4), 0 0 24px ${GLOW_COLOR}20`,
-          fontFamily: '"Noto Serif SC", "Ma Shan Zheng", serif',
-        }}
-      >
-        {/* 顶部印章 */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-          <span style={{ fontSize: '9px', color: GLOW_COLOR, letterSpacing: '0.3em', fontFamily: '"Ma Shan Zheng", serif', opacity: 0.8 }}>
-            命 签
-          </span>
-          <span style={{ fontSize: '9px', color: '#7A7468', letterSpacing: '0.15em' }}>
-            {new Date().toISOString().split('T')[0]}
-          </span>
-        </div>
-
-        {/* 卦象 + 卦名 + 五行 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '12px', paddingBottom: '12px', borderBottom: `1px solid ${BORDER_COLOR}30` }}>
+      {/* ★ Fix: 全局反馈 toast — 受用/失言/订阅 任何交互都立刻弹出"生效了"提示 */}
+      <AnimatePresence>
+        {feedbackToast && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.5, rotate: -10 }}
-            animate={trigramFlipped
-              ? { opacity: 1, scale: 1.15, rotateY: 180, color: RUST_COLOR, textShadow: `0 0 24px ${RUST_COLOR}80` }
-              : { opacity: 1, scale: 1, rotate: 0, color: GLOW_COLOR, textShadow: `0 0 16px ${GLOW_COLOR}80` }
-            }
-            transition={{ duration: 1.1, ease: [0.16, 1, 0.3, 1] }}
-            onClick={() => setTrigramFlipped(f => !f)}
-            title="点击翻卦"
+            key={feedbackToast.key}
+            initial={{ opacity: 0, y: 24, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.95 }}
+            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
             style={{
-              fontSize: '40px',
-              color: GLOW_COLOR,
-              textShadow: `0 0 16px ${GLOW_COLOR}80`,
-              fontFamily: '"Ma Shan Zheng", serif',
-              lineHeight: 1,
-              cursor: 'pointer',
-              userSelect: 'none',
-              transformStyle: 'preserve-3d',
+              position: 'fixed',
+              left: '50%',
+              bottom: '140px',
+              transform: 'translateX(-50%)',
+              zIndex: 99999,
+              padding: '10px 20px',
+              background: 'linear-gradient(135deg, rgba(20,16,12,0.96), rgba(40,30,20,0.96))',
+              border: `1px solid ${feedbackToast.color}80`,
+              borderRadius: '10px',
+              color: feedbackToast.color,
+              fontSize: '12px',
+              fontFamily: '"Ma Shan Zheng", "PingFang SC", serif',
+              letterSpacing: '0.1em',
+              boxShadow: `0 8px 30px rgba(0,0,0,0.6), 0 0 16px ${feedbackToast.color}30`,
+              backdropFilter: 'blur(8px)',
+              WebkitBackdropFilter: 'blur(8px)',
+              whiteSpace: 'nowrap',
             }}
           >
-            {trigramFlipped ? '变' : trigram}
+            {feedbackToast.text}
           </motion.div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: '18px', color: '#F0EDE5', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.2em', textShadow: `0 0 8px ${GLOW_COLOR}40` }}>
-              {guaName}
-            </div>
-            <div style={{ fontSize: '10px', color: '#A89888', marginTop: '4px', letterSpacing: '0.15em' }}>
-              五行属 {element}
-            </div>
-          </div>
-        </div>
-
-        {/* 卦辞 (个性化生成) */}
-        <div style={{ marginBottom: '12px' }}>
-          <div style={{ fontSize: '9px', color: GLOW_COLOR, marginBottom: '6px', letterSpacing: '0.25em', opacity: 0.7 }}>卦 辞</div>
-          {loading ? (
-            <motion.div animate={{ opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 1.4, repeat: Infinity }} style={{ fontSize: '12px', color: '#888', fontStyle: 'italic' }}>
-              演 · 正在落卦定辞…
-            </motion.div>
-          ) : (
-            <motion.div
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7 }}
-              style={{ fontSize: '13px', color: '#F0EDE5', fontFamily: '"Ma Shan Zheng", serif', lineHeight: 1.9, letterSpacing: '0.1em', fontStyle: 'italic' }}
-            >
-              「{verse}」
-            </motion.div>
-          )}
-        </div>
-
-        {/* 四柱 */}
-        <div style={{ marginBottom: '12px', display: 'flex', justifyContent: 'space-between', padding: '6px 8px', background: 'rgba(200, 168, 80, 0.05)', borderRadius: '2px' }}>
-          {[
-            { label: '年', val: pillars.year },
-            { label: '月', val: pillars.month },
-            { label: '日', val: pillars.day },
-            { label: '时', val: pillars.hour },
-          ].map(p => (
-            <div key={p.label} style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '8px', color: '#7A7468', marginBottom: '2px' }}>{p.label}</div>
-              <div style={{ fontSize: '11px', color: '#C8A878', fontFamily: '"Ma Shan Zheng", serif' }}>{p.val}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* 智囊批注 */}
-        {advisorNotes.length > 0 && (
-          <div style={{ marginBottom: '12px' }}>
-            <div style={{ fontSize: '9px', color: GLOW_COLOR, marginBottom: '6px', letterSpacing: '0.25em', opacity: 0.7 }}>智 囊 批 注</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {advisorNotes.map((a, i) => (
-                <motion.div
-                  key={a.name + i}
-                  initial={{ opacity: 0, x: 10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.4 + i * 0.08, duration: 0.5 }}
-                  style={{ fontSize: '10px', lineHeight: 1.6, paddingLeft: '8px', borderLeft: `2px solid ${a.glow}80` }}
-                >
-                  <span style={{ color: a.glow, fontFamily: '"Ma Shan Zheng", serif', marginRight: '6px' }}>{a.name}</span>
-                  <span style={{ color: '#B0AB9E' }}>{a.note}{a.note.length >= 36 ? '…' : ''}</span>
-                </motion.div>
-              ))}
-            </div>
-          </div>
         )}
-
-        {/* 抉择 */}
-        <div style={{ marginBottom: '12px', padding: '8px 10px', background: `linear-gradient(90deg, ${RUST_COLOR}20 0%, transparent 100%)`, borderLeft: `2px solid ${RUST_COLOR}` }}>
-          <div style={{ fontSize: '9px', color: RUST_COLOR, marginBottom: '4px', letterSpacing: '0.25em', opacity: 0.9 }}>汝 之 抉 择</div>
-          <div style={{ fontSize: '13px', color: '#F0EDE5', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.15em' }}>
-            {choice?.label}
-          </div>
-        </div>
-
-        {/* 承诺 (committing阶段写的) */}
-        {currentCommit && currentCommit.trim() && (
-          <div style={{ marginBottom: '12px', padding: '8px 10px', background: 'rgba(200, 168, 80, 0.06)', borderRadius: '2px' }}>
-            <div style={{ fontSize: '9px', color: GLOW_COLOR, marginBottom: '4px', letterSpacing: '0.25em', opacity: 0.7 }}>本 心 落 笔</div>
-            <div style={{ fontSize: '11px', color: '#D8D0C0', fontStyle: 'italic', lineHeight: 1.7 }}>
-              {currentCommit.trim()}
-            </div>
-          </div>
-        )}
-
-        {/* 终局 (个性化生成) */}
-        <div style={{ marginBottom: '8px' }}>
-          <div style={{ fontSize: '9px', color: GLOW_COLOR, marginBottom: '6px', letterSpacing: '0.25em', opacity: 0.7 }}>终 局</div>
-          {loading ? (
-            <motion.div animate={{ opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 1.4, repeat: Infinity }} style={{ fontSize: '11px', color: '#888', fontStyle: 'italic' }}>
-              演 · 凝结终局中…
-            </motion.div>
-          ) : summary ? (
-            <motion.div
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7, delay: 0.2 }}
-              style={{ fontSize: '11px', color: '#D8D0C0', lineHeight: 1.8, letterSpacing: '0.05em' }}
-            >
-              {summary}
-            </motion.div>
-          ) : (
-            <div style={{ fontSize: '11px', color: '#888', fontStyle: 'italic' }}>卦已立, 辞已定, 余下的留给时光。</div>
-          )}
-        </div>
-
-        {/* AI 生成标识 */}
-        <div style={{ textAlign: 'center', marginTop: '10px', paddingTop: '8px', borderTop: `1px solid ${BORDER_COLOR}20`, fontSize: '8px', color: '#5A5550', letterSpacing: '0.25em' }}>
-          AI 生成内容，仅供参考
-        </div>
-
-        {/* 分享按钮 */}
-        <motion.button
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
-          onClick={async () => {
-            if (sharing) return;
-            setSharing(true);
-            setShareTip('演 · 正在凝结命签…');
-            try {
-              const cardForShare = {
-                gua: guaName,
-                trigram,
-                guaElement: element,
-                element,
-                title: choice?.label || '',
-                question: userInput || '',
-                decision: choice?.label || '',
-                verse,
-                summary,
-                pillars,
-                date: new Date().toISOString().split('T')[0],
-              };
-              const { generateShareCard, downloadShareCard } = await import('../utils/shareCardGenerator');
-              const dataUrl = await generateShareCard(cardForShare, {
-                yanSummary: summary,
-                agentNotes: advisorNotes.map(a => ({ name: a.name, color: a.color, note: a.note })),
-                commit: currentCommit || '',
-              });
-              downloadShareCard(dataUrl, `${guaName}-命签.png`);
-              setShareTip('命签已下载, 可分享');
-              try { tracker.track('share', { cardId: guaName, shareChannel: 'image_download' }); } catch (e2) { /* ignore */ }
-            } catch (e) {
-              console.warn('[分享卡] 生成失败', e);
-              setShareTip('生成失败, 稍后再试');
-            } finally {
-              setTimeout(() => setSharing(false), 600);
-              setTimeout(() => setShareTip(''), 2400);
-            }
-          }}
-          disabled={sharing || loading}
-          style={{
-            marginTop: '10px',
-            width: '100%',
-            padding: '8px 12px',
-            background: sharing ? 'transparent' : `linear-gradient(180deg, ${RUST_COLOR}30 0%, ${RUST_COLOR}15 100%)`,
-            color: sharing ? '#7A7468' : RUST_COLOR,
-            fontSize: '11px',
-            fontFamily: '"Ma Shan Zheng", serif',
-            letterSpacing: '0.3em',
-            border: `1px solid ${RUST_COLOR}60`,
-            borderRadius: '2px',
-            cursor: sharing ? 'wait' : 'pointer',
-            opacity: loading ? 0.4 : 1,
-          }}
-        >
-          {sharing ? (shareTip || '凝结中…') : '☶ 落印成签 · 分享'}
-        </motion.button>
-        {shareTip && !sharing && (
-          <div style={{ textAlign: 'center', marginTop: '6px', fontSize: '9px', color: GLOW_COLOR, letterSpacing: '0.15em' }}>
-            {shareTip}
-          </div>
-        )}
-      </div>
-    </motion.div>
+      </AnimatePresence>
+    </div>
   );
 }

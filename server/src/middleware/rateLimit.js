@@ -1,13 +1,13 @@
 /**
  * 分级限流中间件
- * - 全局限流：每 IP 每分钟 30 次
- * - LLM 接口限流：每 IP 每分钟 5 次
+ * - 全局限流：每 IP 每分钟 90 次（避免推演台连续提问触发）
+ * - LLM 接口限流：每 IP 每分钟 12 次（推演台 clarify 多轮会连续调用，调大到用户基本感觉不到）
  * 用内存 Map 实现，适用于单实例部署
  */
 
 const WINDOW_MS = 60 * 1000;
-const MAX_REQUESTS = 30;
-const LLM_MAX_REQUESTS = 5;
+const MAX_REQUESTS = 90;
+const LLM_MAX_REQUESTS = 12;
 
 // 普通限流
 const ipMap = new Map();

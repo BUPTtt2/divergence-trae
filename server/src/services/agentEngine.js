@@ -1,93 +1,24 @@
 /**
  * Agent 编排引擎
- * - analyzeQuestion: 调用智谱 LLM 分析问题，返回需要哪些 Agent（1-6个）
+ * - analyzeQuestion: 调用智谱 LLM 分析问题，根据问题复杂度自主决定需要哪些 Agent
  * - generateAgentDialogue: 调用 LLM 生成单个 Agent 的回应
- *
- * LLM 失败时降级到关键词匹配
  */
 
 import { AGENT_POOL, getAgentsByIds, AGENT_POOL_MAP, buildAgentSystemPrompt } from '../data/agentPool.js';
 import { callLLM } from './llmRouter.js';
 import { retrieveMemories, getUserProfile, extractMemoriesFromInference } from './memoryService.js';
 import { listAdvisors, formatAdvisorForAgentPool } from './customAdvisorService.js';
+import logger from './logger.js';
 
 /**
- * 关键词 → 问题类型映射（降级用，复用前端 detectQuestionType 逻辑）
- */
-const TYPE_KEYWORDS = {
-  career: ['工作', '职业', 'offer', '跳槽', '转行', '升职', '离职', '辞职', '入职', '岗位', '职场'],
-  finance: ['钱', '投资', '理财', '股票', '基金', '买房', '贷款', '消费', '预算', '薪', '工资', '存款'],
-  relationship: ['恋爱', '分手', '结婚', '离婚', '表白', '暗恋', '感情', '对象', '男友', '女友', '喜欢', '爱'],
-  life: ['人生', '未来', '方向', '意义', '迷茫', '焦虑', '压力', '选择', '纠结', '不知'],
-  action: ['做不做', '要不要', '该不该', '能不能', '开始', '放弃', '坚持', '动手', '行动'],
-  communication: ['沟通', '谈判', '吵架', '冲突', '说服', '表达', '对话', '说'],
-  offer: ['涨薪', '薪资', '薪水', '包', 'package', '股权', '期权', '签约费', '入职', '团队变动', '高管'],
-  startup: ['创业', '开公司', 'all in', '融', '种子轮', '天使', '合伙', '辞职创业', '离开大厂', '做 ai', '做产品'],
-  invest: ['梭哈', '全仓', '抄底', '加仓', '止盈', '止损', 'etf', 'btc', '币', '加密'],
-  city: ['北京', '上海', '深圳', '杭州', '广州', '成都', '搬迁', '去深圳', '去上海', '回二线', '回老家', '出国', '香港'],
-  legal: ['合同', '协议', '法律', '起诉', '违约', '侵权', '知识产权', '竞业', '保密', '仲裁'],
-  health: ['身体', '健康', '生病', '熬夜', '睡眠', '焦虑', '抑郁', '体检', '看病'],
-  education: ['考研', '读研', '留学', '考公', '证书', '学习', '培训', '进修', '博士', '导师'],
-  technical: ['技术', '架构', '代码', '开发', '系统', '实现', '工程', '方案', '选型'],
-  product: ['产品', '需求', '用户', '功能', '设计', '原型', '迭代'],
-};
-
-/**
- * 降级：关键词匹配问题类型
- */
-function detectQuestionType(question) {
-  if (!question) return 'life';
-  const lowerQ = question.toLowerCase();
-  let bestType = 'life';
-  let bestScore = 0;
-  for (const [type, keywords] of Object.entries(TYPE_KEYWORDS)) {
-    let score = 0;
-    for (const kw of keywords) {
-      if (lowerQ.includes(kw.toLowerCase())) score += 1;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      bestType = type;
-    }
-  }
-  return bestType;
-}
-
-/**
- * 降级：根据问题类型匹配 Agent
- * 最少 1 个（默认 jingyuan），最多 6 个
- */
-function fallbackSelectAgents(question) {
-  const type = detectQuestionType(question);
-  const matched = AGENT_POOL.filter(
-    (a) => Array.isArray(a.questionTypes) && a.questionTypes.includes(type)
-  );
-
-  // 确保 jingyuan（镜渊）始终在内
-  const ids = new Set(['jingyuan']);
-  for (const a of matched) {
-    if (ids.size >= 6) break;
-    ids.add(a.id);
-  }
-
-  const agentIds = Array.from(ids).slice(0, 6);
-  return {
-    agentIds,
-    reasoning: `（关键词降级）检测到问题类型「${type}」，匹配 ${agentIds.length} 个 Agent`,
-    fallback: true,
-  };
-}
-
-/**
- * 分析用户问题，选择最适合的 Agent（1-6个）
- * 调用智谱 LLM 分析，失败时降级到关键词匹配
+ * 分析用户问题，选择最适合的 Agent（数量由问题复杂度决定）
  *
  * @param {string} question 用户问题
  * @returns {Promise<{agentIds: string[], reasoning: string, fallback?: boolean, analysis?: string}>}
  */
 export async function analyzeQuestion(question, userId = null, options = {}) {
   if (!question || typeof question !== 'string') {
-    return fallbackSelectAgents(question || '');
+    throw Object.assign(new Error('analyzeQuestion 缺少有效的 question 参数'), { type: 'INVALID_ARGUMENT' });
   }
 
   const { useCustomAdvisors = false, customAdvisorIds = [] } = options;
@@ -137,7 +68,7 @@ export async function analyzeQuestion(question, userId = null, options = {}) {
 
   const systemPrompt = `你是"演"，推演核心，统领全局的太极Agent。
 ${memoryContext}
-【任务】分析用户问题，从以下Agent池中选择1-6个最适合的Agent。
+【任务】分析用户问题，根据问题的复杂度和涉及的维度，从以下Agent池中选择最适合的Agent团队。
 
 可用Agent池：
 ${agentList}
@@ -150,9 +81,9 @@ ${agentList}
 }
 
 【规则】
-1. 最少选1个，最多选6个
+1. Agent 数量由问题复杂度决定：简单问题1-2个够用，复杂问题可以选3-8个，不要机械地选固定数量
 2. 必须选择与问题最相关的Agent，覆盖不同视角（财务、风险、本心、长期、行动等）
-3. 如果没有明确匹配，默认选 jingyuan（镜渊）
+3. 如果现有Agent池无法覆盖某个关键维度，可以在 analysis 中说明"建议生成X视角的临时智囊"
 4. agentIds 必须是上面列出的有效 id
 5. analysis 要深入拆解问题的核心矛盾和关键维度
 6. reasoning 要说明每个被选中Agent的作用
@@ -172,13 +103,13 @@ ${agentList}
     );
 
     if (!text) {
-      return fallbackSelectAgents(question);
+      throw Object.assign(new Error('analyzeQuestion LLM返回空文本'), { type: 'LLM_EMPTY_OUTPUT' });
     }
 
     // 提取 JSON
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) {
-      return fallbackSelectAgents(question);
+      throw Object.assign(new Error('analyzeQuestion LLM返回内容无有效JSON'), { type: 'LLM_INVALID_FORMAT', raw: text.slice(0, 200) });
     }
 
     const parsed = JSON.parse(match[0]);
@@ -188,12 +119,11 @@ ${agentList}
     const validIds = allAgents.map((a) => a.id);
     agentIds = agentIds.filter((id) => validIds.includes(id));
 
-    // 硬限制：最少 1 个，最多 6 个
+    // LLM 未选出任何 Agent 或解析失败：启用规则兜底（风眼/镜渊/钱谷/路向 四核心 + 关键词扩展）
     if (agentIds.length === 0) {
-      agentIds = ['jingyuan'];
-    }
-    if (agentIds.length > 6) {
-      agentIds = agentIds.slice(0, 6);
+      logger.warn('[agentEngine] analyzeQuestion LLM无有效Agent，启用规则兜底');
+      const fallback = _ruleBasedAgents(question, allAgents);
+      return fallback;
     }
 
     return {
@@ -203,94 +133,54 @@ ${agentList}
       fallback: false,
     };
   } catch (e) {
-    console.warn('[agentEngine] analyzeQuestion LLM 失败，降级到关键词匹配:', e.message);
-    return fallbackSelectAgents(question);
+    logger.warn('[agentEngine] analyzeQuestion 失败，启用规则兜底（非零预设）:', { error: e.message, type: e.type });
+    // v3.1 兜底：不再 throw，按关键词返回默认组合 + 标记 fallback=true
+    return _ruleBasedAgents(question, allAgents, e.message);
   }
 }
 
 /**
- * 本地预设回应（降级用）- 每个 Agent 有独特的预设
+ * Agent 选择规则兜底（当 LLM 失败/超时/无输出时使用）
+ * 核心四智囊（风眼/镜渊/钱谷/路向）+ 关键词扩展
+ * @param {string} question
+ * @param {Array} allAgents 可选 agent 池（含 custom）
+ * @param {string} errorReason 可选：记录失败原因
  */
-const AGENT_PRESETS = {
-  qiangu: [
-    '先别急着表态。数字要拆开看：base、bonus、equity 各占几成？隐性收益算过吗？3年累计差值，才是真账。',
-    '这笔账划不划算，要看现金流和机会成本。你算过放弃现有工作的代价吗？',
-    '先列三个数字：总可投资金、占比、最大可承受亏损。数字不清之前，都是赌博。',
-    '别只看明面的涨幅，隐性成本（社保基数、年终、调薪周期）才是真正决定差距的地方。',
-  ],
-  luxiang: [
-    '薪资只是入场券，关键是赛道。3年后回看，哪个选择能让你简历上多一个有分量的章节？',
-    '站在五年后的时间点回望，这条路是向上还是向下？你的能力护城河够不够宽？',
-    '把当下选择放回3-10年尺度，追问：你想成为什么样的人？',
-    '行业周期、个人能力护城河、赛道天花板——这三个维度，哪个最让你担心？',
-  ],
-  fengyan: [
-    '慢着，先泼盆冷水。最坏情况是什么？你能承受吗？如果不能，你需要更多信息，不是更多分析。',
-    '你看到的是机会，还是被忽略的致命假设？我见过太多看起来光鲜的选择，背后是烂摊子。',
-    '乐观是最大的风险。先问：如果错了，你怎么办？',
-    '别急，先列反面证据。什么信号出现，你会承认自己选错了？',
-  ],
-  xinhe: [
-    '在开始分析之前，我想先问你：你现在每天早上醒来想到上班，内心是什么感受？身体的反应经常是答案。',
-    '你描述这件事时，身体是放松还是紧绷？最近一次让你真正开心是什么时候？',
-    '不要回答"应该"，回答"愿意"。如果没人看着，你会怎么选？',
-    '把被忽略的情绪说出来。你真正害怕的，是选错，还是后悔没选？',
-  ],
-  jingyuan: [
-    '你问"该不该"，这个"该"是谁的标准？停下来，回到你自己。',
-    '上次类似的情况，你选了X，后来呢？人最大的盲区不是信息不足，而是不肯承认自己在重复。',
-    '你心里其实已经有答案了，只是在等一个确认。我换个问法：你敢不敢对三个月后的自己说"我选了X"？',
-    '你问这个问题的方式，已经暴露了你的倾向。把问题翻转过来，问自己真正想问的。',
-  ],
-  yuntu: [
-    '把这件事放进大时代看。现在是周期的哪个位置？这艘船正在涨潮还是退潮？',
-    '行业Beta是上还是下？你是吃Beta红利，还是做Alpha？这需要的能力完全不同。',
-    '看政策、看行业聚集度、看生活成本曲线。这是10年题，不是3年题。',
-    '宏观环境在变化，你的选择要跟着周期走。逆势者事倍功半。',
-  ],
-  zhenxing: [
-    '想太多就是不做。第一刀切在哪里？今晚能做什么？',
-    '七成把握就该出手，剩下的两成在路上补。再等一周，你会更清楚还是更焦虑？',
-    '设一个deadline，逼自己"做"而不是"想"。分析够了，该出手时就出手。',
-    '不要等完美方案。先动起来，边走边调整。不动手的话，你在等什么？',
-  ],
-  duiyan: [
-    '你真的和对方谈过你的这些纠结吗？很多人是"我以为他知道"，但其实对方一无所知。',
-    '把"要不要"翻译成"怎么谈"。对方真正在意的是什么？你表达的是诉求还是情绪？',
-    '一次真诚的对话，能解决80%的结。别自己在心里演独角戏。',
-    '这话该对谁说、怎么说、在什么时机说？沟通的艺术在于精准，不是多言。',
-  ],
-  falv: [
-    '先问：这件事有没有落进合同里？白纸黑字胜过一切口头承诺。',
-    '权责边界、违约后果、退出机制——这三件事清楚了吗？',
-    '如果翻脸，你手里有什么牌？不要等到出问题才想起法律。',
-    '每一步都要留好证据。你现在的操作，在法律上等于什么？',
-  ],
-  jiankang: [
-    '这个选择会让你睡得着吗？三年后你的身体扛得住吗？',
-    '所有决策最终都要由身体承担。你在透支式奋斗吗？',
-    '睡眠、饮食、运动、情绪负荷——哪个已经亮起红灯？',
-    '拼搏不等于透支。停下来，听听身体的声音。',
-  ],
-  jiaoyu: [
-    '看决策不只看结果，更看这个选择能不能让你长出新能力。',
-    '十年后回看，这个选择教会你什么？你会变成什么样的人？',
-    '学习曲线、能力迁移、认知升级——哪个是你最需要的？',
-    '授人以渔胜过授人以鱼。选那条更能磨砺心智的路。',
-  ],
-  jishu: [
-    '这事在工程上能不能落地？第一版最小可用是什么样？',
-    '再好的战略，执行不到位也是零。可行性、技术债务、架构权衡——哪个最让你担心？',
-    '不要追求完美，但要求每个选择都经得起"怎么做"的追问。',
-    '把模糊的纠结拆成可执行的第一步。你今天能写的第一行代码是什么？',
-  ],
-};
+function _ruleBasedAgents(question, allAgents = [], errorReason = '') {
+  const q = (question || '').toLowerCase();
+  const core = ['fengyan', 'jingyuan', 'qiangu', 'luxiang'];
+  const extra = [];
+  // 情感类 → 加青衿
+  if (/(感情|恋爱|结婚|分手|对象|老公|老婆|父母|家人|朋友|同事)/.test(q)) extra.push('qingjin');
+  // 教育/成长类 → 加墨隐
+  if (/(读书|考试|考研|留学|培训|学习|学校|技能|成长|毕业)/.test(q)) extra.push('moyin');
+  // 健康类 → 加素问
+  if (/(健康|身体|生病|看病|运动|减肥|健身|治病|养生|熬夜|失眠|焦虑|抑郁|体检|病|痛|伤)/.test(q)) extra.push('suwen');
+  // 法律/合同类 → 加法镜
+  if (/(合同|法律|官司|起诉|律师|权益|维权|合规|违法|版权|专利|纠纷)/.test(q)) extra.push('fajing');
+  // 旅行/出行类 → 加云逰
+  if (/(旅行|旅游|游玩|出差|出国|自驾|攻略|景点|回老家|返乡)/.test(q)) extra.push('yunyou');
+  // 宠物类 → 加灵宠
+  if (/(养猫|养狗|养宠物|宠物|猫|狗|鸟|鱼|兔|仓鼠)/.test(q)) extra.push('lingchong');
+  // 投资类 → 加钱谷已在core里，再加朱雀偏决策
+  if (/(投资|股票|基金|理财|贷款|汇率|通货膨胀|股市|定投)/.test(q)) extra.push('zhuque');
+
+  // 去重并保证一定在 AGENT_POOL 里
+  const allIds = new Set(allAgents.map(a => a.id));
+  const pickedIds = [...core, ...extra].filter(id => allIds.has(id)).slice(0, 6);
+  const pickedAgentIds = pickedIds.length >= 2 ? pickedIds : core.filter(id => allIds.has(id));
+  return {
+    agentIds: pickedAgentIds,
+    reasoning: '规则兜底：核心四智囊 + 关键词扩展',
+    analysis: errorReason ? `（LLM暂不可用：${errorReason.slice(0, 50)}，演已按规则选智囊）` : '（演按问题类型匹配智囊）',
+    fallback: true,
+  };
+}
 
 /**
  * 生成单个 Agent 的回应
  * 使用 agent.persona 作为 system prompt
  * 要求 1-3 句话，不超过 80 字，中文口语
- * 8s 超时降级到本地预设
  *
  * @param {object} agent Agent 对象（来自 agentPool）
  * @param {string} question 用户问题
@@ -301,17 +191,47 @@ const AGENT_PRESETS = {
  */
 export async function generateAgentDialogue(agent, question, previousDialogues = [], fullDialogueHistory = [], userId = null) {
   if (!agent || !question) {
-    return '停下来想想，你问的这个问题，背后真正担心的是什么？';
+    throw Object.assign(new Error('generateAgentDialogue 缺少 agent 或 question'), { type: 'INVALID_INPUT' });
   }
 
   // 从 previousDialogues 提取参与的智囊列表（用于 team_map）
   const teamAgentIds = new Set(previousDialogues.map(d => d.agentId).filter(Boolean));
   const teamAgents = Array.from(teamAgentIds).map(id => AGENT_POOL_MAP[id]).filter(Boolean);
 
-  // 三层提示词优先，降级到 persona
+  // 三层提示词
   const basePrompt = buildAgentSystemPrompt(agent, teamAgents);
 
-  const systemPrompt = `${basePrompt}
+  // ===== P6：注入相关记忆和用户画像（所有智囊都能看到，解决"其他Agent无权查看记忆"的问题）=====
+  let memoryContextInjection = '';
+  if (userId) {
+    try {
+      const [profileMem, relatedMemories] = await Promise.all([
+        getUserProfile?.(userId).catch(() => ''),
+        retrieveMemories?.(userId, `${question} ${agent.stance || agent.name}`, 3).catch(() => []),
+      ]);
+
+      if (profileMem && String(profileMem).trim()) {
+        memoryContextInjection += `\n\n【用户画像背景（长期记忆汇总）】\n${String(profileMem).trim()}\n`;
+      }
+      if (Array.isArray(relatedMemories) && relatedMemories.length > 0) {
+        memoryContextInjection += `\n【相关历史推演记忆（仅供参考，不要直接复述）】\n`;
+        relatedMemories.forEach((m, i) => {
+          memoryContextInjection += `${i + 1}. [${m.memory_type || '记忆'}] ${m.content}\n`;
+        });
+      }
+    } catch (e) {
+      // 注入失败不阻塞智囊发言
+      console.warn('[agentEngine] 记忆注入失败跳过:', e.message);
+    }
+  }
+
+  const systemPrompt = `${basePrompt}${memoryContextInjection}
+
+【核心行为约束（P0修复，必须严格遵守）】
+1. **严禁编造事实**：如果用户的问题信息不足（缺金额/时间/具体情况/现状/关键条件等），**必须明确说明"目前信息不够，我需要先问清楚XXX才能判断"**，绝对不能虚构用户有收入/有工作/有资产/有伴侣等未提及的背景
+2. **优先提问，不要单向输出结论**：你的发言应该是「提问+讨论」的效果（像真人咨询一样），先问清关键信息再给判断；不要直接甩结论
+3. **敢于追问用户**：可以连续抛出1-2个具体问题（围绕你的视角），引导用户讲清楚真实情况
+4. **展示你收集到的信息**：在发言开头可以用1句话复述你理解到的现状（比如"按你说的，现在是和女朋友在找实习但还没着落，住酒店成本高怕离公司远，对吧？"），让用户看到你没瞎编
 
 【补充约束】
 - 用中文口语，不要书面体
@@ -343,55 +263,34 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
   if (fullDialogueHistory.length > 0) {
     agentContextText = '\n\n【你与用户的对话历史】\n' +
       fullDialogueHistory
-        .map(d => `${d.speaker === 'agent' ? '你' : '用户'}: ${d.text}`)
+        .map(d => {
+          if (typeof d === 'string') {
+            if (d.startsWith('【你】')) return `用户: ${d.replace('【你】', '').trim()}`;
+            return `你: ${d}`;
+          }
+          return `${d.speaker === 'agent' ? '你' : '用户'}: ${d.text}`;
+        })
         .join('\n');
   }
 
-  // 跨推演记忆：检索用户历史推演中的相关记忆
-  let crossSessionMemory = '';
-  if (userId) {
-    try {
-      const memories = await retrieveMemories(userId, question, 2);
-      if (memories && memories.length > 0) {
-        crossSessionMemory = '\n\n【用户的历史推演记忆】\n' + memories.map(m => `- ${m.content}`).join('\n');
-      }
-    } catch (e) {
-      // 静默失败
-    }
-  }
-
-  const userPrompt = `用户问：「${question}」${contextText}${agentContextText}${crossSessionMemory}
+  const userPrompt = `用户问：「${question}」${contextText}${agentContextText}
 
 请以 ${agent.name}（${agent.stance}）的身份，说 1-3 句话回应。不要复述用户问题。`;
 
-  try {
-    const text = await callLLM(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      { maxTokens: 200, temperature: 0.9, timeout: 8000 }
-    );
+  // v3.0 零预设：LLM 失败抛错（由调用方 withRetry 处理）
+  // P0-2 修复：放宽长度限制，给Agent提问+讨论空间（之前200太挤）
+  const text = await callLLM(
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    { maxTokens: 450, temperature: 0.85, timeout: 10000 }
+  );
 
-    if (text && text.trim()) {
-      return text.trim().slice(0, 120);
-    }
-
-    return getLocalPreset(agent, question);
-  } catch (e) {
-    console.warn(`[agentEngine] ${agent.id} 生成失败，降级到本地预设:`, e.message);
-    return getLocalPreset(agent, question);
+  if (!text || !text.trim()) {
+    throw Object.assign(new Error(`智囊${agent.name}发言LLM返回空`), { type: 'LLM_EMPTY_OUTPUT' });
   }
-}
-
-/**
- * 根据Agent和问题生成本地预设回应（每个Agent有独特预设）
- */
-function getLocalPreset(agent, question) {
-  const presets = AGENT_PRESETS[agent.id] || AGENT_PRESETS.jingyuan;
-  const type = detectQuestionType(question);
-  const idx = (type.charCodeAt(0) + agent.id.length) % presets.length;
-  return presets[idx];
+  return text.trim().slice(0, 450);
 }
 
 /**
@@ -407,7 +306,7 @@ export async function generateAgentQuestion(agent, question, dialogueHistory = [
     return { question: '你心里其实已经有答案了，对吗？', needMoreInfo: false };
   }
 
-  // 三层提示词优先，降级到 persona
+  // 三层提示词
   const basePrompt = buildAgentSystemPrompt(agent);
 
   const systemPrompt = `${basePrompt}
@@ -426,7 +325,11 @@ export async function generateAgentQuestion(agent, question, dialogueHistory = [
     contextText = '\n\n【对话历史】\n' +
       dialogueHistory
         .map((d) => {
-          const role = d.speaker === 'agent' ? `${AGENT_POOL_MAP[d.agentId]?.name || '未知'}` : '用户';
+          if (typeof d === 'string') {
+            if (d.startsWith('【你】')) return `用户: ${d.replace('【你】', '').trim()}`;
+            return `${agent.name}: ${d}`;
+          }
+          const role = d.speaker === 'agent' ? `${AGENT_POOL_MAP[d.agentId]?.name || agent.name || '未知'}` : '用户';
           return `${role}: ${d.text}`;
         })
         .join('\n');
@@ -436,109 +339,19 @@ export async function generateAgentQuestion(agent, question, dialogueHistory = [
 
 请以 ${agent.name}（${agent.stance}）的身份，问一个能获取关键信息的问题。`;
 
-  try {
-    const text = await callLLM(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      { maxTokens: 100, temperature: 0.8, timeout: 8000 }
-    );
+  // v3.0 零预设：LLM 失败抛错（由调用方 withRetry 处理）
+  const text = await callLLM(
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    { maxTokens: 100, temperature: 0.8, timeout: 8000 }
+  );
 
-    if (text && text.trim()) {
-      return { question: text.trim().slice(0, 80), needMoreInfo: true };
-    }
-
-    return getLocalQuestion(agent, question);
-  } catch (e) {
-    console.warn(`[agentEngine] ${agent.id} 生成问题失败，降级到本地预设:`, e.message);
-    return getLocalQuestion(agent, question);
+  if (!text || !text.trim()) {
+    throw Object.assign(new Error(`智囊${agent.name}生成追问问题LLM返回空`), { type: 'LLM_EMPTY_OUTPUT' });
   }
-}
-
-/**
- * Agent本地预设问题
- */
-const AGENT_QUESTIONS = {
-  qiangu: [
-    '你的期望薪资和底线薪资分别是多少？',
-    '这个offer的总包结构是什么？base/bonus/equity各占多少？',
-    '你目前的薪资结构是怎样的？',
-    '如果选择这个，机会成本是多少？',
-  ],
-  luxiang: [
-    '你3年后想成为什么样的人？',
-    '这个选择能让你长出什么新能力？',
-    '你最看重的是短期收益还是长期成长？',
-    '这个行业的天花板在哪里？',
-  ],
-  fengyan: [
-    '最坏的情况是什么？你能承受吗？',
-    '什么信号出现会让你承认选错了？',
-    '你忽略了哪些风险？',
-    '如果失败，你的B计划是什么？',
-  ],
-  xinhe: [
-    '你描述这件事时，身体是放松还是紧绷？',
-    '如果没人看着，你会怎么选？',
-    '你真正害怕的是选错，还是后悔没选？',
-    '这件事让你兴奋还是焦虑？',
-  ],
-  jingyuan: [
-    '上次类似的情况，你选了什么，后来呢？',
-    '你问这个问题的方式，已经暴露了你的倾向，对吗？',
-    '你敢对三个月后的自己说"我选了X"吗？',
-    '这个"该"是谁的标准？',
-  ],
-  yuntu: [
-    '你看的是过去6个月的涨势，还是看懂了底层逻辑？',
-    '现在是周期的哪个位置？',
-    '你是吃Beta红利，还是做Alpha？',
-    '宏观环境对你的选择有什么影响？',
-  ],
-  zhenxing: [
-    '今晚能做什么？第一刀切在哪里？',
-    '再等一周，你会更清楚还是更焦虑？',
-    '你在等什么？',
-    '七成把握就该出手，你现在有几成？',
-  ],
-  duiyan: [
-    '你真的和对方谈过你的纠结吗？',
-    '对方真正在意的是什么？',
-    '这话该对谁说、怎么说、在什么时机说？',
-    '你表达的是诉求还是情绪？',
-  ],
-  falv: [
-    '这件事有没有落进合同里？',
-    '权责边界、违约后果、退出机制——这三件事清楚了吗？',
-    '如果翻脸，你手里有什么牌？',
-    '你现在的操作在法律上等于什么？',
-  ],
-  jiankang: [
-    '这个选择会让你睡得着吗？',
-    '睡眠、饮食、运动、情绪——哪个已经亮起红灯？',
-    '三年后你的身体扛得住吗？',
-    '你在透支式奋斗吗？',
-  ],
-  jiaoyu: [
-    '这个选择能不能让你长出新能力？',
-    '十年后回看，这个选择教会你什么？',
-    '学习曲线、能力迁移、认知升级——哪个是你最需要的？',
-    '你想变成什么样的人？',
-  ],
-  jishu: [
-    '这事在工程上能不能落地？',
-    '第一版最小可用是什么样？',
-    '可行性、技术债务、架构权衡——哪个最让你担心？',
-    '你今天能写的第一行代码是什么？',
-  ],
-};
-
-function getLocalQuestion(agent, question) {
-  const questions = AGENT_QUESTIONS[agent.id] || AGENT_QUESTIONS.jingyuan;
-  const type = detectQuestionType(question);
-  const idx = (type.charCodeAt(0) + agent.id.length) % questions.length;
-  return { question: questions[idx], needMoreInfo: true };
+  return { question: text.trim().slice(0, 80), needMoreInfo: true };
 }
 
 /**
@@ -562,14 +375,25 @@ export async function shouldContinueAsking(agent, originalQuestion, dialogueHist
 【判断标准】
 - 如果用户的回答已经提供了足够的信息让你做出判断，返回 false
 - 如果用户的回答含糊、回避、或信息不足，需要继续追问，返回 true
-- 最多追问2次，第2次后必须返回 false`;
+- 最多追问2次，第2次后必须返回 false
+
+【关键规则】
+- 仔细阅读【对话历史】，用户已经说过的信息（如薪资数字、岗位、时间等）绝对不能再问一遍
+- 追问必须基于用户尚未提及的新维度，不能重复已答内容
+- 如果用户已给出具体数字或明确回答，视为该维度已充分，转向其他未覆盖的维度`;
 
   let contextText = '';
   if (dialogueHistory.length > 0) {
     contextText = '\n\n【对话历史】\n' +
       dialogueHistory
         .map((d) => {
-          const role = d.speaker === 'agent' ? `${AGENT_POOL_MAP[d.agentId]?.name || '未知'}` : '用户';
+          // 前端传过来的是字符串：用户消息以「【你】」开头，演的追问不带前缀
+          if (typeof d === 'string') {
+            if (d.startsWith('【你】')) return `用户: ${d.replace('【你】', '').trim()}`;
+            return `${agent.name}: ${d}`;
+          }
+          // 兼容对象格式
+          const role = d.speaker === 'agent' ? `${AGENT_POOL_MAP[d.agentId]?.name || agent.name || '未知'}` : '用户';
           return `${role}: ${d.text}`;
         })
         .join('\n');
@@ -669,75 +493,35 @@ ${dialogueText || '无详细对话记录'}
 
 请梳理全局信息，生成总结和选项。`;
 
-  try {
-    const text = await callLLM(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      { maxTokens: 500, temperature: 0.7, timeout: 10000 }
-    );
+  // v3.0 零预设：LLM 失败抛错（由调用方 withRetry 处理）
+  const text = await callLLM(
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    { maxTokens: 500, temperature: 0.7, timeout: 10000 }
+  );
 
-    if (text) {
-      const match = text.match(/\{[\s\S]*\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
-        const summary = parsed.summary || '';
-        const options = Array.isArray(parsed.options) ? parsed.options : [];
-        if (!summary || options.length === 0) {
-          return generateLocalSummary(originalQuestion, agentList);
-        }
-        return { summary, options };
-      }
-    }
-
-    return generateLocalSummary(originalQuestion, agentList);
-  } catch (e) {
-    console.warn('[agentEngine] 演生成总结失败，降级到本地总结:', e.message);
-    return generateLocalSummary(originalQuestion, agentList);
+  if (!text) {
+    throw Object.assign(new Error('generateMasterSummary LLM返回空文本'), { type: 'LLM_EMPTY_OUTPUT' });
   }
+
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) {
+    throw Object.assign(new Error('generateMasterSummary LLM返回内容无有效JSON'), { type: 'LLM_INVALID_FORMAT', raw: text.slice(0, 200) });
+  }
+
+  const parsed = JSON.parse(match[0]);
+  const summary = parsed.summary || '';
+  const options = Array.isArray(parsed.options) ? parsed.options : [];
+  if (!summary || options.length === 0) {
+    throw Object.assign(new Error('generateMasterSummary LLM返回内容缺少summary或options'), { type: 'LLM_INVALID_FORMAT' });
+  }
+  return { summary, options };
 }
 
-/**
- * 本地降级总结生成
- */
-function generateLocalSummary(originalQuestion, agentList) {
-  const type = detectQuestionType(originalQuestion);
-  const stanceNames = agentList.map(a => a.name).join('、');
-
-  const summaryTemplates = {
-    offer: `诸位所议，各有道理。\n${stanceNames}从不同视角审视了这个选择。\n核心矛盾在于：短期收益与长期成长之间的权衡。\n是追求稳定还是拥抱变化，取决于你的本心。`,
-    career: `${stanceNames}的分析揭示了关键维度：\n赛道选择、能力成长、风险承受度。\n没有绝对正确的答案，只有适合当下的选择。`,
-    finance: `钱谷算清了账目，风眼提醒了风险，镜渊照见了本心。\n决策的关键在于：你能承受多大的不确定性？\n数字之外，还要看时机和周期。`,
-    startup: `创业之路，九死一生。\n${stanceNames}的分析表明：\n准备是否充分、风险是否可控、初心是否坚定——这是成败的关键。`,
-    life: `人生没有标准答案。\n${stanceNames}的追问，帮助你看清了自己真正想要的。\n跟随本心，便是最好的选择。`,
-    default: `诸位智囊各抒己见，视角各异。\n核心在于：${stanceNames}的观点中，哪个最能触动你的内心？\n选择那条让你愿意对未来自己负责的路。`,
-  };
-
-  const summary = summaryTemplates[type] || summaryTemplates.default;
-
-  const optionTemplates = {
-    offer: [
-      { label: '接受Offer', keyPoints: ['薪资提升明显', '短期收益确定', '行业前景看好'], guaRecommendation: '乾' },
-      { label: '留在原地', keyPoints: ['风险可控', '现有资源积累', '等待更好机会'], guaRecommendation: '坤' },
-      { label: '继续观望', keyPoints: ['收集更多信息', '评估其他机会', '不急于决策'], guaRecommendation: '离' },
-    ],
-    career: [
-      { label: '全力冲刺', keyPoints: ['抓住风口', '快速成长', '承担更大责任'], guaRecommendation: '乾' },
-      { label: '稳扎稳打', keyPoints: ['夯实基础', '降低风险', '积累资源'], guaRecommendation: '坤' },
-      { label: '探索转型', keyPoints: ['尝试新领域', '跨界学习', '寻找新机会'], guaRecommendation: '巽' },
-    ],
-    default: [
-      { label: '顺势而为', keyPoints: ['跟随大势', '把握时机', '借力而行'], guaRecommendation: '乾' },
-      { label: '守拙待时', keyPoints: ['积蓄力量', '观察变化', '等待良机'], guaRecommendation: '坤' },
-      { label: '破而后立', keyPoints: ['主动改变', '突破现状', '创造新局'], guaRecommendation: '震' },
-    ],
-  };
-
-  return {
-    summary,
-    options: optionTemplates[type] || optionTemplates.default,
-  };
+export function getAgentById(id) {
+  return AGENT_POOL.find(a => a.id === id) || AGENT_POOL_MAP[id] || null;
 }
 
 export default {
@@ -746,4 +530,5 @@ export default {
   generateAgentQuestion,
   shouldContinueAsking,
   generateMasterSummary,
+  getAgentById,
 };

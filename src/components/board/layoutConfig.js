@@ -106,15 +106,20 @@ export function getChoiceColor(branch) {
  * Agent 八卦位置排列 - 围绕中心，360° 均匀分布
  */
 export function getAgentPosition(index, total) {
-  const radius = 2.8;
-  const angleStep = (Math.PI * 2) / total;
-  // 从顶部开始（-Y方向为后，相机看向-Z）
+  const baseRadius = 2.8;
+  const angleStep = (Math.PI * 2) / Math.max(1, total);
   const angle = -Math.PI / 2 + index * angleStep;
-  const heightOffset = Math.sin(index * 0.9 + 0.5) * 0.2;
+  // ★ Fix: 增大高度偏移（0.4）+ 半径抖动（±0.35）+ x/z 微小偏移
+  //   解决智囊卡片 3D 视觉重叠问题（尤其 4+ 智囊时）
+  const heightOffset = Math.sin(index * 0.9 + 0.5) * 0.4;
+  const radiusJitter = Math.cos(index * 1.3 + 0.2) * 0.35;
+  const radius = baseRadius + radiusJitter;
+  const xExtra = Math.sin(index * 1.7) * 0.12;
+  const zExtra = Math.cos(index * 2.1) * 0.12;
   return {
-    x: Math.cos(angle) * radius,
+    x: Math.cos(angle) * radius + xExtra,
     y: 1.0 + heightOffset,
-    z: Math.sin(angle) * radius,
+    z: Math.sin(angle) * radius + zExtra,
     angle,
   };
 }

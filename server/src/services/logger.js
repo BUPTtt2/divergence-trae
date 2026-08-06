@@ -1,3 +1,7 @@
+import { appendFileSync, mkdirSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
 const LEVELS = {
   DEBUG: 0,
   INFO: 1,
@@ -15,6 +19,39 @@ const COLORS = {
   RESET: '\x1b[0m',
 };
 
+// ===== 日志文件配置 =====
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const LOGS_DIR = join(__dirname, '../../logs');
+
+// 确保日志目录存在
+if (!existsSync(LOGS_DIR)) {
+  try {
+    mkdirSync(LOGS_DIR, { recursive: true });
+  } catch (e) {
+    // 目录创建失败不阻断运行，仅控制台告警
+    console.warn(`[Logger] 创建日志目录失败: ${e.message}`);
+  }
+}
+
+function getLogFile() {
+  const today = new Date().toISOString().split('T')[0];
+  return join(LOGS_DIR, `deliberation-${today}.log`);
+}
+
+function getErrorLogFile() {
+  const today = new Date().toISOString().split('T')[0];
+  return join(LOGS_DIR, `error-${today}.log`);
+}
+
+function writeToFile(filePath, line) {
+  try {
+    appendFileSync(filePath, line + '\n', 'utf8');
+  } catch (e) {
+    // 文件写入失败不阻断运行
+  }
+}
+
 function shouldLog(level) {
   return LEVELS[level] >= LOG_LEVEL;
 }
@@ -24,8 +61,8 @@ function formatMessage(level, message, meta = {}) {
   const color = COLORS[level];
   const reset = COLORS.RESET;
 
-  const metaStr = Object.keys(meta).length > 0 
-    ? ` ${JSON.stringify(meta)}` 
+  const metaStr = Object.keys(meta).length > 0
+    ? ` ${JSON.stringify(meta)}`
     : '';
 
   const logLine = {
@@ -35,7 +72,16 @@ function formatMessage(level, message, meta = {}) {
     ...meta,
   };
 
+  // 控制台输出
   console.log(`${color}[${level}]${reset} ${timestamp} ${message}${metaStr}`);
+
+  // 文件输出（所有级别写主日志文件，ERROR/WARN 额外写错误文件）
+  const fileLine = `[${timestamp}] [${level}] ${message}${metaStr}`;
+  writeToFile(getLogFile(), fileLine);
+  if (level === 'ERROR' || level === 'WARN') {
+    writeToFile(getErrorLogFile(), fileLine);
+  }
+
   return logLine;
 }
 

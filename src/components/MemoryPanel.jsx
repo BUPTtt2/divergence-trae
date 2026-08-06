@@ -42,7 +42,7 @@ const DEMO_MEMORIES = [
   {
     id: 'm4',
     category: 'deduction',
-    title: '关于「要不要接新Offer」的推演',
+    title: '关于「换城市」的推演',
     content: '综合钱谷、路向、风眼、心禾、镜渊五位智者之言，最终选择「稳守当前」。卦象艮，属土，宜静不宜动。',
     source: '推演记录',
     date: '2026-07-11',

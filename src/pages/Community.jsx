@@ -4,7 +4,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
 import AppNav from '../components/AppNav';
 import { AGENT_MAP } from '../data/agents';
-import { getCustomAgents, deleteCustomAgent, publishAgent, getMarketAgents, isPublished, subscribeAgent } from '../utils/customAgent';
+import { getCustomAgents, deleteCustomAgent, publishAgent, getMarketAgents, subscribeAgent } from '../utils/customAgent';
 import { getUserProfile, updateUserProfile, getAvatarOptions, getColorOptions, regenerateNickname } from '../utils/userProfile';
 import { useAuth } from '../context/AuthContext.jsx';
 

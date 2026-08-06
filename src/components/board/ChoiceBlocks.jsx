@@ -173,17 +173,18 @@ function ChoiceBlock({ choice, index, total, selected, onSelect, phase }) {
    选择方块容器
 ============================================================ */
 export default function ChoiceBlocks({ phase, choices, onSelect, selectedChoice }) {
-  if (!['branch_select', 'path_reveal', 'final'].includes(phase)) return null;
-  if (!choices || choices.length === 0) return null;
+  // 仅抉择阶段显示 3D 方块；path_reveal/final 让浮起命牌做主角
+  const showChoices = phase === 'branch_select';
+  const validChoices = (choices && choices.length > 0) ? choices : [];
 
   return (
-    <group>
-      {choices.map((choice, index) => (
+    <group visible={showChoices && validChoices.length > 0}>
+      {validChoices.map((choice, index) => (
         <ChoiceBlock
           key={choice.id || index}
           choice={choice}
           index={index}
-          total={choices.length}
+          total={validChoices.length}
           selected={selectedChoice?.id === choice.id}
           onSelect={onSelect}
           phase={phase}

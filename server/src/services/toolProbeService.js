@@ -27,6 +27,12 @@ import logger from './logger.js';
 const PROBE_TOTAL_TIMEOUT_MS = 6000;
 
 /**
+ * 危险工具清单（HITL 人工确认拦截）
+ * 涉及医疗/法律的工具不直接执行，返回 needApproval 让演感知未被执行
+ */
+const DANGEROUS_TOOLS = ['medical_query', 'legal_query'];
+
+/**
  * 问题类型 → 工具清单（确定性映射）
  * 注：medical/policy/route 在 mcpService 不存在，统一用 web_search 兜底
  */
@@ -37,6 +43,13 @@ const QUESTION_TYPE_TO_PROBES = {
   health: ['web_search'],
   relationship: [],
   life: [],
+  city: ['web_search'],       // 租房/买房/定居：查信息但不查天气
+  pet: ['web_search'],
+  education: ['web_search'],
+  legal: ['web_search'],
+  competition: ['web_search'],
+  tech: ['web_search'],
+  other: [],
 };
 
 const REALTIME_PATTERN = /最新|现在|实时|今天|当前|近期|此刻/;
@@ -44,10 +57,10 @@ const STOCK_PATTERN = /股票|基金|A股|美股|港股|涨停|跌停|股价|行
 const STOCK_CODE_PATTERN = /(\d{6})/;
 const STOCK_NAMES = ['贵州茅台', '茅台', '中国平安', '比亚迪', '宁德时代', '腾讯', '阿里', '阿里巴巴', '字节跳动'];
 
-// travel 类型默认城市兜底
-const TRAVEL_DEFAULT_CITY = '拉萨';
+// travel 类型默认城市兜底（null 表示未识别，不硬编码特定城市）
+const TRAVEL_DEFAULT_CITY = null;
 
-// 常见目的地 → 城市映射（用于 weather_query）
+// 常见目的地 → 城市映射（用于 weather_query 快速匹配，非硬编码依赖）
 const DESTINATION_TO_CITY = {
   '西藏': '拉萨', '拉萨': '拉萨', '林芝': '林芝',
   '云南': '昆明', '昆明': '昆明', '大理': '大理', '丽江': '丽江', '香格里拉': '香格里拉',
@@ -95,7 +108,7 @@ export function buildProbeArgs(toolName, question, questionType) {
       return { city: extractCity(q, questionType) };
 
     case 'web_search':
-      return { query: buildSearchQuery(q, questionType), maxResults: 3 };
+      return { query: buildSearchQuery(q, questionType), maxResults: 5 };
 
     case 'stock_query':
       return { symbol: extractStockSymbol(q) || 'sh600519' }; // 兜底茅台
@@ -133,6 +146,7 @@ export function buildProbeArgs(toolName, question, questionType) {
 
 /**
  * 从问题中抽取城市名（weather_query 用）
+ * @returns {string|null} 城市名，null 表示未识别
  */
 function extractCity(question, questionType) {
   // travel 类型：优先抽"去XX"的 XX
@@ -153,6 +167,7 @@ function extractCity(question, questionType) {
   for (const key of Object.keys(DESTINATION_TO_CITY)) {
     if (question.includes(key)) return DESTINATION_TO_CITY[key];
   }
+  // 未识别到城市，返回 null（不再硬编码拉萨）
   return TRAVEL_DEFAULT_CITY;
 }
 
@@ -164,9 +179,9 @@ function buildSearchQuery(question, questionType) {
   switch (questionType) {
     case 'travel': {
       const m = q.match(/去([^\s，。、的进去玩旅]{2,4})/);
-      const dest = m ? m[1] : '西藏';
-      // 兜底 policy_query/route_query：搜"目的地 风险 政策 路况"
-      return `${dest} 风险 政策 路况`;
+      const dest = m ? m[1] : '';
+      // 有目的地搜"目的地 风险 政策 路况"，无目的地用问题本身
+      return dest ? `${dest} 风险 政策 路况` : `${q.slice(0, 20)} 风险 注意事项`;
     }
     case 'health': {
       const m = q.match(/(生病|看病|运动|减肥|健身|养生|熬夜|失眠|焦虑|抑郁|体检|高原反应|感冒|发烧|胃痛|头疼)/);
@@ -247,8 +262,29 @@ export async function probe(question, questionType) {
 
   for (const toolName of tools) {
     const args = buildProbeArgs(toolName, question, questionType);
+    // city=null 时跳过 weather_query（未识别到城市，不硬套默认城市）
+    if (toolName === 'weather_query' && !args.city) {
+      logger.info('[ToolProbe] weather_query 跳过（未识别到城市）', { question: (question || '').slice(0, 40) });
+      continue;
+    }
     const task = (async () => {
       const toolStart = Date.now();
+      // HITL 危险工具拦截：医疗/法律类工具不直接执行，标记 needApproval 让演感知未被执行
+      if (DANGEROUS_TOOLS.includes(toolName)) {
+        const elapsed = Date.now() - toolStart;
+        const summary = '此工具调用需要人工确认';
+        logger.warn('[ToolProbe] 危险工具拦截（需人工确认）', { tool: toolName, args, elapsed });
+        completed.push({
+          tool: toolName,
+          args,
+          result: null,
+          summary,
+          ok: false,
+          needApproval: true,
+          elapsed,
+        });
+        return;
+      }
       try {
         const result = await executeTool(toolName, args);
         const summary = summarizeToolResult(toolName, result);

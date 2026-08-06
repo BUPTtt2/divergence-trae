@@ -60,9 +60,32 @@ async function fetchTool(url, opts = {}, ms = DEFAULT_TIMEOUT) {
 // ===== 工具实现 =====
 
 /**
- * web_search — DuckDuckGo HTML 解析
+ * web_search — 百度搜索建议（国内首选）+ DuckDuckGo（国际备选）
  */
 async function webSearch({ query, maxResults = 3 }) {
+  // 1. 优先用百度搜索建议 API（国内网络稳定）
+  try {
+    const baiduUrl = `https://www.baidu.com/sugrec?prod=pc&wd=${encodeURIComponent(query)}`;
+    const baiduResp = await fetchTool(baiduUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+    });
+    if (baiduResp.ok) {
+      const baiduData = await baiduResp.json();
+      const sugList = Array.isArray(baiduData.g) ? baiduData.g : [];
+      const results = sugList.slice(0, maxResults).map(item => ({
+        title: item.q || '',
+        snippet: '百度搜索建议',
+        url: `https://www.baidu.com/s?wd=${encodeURIComponent(item.q || '')}`,
+      }));
+      if (results.length > 0) {
+        return { query, totalResults: results.length, results, fallback: false, source: '百度搜索建议' };
+      }
+    }
+  } catch (e) {
+    // 百度失败，继续尝试 DuckDuckGo
+  }
+
+  // 2. 备选：DuckDuckGo HTML 解析
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const resp = await fetchTool(url, {
     headers: {
@@ -70,7 +93,7 @@ async function webSearch({ query, maxResults = 3 }) {
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     },
   });
-  if (!resp.ok) throw new Error(`DuckDuckGo HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(`搜索 HTTP ${resp.status}`);
   const html = await resp.text();
   const results = [];
   // DuckDuckGo HTML 结构：result__a (标题链接) + result__snippet
@@ -139,32 +162,42 @@ async function stockQuery({ symbol }) {
 }
 
 /**
- * weather_query — wttr.in
+ * weather_query — wttr.in（带 1 次重试，应对国内网络波动）
  */
 async function weatherQuery({ city }) {
   const url = `https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=zh`;
-  const resp = await fetchTool(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) curl/7.84.0' },
-  });
-  if (!resp.ok) throw new Error(`wttr.in HTTP ${resp.status}`);
-  const data = await resp.json();
-  const cur = data.current_condition?.[0] || {};
-  return {
-    city,
-    temperature: `${cur.temp_C}°C`,
-    feelsLike: `${cur.FeelsLikeC}°C`,
-    condition: cur.lang_zh?.[0]?.value || cur.weatherDesc?.[0]?.value || '',
-    humidity: `${cur.humidity}%`,
-    wind: `${cur.windspeedKmph}km/h ${cur.winddir16Point}`,
-    forecast: (data.weather || []).slice(0, 3).map(w => ({
-      date: w.date,
-      high: `${w.maxtempC}°C`,
-      low: `${w.mintempC}°C`,
-      avg: `${w.avgtempC}°C`,
-      condition: w.hourly?.[4]?.lang_zh?.[0]?.value || w.hourly?.[4]?.weatherDesc?.[0]?.value || '',
-    })),
-    source: 'wttr.in',
-  };
+  const headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) curl/7.84.0' };
+
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const resp = await fetchTool(url, { headers }, 6000);
+      if (!resp.ok) throw new Error(`wttr.in HTTP ${resp.status}`);
+      const data = await resp.json();
+      const cur = data.current_condition?.[0] || {};
+      return {
+        city,
+        temperature: `${cur.temp_C}°C`,
+        feelsLike: `${cur.FeelsLikeC}°C`,
+        condition: cur.lang_zh?.[0]?.value || cur.weatherDesc?.[0]?.value || '',
+        humidity: `${cur.humidity}%`,
+        wind: `${cur.windspeedKmph}km/h ${cur.winddir16Point}`,
+        forecast: (data.weather || []).slice(0, 3).map(w => ({
+          date: w.date,
+          high: `${w.maxtempC}°C`,
+          low: `${w.mintempC}°C`,
+          avg: `${w.avgtempC}°C`,
+          condition: w.hourly?.[4]?.lang_zh?.[0]?.value || w.hourly?.[4]?.weatherDesc?.[0]?.value || '',
+        })),
+        source: 'wttr.in',
+      };
+    } catch (e) {
+      lastError = e;
+      // 第 1 次失败后等 1s 再重试
+      if (attempt === 0) await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  throw lastError;
 }
 
 /**

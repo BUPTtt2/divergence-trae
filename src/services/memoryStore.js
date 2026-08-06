@@ -297,16 +297,25 @@ const MAX_FEEDBACK = 100;
  * @param {string} dialogueText - 被反馈的发言内容（摘要）
  */
 export function saveAgentFeedback(agentId, feedbackType, question = '', dialogueText = '') {
-  if (!agentId || !feedbackType) return;
-  const arr = readArr(KEY_FEEDBACK);
-  arr.push({
-    agentId,
-    feedbackType,
-    question: String(question).slice(0, 60),
-    dialogue: String(dialogueText).slice(0, 60),
-    createdAt: Date.now(),
-  });
-  writeArr(KEY_FEEDBACK, arr.slice(-MAX_FEEDBACK));
+  if (!agentId || !feedbackType) return false;
+  try {
+    const arr = readArr(KEY_FEEDBACK);
+    arr.push({
+      agentId,
+      feedbackType,
+      question: String(question || '').slice(0, 60),
+      dialogue: String(dialogueText || '').slice(0, 60),
+      createdAt: Date.now(),
+    });
+    writeArr(KEY_FEEDBACK, arr.slice(-MAX_FEEDBACK));
+    if (typeof window !== 'undefined') {
+      console.info(`[智囊调校] ${feedbackType === 'positive' ? '✦ 受用' : '✕ 失言'} 已保存 · agent=${agentId}`);
+    }
+    return true;
+  } catch (e) {
+    console.error('[saveAgentFeedback] 保存反馈失败:', e?.message || e);
+    return false;
+  }
 }
 
 /**

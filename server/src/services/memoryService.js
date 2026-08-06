@@ -15,6 +15,7 @@
 
 import { query } from './db.js';
 import { callLLM } from './llmRouter.js';
+import { getEmbedding } from './embeddingService.js';
 import { generateUUID } from '../utils/id.js';
 import logger from './logger.js';
 
@@ -23,64 +24,9 @@ const SESSIONS_TABLE = 'deliberation_sessions';
 const SUMMARIES_TABLE = 'session_summaries';
 const MEMORY_TABLE = 'user_memory';
 
-const EMBED_DIM = 256;
 const MERGE_THRESHOLD = 0.85; // L3 合并阈值
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-// 分词停用词（中文虚词 + 英文常见词）
-const STOPWORDS = new Set([
-  '的', '了', '是', '在', '我', '你', '他', '她', '它', '们', '和', '与', '或',
-  '也', '都', '就', '这', '那', '有', '不', '为', '上', '下', '中', '大', '小',
-  '人', '个', '到', '会', '可', '以', '要', '想', '把', '被', '让', '给', '对',
-  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'on', 'for',
-  'and', 'or', 'but', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'do', 'does',
-]);
-
-// ============ 向量工具：TF 哈希（无依赖） ============
-
-/**
- * 简易分词：latin/digit 连续串 + 单个 CJK 字符，过滤停用词
- */
-function tokenize(text) {
-  if (!text) return [];
-  const lower = String(text).toLowerCase();
-  const tokens = [];
-  const latin = lower.match(/[a-z0-9]+/g) || [];
-  tokens.push(...latin);
-  const cjk = lower.match(/[\u4e00-\u9fff]/g) || [];
-  tokens.push(...cjk);
-  return tokens.filter((t) => t && !STOPWORDS.has(t));
-}
-
-/**
- * 字符串 → 32 位正整数哈希（确定性）
- */
-function hashStr(s) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (h << 5) - h + s.charCodeAt(i);
-    h |= 0;
-  }
-  return Math.abs(h);
-}
-
-/**
- * 文本 → 固定维度 TF 向量（L2 归一化）
- */
-function embed(text) {
-  const tokens = tokenize(text);
-  const vec = new Array(EMBED_DIM).fill(0);
-  for (const t of tokens) {
-    vec[hashStr(t) % EMBED_DIM] += 1;
-  }
-  let norm = 0;
-  for (const v of vec) norm += v * v;
-  norm = Math.sqrt(norm);
-  if (norm > 0) {
-    for (let i = 0; i < EMBED_DIM; i++) vec[i] /= norm;
-  }
-  return vec;
-}
+const RECALL_THRESHOLD = 0.25; // L2/L3 召回最低相似度阈值（Cache-Aside）
 
 /**
  * 余弦相似度（向量已归一化时等于点积，这里保留通式以兼容未归一化向量）
@@ -138,6 +84,8 @@ function parseMemoriesJSON(text) {
   }
   return [];
 }
+
+// ruleBasedMemoryExtract 已删除（v3.0 零预设：LLM 提取失败则不提取，不降级规则）
 
 /**
  * 去掉 data 中值为 undefined 的字段（避免 update 时把列置 NULL）
@@ -236,6 +184,15 @@ export async function recentSummaries(userId, days = 7) {
  * 排序：similarity × importance × recency × frequency
  */
 export async function recall(userId, question, topN = 5) {
+  // Cache-Aside: embedding 生成失败/为空就返回空，不阻塞主流程
+  let qVec;
+  try {
+    qVec = await getEmbedding(question);
+  } catch (e) {
+    logger.warn('L3 召回: embedding 生成失败，返回空（Cache-Aside 非阻塞）', { userId, error: e.message });
+    return [];
+  }
+
   const result = await query({
     table: MEMORY_TABLE,
     action: 'select',
@@ -243,22 +200,11 @@ export async function recall(userId, question, topN = 5) {
   });
   if (result.rows.length === 0) return [];
 
-  const qVec = embed(question);
-  const qTokens = new Set(tokenize(question));
   const now = Date.now();
 
   const scored = result.rows.map((m) => {
     const emb = parseEmbedding(m.embedding);
-    let score = cosineSimilarity(qVec, emb);
-
-    // 关键词匹配兜底：当向量相似度低时，用 token 重叠补一个保底分
-    if (score < 0.1) {
-      const mTokens = tokenize(m.content);
-      const overlap = mTokens.filter((t) => qTokens.has(t)).length;
-      if (overlap > 0 && qTokens.size > 0) {
-        score = Math.max(score, (overlap / qTokens.size) * 0.4);
-      }
-    }
+    const score = cosineSimilarity(qVec, emb);
 
     // importance: 1-5 → 0.6-1.2
     const impWeight = 0.6 + ((m.importance || 3) / 5) * 0.6;
@@ -273,7 +219,7 @@ export async function recall(userId, question, topN = 5) {
   });
 
   scored.sort((a, b) => b.score - a.score);
-  const top = scored.slice(0, topN).filter((s) => s.score > 0);
+  const top = scored.slice(0, topN).filter((s) => s.score >= RECALL_THRESHOLD);
 
   // 命中记忆异步更新访问时间（不阻塞召回）
   for (const s of top) {
@@ -290,6 +236,20 @@ export async function recall(userId, question, topN = 5) {
 
   logger.info('L3 召回完成', { userId, total: result.rows.length, hit: top.length });
   return top.map((s) => s.memory);
+}
+
+/**
+ * 列出用户所有命格（按重要度排序，供前端展示）
+ */
+export async function listMemories(userId, limit = 10) {
+  const result = await query({
+    table: MEMORY_TABLE,
+    action: 'select',
+    filter: { user_id: userId },
+  });
+  return result.rows
+    .sort((a, b) => (b.importance || 3) - (a.importance || 3))
+    .slice(0, limit);
 }
 
 /**
@@ -324,7 +284,7 @@ export async function upsertMemory(memory) {
   // 归一化 embedding 为数组
   let embedding = memory.embedding;
   if (typeof embedding === 'string') embedding = parseEmbedding(embedding);
-  if (!Array.isArray(embedding) || embedding.length === 0) embedding = embed(content);
+  if (!Array.isArray(embedding) || embedding.length === 0) embedding = await getEmbedding(content);
   const embeddingStr = JSON.stringify(embedding);
 
   // 在已有记忆中找最相似的一条
@@ -448,7 +408,7 @@ export async function consolidate(sessionId) {
   });
   logger.info('L2 摘要已存', { summaryId, sessionId });
 
-  // L2 → L3 命格提取
+  // L2 → L3 命格提取（8s 超时 + 规则兜底）
   let extracted = [];
   try {
     const raw = await callLLM(
@@ -460,12 +420,15 @@ export async function consolidate(sessionId) {
         },
         { role: 'user', content: `${context}\n摘要: ${summary}` },
       ],
-      { maxTokens: 300, temperature: 0.4 },
+      { maxTokens: 300, temperature: 0.4, timeout: 8000 },
     );
     extracted = parseMemoriesJSON(raw);
   } catch (e) {
-    logger.warn('LLM 命格提取失败，跳过 L3', { error: e.message });
+    logger.warn('LLM 命格提取失败，本次不提取（零预设，不降级规则）', { error: e.message });
+    extracted = [];
   }
+
+  // LLM 返回空则不提取（零预设：不降级规则）
 
   let upserted = 0;
   for (const m of extracted) {
@@ -522,11 +485,201 @@ export async function selfTest() {
   return { ok, hitCount: hits.length, top: hits[0]?.content };
 }
 
+// ============ 旧 API 兼容包装（agentEngine 等旧轨仍在用，逐步迁移） ============
+
+/**
+ * @deprecated 用 recall(userId, question, topN)
+ * 旧 retrieveMemories 兼容包装
+ */
+export async function retrieveMemories(userId, question, topN = 5) {
+  return recall(userId, question, topN);
+}
+
+/**
+ * P6 helper：获取用户画像汇总文本
+ * 把 user_memory 表中 memory_type='profile'/'preference'/'concern' 的前15条拼成自然语言
+ */
+export async function getUserProfile(userId) {
+  if (!userId) return '';
+  try {
+    const all = await listMemories(userId, 50);
+    if (!Array.isArray(all) || all.length === 0) return '';
+
+    const sorted = [...all].sort((a, b) => (Number(b.importance) || 3) - (Number(a.importance) || 3));
+    const profile = sorted.filter((m) => m.memory_type === 'profile').slice(0, 5);
+    const pref = sorted.filter((m) => m.memory_type === 'preference').slice(0, 5);
+    const concern = sorted.filter((m) => m.memory_type === 'concern').slice(0, 5);
+
+    const parts = [];
+    if (profile.length > 0) parts.push('- 用户客观背景：' + profile.map((m) => m.content).join('；'));
+    if (pref.length > 0) parts.push('- 用户偏好：' + pref.map((m) => m.content).join('；'));
+    if (concern.length > 0) parts.push('- 用户红线/担忧：' + concern.map((m) => m.content).join('；'));
+
+    return parts.join('\n');
+  } catch (e) {
+    logger.warn('[Memory] getUserProfile 失败', { error: e.message });
+    return '';
+  }
+}
+
+/**
+ * P5：从一次完整推演（问题+追问回答+智囊发言+抉择）中提取用户画像/关键记忆
+ * LLM 驱动，失败抛错（零预设：不降级为"不提取"）
+ *
+ * 返回：Array<{ content, memory_type, tags, importance }>
+ *   - memory_type: 'profile'（画像，如"用户在北京实习租房"） / 'preference'（偏好） / 'concern'（担忧/红线）
+ *   - importance: 1-5（5=核心特质，1=细枝末节）
+ */
+export async function extractUserProfileFromDeliberation({
+  question,
+  qaHistory = [],
+  findings = [],
+  userChoice = '',
+  userFeedback = '',
+  existingMemories = [],
+}) {
+  const q = String(question || '').trim();
+  if (!q) return [];
+
+  const qaText = Array.isArray(qaHistory) && qaHistory.length > 0
+    ? qaHistory.map((qa) => `问：${qa.question}\n答：${qa.answer}`).join('\n\n')
+    : '（无追问）';
+
+  const findingsText = Array.isArray(findings) && findings.length > 0
+    ? findings.slice(0, 8).map((f) => `[${f.agentName || f.agentId || '智囊'}] ${String(f.content || '').slice(0, 200)}`).join('\n')
+    : '（无智囊发言）';
+
+  const existingText = Array.isArray(existingMemories) && existingMemories.length > 0
+    ? existingMemories.slice(0, 10).map((m) => `- [${m.memory_type || '记忆'}] ${m.content}`).join('\n')
+    : '（暂无已有记忆）';
+
+  const prompt = `你是严谨的用户画像抽取官。基于本次完整推演，抽取用户的稳定特质/偏好/关注点，写入长期记忆供未来推演参考。
+
+【用户问题】${q}
+【追问与回答历史】
+${qaText}
+【智囊发言摘要】
+${findingsText}
+【用户最终抉择】${userChoice || '未选择'}
+【用户写下的承诺/反馈】${userFeedback || '无'}
+【用户已有记忆（避免重复写入）】
+${existingText}
+
+【抽取规则】
+1. 只抽取用户**明确表达/反复强调/行动证明**的内容，不要臆测
+2. 区分类型：profile(身份/客观事实) / preference(偏好倾向) / concern(红线/担忧/讨厌)
+3. 每条记忆用最直白的中文短句，不超过25字
+4. 每条标注 importance 1-5（5=影响重大决策的核心，1=可有可无）
+5. 最多抽取 6 条，宁缺毋滥
+6. 如果已有记忆里已经有高度相似的，跳过不要重复
+
+【输出】只返回 JSON 数组，不要任何解释：
+[
+  {"content":"简短中文描述","memory_type":"profile|preference|concern","tags":["标签1"],"importance":3},
+  ...
+]`;
+
+  const { withRetry, withTimeout } = await import('./retryHelper.js');
+
+  try {
+    const text = await withRetry(
+      () => withTimeout(
+        () => callLLM([{ role: 'user', content: prompt }], { maxTokens: 500, temperature: 0.2 }),
+        12000,
+        '用户画像抽取'
+      ),
+      { retries: 1, delayMs: 1000, name: 'extractUserProfile' }
+    );
+
+    let arr = null;
+    try {
+      const match = String(text || '').match(/\[[\s\S]*\]/);
+      arr = match ? JSON.parse(match[0]) : null;
+    } catch {}
+
+    if (!Array.isArray(arr) || arr.length === 0) {
+      logger.info('[Memory] 用户画像抽取：无内容可写入', { question: q.slice(0, 30) });
+      return [];
+    }
+
+    const cleaned = arr
+      .filter((item) => item && typeof item.content === 'string' && item.content.trim())
+      .map((item) => ({
+        content: String(item.content).trim().slice(0, 200),
+        memory_type: ['profile', 'preference', 'concern'].includes(item.memory_type) ? item.memory_type : 'profile',
+        tags: Array.isArray(item.tags) ? item.tags.filter(Boolean).slice(0, 5) : [],
+        importance: Number.isFinite(Number(item.importance)) ? Math.min(5, Math.max(1, Number(item.importance))) : 3,
+      }))
+      .slice(0, 6);
+
+    logger.info('[Memory] 用户画像抽取完成', { count: cleaned.length, types: cleaned.map((m) => m.memory_type) });
+    return cleaned;
+  } catch (e) {
+    logger.warn('[Memory] 用户画像抽取失败', { error: e.message });
+    throw Object.assign(new Error(`用户画像抽取失败: ${e.message}`), { type: 'PROFILE_EXTRACT_FAILED', cause: e });
+  }
+}
+
+/**
+ * @deprecated consolidate 已内置 L3 提取，无需外部 extract
+ * 旧 extractMemoriesFromInference 兼容包装：返回空数组（旧轨调用方仅用于追加记忆，consolidate 会处理）
+ */
+export async function extractMemoriesFromInference() {
+  return [];
+}
+
+// ============ 旧轨对话/会话 API 兼容包装（新轨用 deliberation_sessions 代替，旧轨 yan 聊天降级） ============
+
+/**
+ * @deprecated 旧轨 conversation 表已废弃，新轨用 deliberation_sessions
+ * 返回一个内存态的伪 conversationId，写入不持久化
+ */
+const _inMemoryConversations = new Map();
+export async function getOrCreateConversation(userId) {
+  const key = `conv_${userId || 'anon'}`;
+  if (!_inMemoryConversations.has(key)) {
+    _inMemoryConversations.set(key, { id: key, userId, messages: [], createdAt: Date.now() });
+  }
+  return _inMemoryConversations.get(key);
+}
+
+/**
+ * @deprecated 旧轨消息存储已废弃，仅写内存
+ */
+export async function addMessage(conversationId, role, content) {
+  const conv = _inMemoryConversations.get(conversationId);
+  if (conv) {
+    conv.messages.push({ role, content, createdAt: Date.now() });
+  }
+  return { id: `msg_${Date.now()}`, conversationId, role, content };
+}
+
+/**
+ * @deprecated 旧轨消息存储已废弃，从内存读
+ */
+export async function getRecentMessages(conversationId, limit = 50) {
+  const conv = _inMemoryConversations.get(conversationId);
+  if (!conv) return [];
+  return conv.messages.slice(-limit);
+}
+
+/**
+ * @deprecated consolidate 已内置 L3 提取
+ * 旧 extractMemoriesFromChat 兼容包装：返回空数组
+ */
+export async function extractMemoriesFromChat() {
+  return [];
+}
+
 export default {
   recall,
   recentSummaries,
   injectToAgent,
   upsertMemory,
+  listMemories,
+  getUserProfile,
+  retrieveMemories,
+  extractUserProfileFromDeliberation,
   consolidate,
   saveSession,
   getSession,

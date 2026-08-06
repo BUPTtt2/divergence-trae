@@ -2,7 +2,7 @@
  * Decision tree node definitions
  */
 
-export const NODES = {
+export let NODES = {
   /* ---- 0. 起始节点 ---- */
   root: {
     id: 'root',
@@ -13,7 +13,7 @@ export const NODES = {
     content: {
       title: '你的决策问题',
       desc: '输入你正在纠结的抉择，推演局将为你展开所有可能的走向。',
-      placeholder: '例如：要不要接那个新 Offer？',
+      placeholder: '例如：要不要换城市？',
     },
     hasAgents: true,
     hasDice: false,
@@ -276,7 +276,7 @@ export const NODES = {
   },
 };
 
-export const TOPOLOGY = {
+export let TOPOLOGY = {
   root: {
     children: ['fog_salary', 'fog_team', 'fog_growth'],
   },
@@ -308,3 +308,12 @@ export const TOPOLOGY = {
     children: [],
   },
 };
+
+/**
+ * 动态更新决策树（LLM 生成后调用）
+ * 利用 ES Module live binding，所有 import 方会自动看到新值
+ */
+export function setDecisionTree(newNodes, newTopology) {
+  if (newNodes && typeof newNodes === 'object') NODES = newNodes;
+  if (newTopology && typeof newTopology === 'object') TOPOLOGY = newTopology;
+}

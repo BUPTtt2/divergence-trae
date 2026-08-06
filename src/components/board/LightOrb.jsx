@@ -10,8 +10,9 @@ import {
 } from '../../utils/trigramTextures';
 
 /* ============================================================
-   八卦阵底座 - 水平躺地（不 billboard，保持原状）
+   八卦阵底座 - 水平躺地（保持原状）
    多层光晕 + 主体 + 旋转外环 + 缓慢上升粒子
+   （注：只有演字环绕圈/Ring Sprite是Billboard，保持原设计）
 ============================================================ */
 function BaguaCompass() {
   const ringRef = useRef();
@@ -282,72 +283,142 @@ function CoinRitual({ visible }) {
     const cx = size / 2, cy = size / 2;
     ctx.clearRect(0, 0, size, size);
 
-    // 外圆: 宣纸底色 + 水墨晕染边
-    const outerR = size * 0.42;
-    const grad = ctx.createRadialGradient(cx, cy - size * 0.06, size * 0.05, cx, cy, outerR);
-    grad.addColorStop(0, '#F5E6C8');
-    grad.addColorStop(0.5, '#E8D098');
-    grad.addColorStop(0.85, '#C49A5C');
-    grad.addColorStop(1, '#8A6A30');
+    const outerR = size * 0.44;
+    const innerR = size * 0.38; // 钱肉（外郭内侧）
+    const guoOuter = size * 0.46; // 外郭外侧
+
+    // 外郭（凸起宽边）— 青铜金渐变
+    const guoGrad = ctx.createRadialGradient(cx, cy - size * 0.12, size * 0.06, cx, cy, guoOuter);
+    guoGrad.addColorStop(0, '#F4E0A6');
+    guoGrad.addColorStop(0.35, '#D8B25C');
+    guoGrad.addColorStop(0.7, '#9E7A34');
+    guoGrad.addColorStop(1, '#5E4418');
     ctx.beginPath();
-    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
-    ctx.fillStyle = grad;
+    ctx.arc(cx, cy, guoOuter, 0, Math.PI * 2);
+    ctx.fillStyle = guoGrad;
     ctx.fill();
 
-    // 水墨斑驳纹理
+    // 外郭内侧阴影
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(60, 40, 12, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // 钱肉（地张）— 哑光黄铜
+    const bodyGrad = ctx.createRadialGradient(cx + 10, cy - 10, 10, cx, cy, innerR);
+    bodyGrad.addColorStop(0, '#E9CF84');
+    bodyGrad.addColorStop(0.45, '#C79B46');
+    bodyGrad.addColorStop(0.8, '#8D6A28');
+    bodyGrad.addColorStop(1, '#5A4014');
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+    ctx.fillStyle = bodyGrad;
+    ctx.fill();
+
+    // 斑驳绿锈 + 铜绿肌理（古钱币氧化）
     ctx.save();
-    ctx.globalAlpha = 0.12;
-    for (let i = 0; i < 30; i++) {
+    ctx.globalAlpha = 0.22;
+    for (let i = 0; i < 60; i++) {
       const a = Math.random() * Math.PI * 2;
-      const r = Math.random() * outerR * 0.9;
+      const r = Math.random() * (outerR - 8);
       const x = cx + Math.cos(a) * r;
       const y = cy + Math.sin(a) * r;
+      const rad = 1 + Math.random() * 3;
+      const isVerdigris = Math.random() < 0.4;
       ctx.beginPath();
-      ctx.arc(x, y, 1 + Math.random() * 3, 0, Math.PI * 2);
-      ctx.fillStyle = '#5A3A1A';
+      ctx.arc(x, y, rad, 0, Math.PI * 2);
+      ctx.fillStyle = isVerdigris
+        ? `rgba(${60 + Math.random() * 50}, ${110 + Math.random() * 60}, ${50 + Math.random() * 40}, 0.7)`
+        : `rgba(${90 + Math.random() * 60}, ${60 + Math.random() * 50}, ${20 + Math.random() * 30}, 0.7)`;
       ctx.fill();
     }
     ctx.restore();
 
-    // 内圈凹线
-    ctx.beginPath();
-    ctx.arc(cx, cy, outerR * 0.86, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(90, 58, 26, 0.4)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // 内方孔 - 朱砂红 + 水墨晕染
-    const holeSize = size * 0.14;
+    // 内郭（方孔外一圈凸起）
+    const guoSize = size * 0.18;
     ctx.save();
-    ctx.shadowColor = 'rgba(168, 71, 46, 0.6)';
-    ctx.shadowBlur = size * 0.04;
-    ctx.fillStyle = '#A8472E';
-    ctx.fillRect(cx - holeSize / 2, cy - holeSize / 2, holeSize, holeSize);
+    ctx.strokeStyle = 'rgba(255, 225, 160, 0.8)';
+    ctx.lineWidth = 2.2;
+    ctx.strokeRect(cx - guoSize / 2 - 1, cy - guoSize / 2 - 1, guoSize + 2, guoSize + 2);
+    ctx.strokeStyle = 'rgba(60, 38, 10, 0.6)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx - guoSize / 2, cy - guoSize / 2, guoSize, guoSize);
     ctx.restore();
 
-    // 方孔内圈线
-    ctx.strokeStyle = 'rgba(60, 20, 10, 0.5)';
+    // 方孔（朱砂红 — 代表天地贯穿，光从孔透出）
+    const holeSize = size * 0.14;
+    ctx.save();
+    const holeGrad = ctx.createLinearGradient(cx, cy - holeSize / 2, cx, cy + holeSize / 2);
+    holeGrad.addColorStop(0, '#A8472E');
+    holeGrad.addColorStop(0.5, '#D45D3D');
+    holeGrad.addColorStop(1, '#7A2C18');
+    ctx.fillStyle = holeGrad;
+    ctx.shadowColor = 'rgba(212, 93, 61, 0.8)';
+    ctx.shadowBlur = size * 0.08;
+    ctx.fillRect(cx - holeSize / 2, cy - holeSize / 2, holeSize, holeSize);
+    // 方孔内亮边
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255, 180, 140, 0.7)';
     ctx.lineWidth = 1;
     ctx.strokeRect(cx - holeSize / 2, cy - holeSize / 2, holeSize, holeSize);
+    ctx.restore();
 
-    // 上下两个卦文 (仿古钱币)
-    ctx.font = `600 ${size * 0.13}px "Ma Shan Zheng", "STKaiti", serif`;
-    ctx.fillStyle = 'rgba(90, 58, 26, 0.75)';
+    // 四字钱文：乾·隆·通·宝（仿古钱币对读：上-下-右-左，小篆风格书法）
+    ctx.save();
+    const charSize = size * 0.125;
+    ctx.font = `800 ${charSize}px "Ma Shan Zheng", "STKaiti", "KaiTi", serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('乾', cx, cy - outerR * 0.48);
-    ctx.fillText('坤', cx, cy + outerR * 0.48);
+    const fillCh = (ch, x, y) => {
+      ctx.shadowColor = 'rgba(255, 230, 170, 0.6)';
+      ctx.shadowBlur = 4;
+      ctx.fillStyle = '#3A2810';
+      ctx.fillText(ch, x + 1, y + 1);
+      ctx.shadowBlur = 0;
+      const chGrad = ctx.createLinearGradient(x, y - charSize / 2, x, y + charSize / 2);
+      chGrad.addColorStop(0, '#F4DFA0');
+      chGrad.addColorStop(0.5, '#B88838');
+      chGrad.addColorStop(1, '#6B4C18');
+      ctx.fillStyle = chGrad;
+      ctx.fillText(ch, x, y);
+      // 钱文描边（阴刻感）
+      ctx.lineWidth = 0.8;
+      ctx.strokeStyle = 'rgba(58, 40, 16, 0.85)';
+      ctx.strokeText(ch, x, y);
+    };
+    fillCh('乾', cx, cy - outerR * 0.56);    // 上
+    fillCh('隆', cx, cy + outerR * 0.56);    // 下
+    fillCh('通', cx + outerR * 0.56, cy);    // 右
+    fillCh('寶', cx - outerR * 0.56, cy);    // 左
+    ctx.restore();
 
-    // 外边缘水墨晕染
+    // 外郭边齿（古钱币外缘 36 道齿纹）
     ctx.save();
-    ctx.globalCompositeOperation = 'source-over';
-    const edgeGrad = ctx.createRadialGradient(cx, cy, outerR * 0.9, cx, cy, outerR);
-    edgeGrad.addColorStop(0, 'rgba(0,0,0,0)');
-    edgeGrad.addColorStop(1, 'rgba(60, 40, 20, 0.35)');
+    ctx.translate(cx, cy);
+    const teeth = 36;
+    for (let i = 0; i < teeth; i++) {
+      const a = (i / teeth) * Math.PI * 2;
+      const x1 = Math.cos(a) * outerR;
+      const y1 = Math.sin(a) * outerR;
+      const x2 = Math.cos(a) * guoOuter;
+      const y2 = Math.sin(a) * guoOuter;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.strokeStyle = i % 2 === 0 ? 'rgba(255, 225, 160, 0.5)' : 'rgba(60, 38, 10, 0.5)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 外缘亮边（金属反光）
+    ctx.save();
     ctx.beginPath();
-    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
-    ctx.fillStyle = edgeGrad;
-    ctx.fill();
+    ctx.arc(cx, cy, guoOuter, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 240, 190, 0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
     ctx.restore();
 
     return new THREE.CanvasTexture(c);
@@ -357,7 +428,7 @@ function CoinRitual({ visible }) {
     if (!visible || !groupRef.current) return;
     const t = clock.getElapsedTime();
     coinRefs.forEach((ref, i) => {
-      if (!ref.current) return;
+      if (!ref || !ref.current) return;
       const settleTime = 2.0;
       if (t < settleTime) {
         const progress = t / settleTime;
@@ -374,10 +445,8 @@ function CoinRitual({ visible }) {
     });
   });
 
-  if (!visible) return null;
-
   return (
-    <group ref={groupRef} position={[1.5, 1.0, 0.3]}>
+    <group ref={groupRef} position={[1.5, 1.0, 0.3]} visible={!!visible}>
       {coinRefs.map((ref, i) => (
         <sprite
           key={i}
@@ -418,10 +487,8 @@ function CompassNeedle({ visible, agentCount }) {
     }
   });
 
-  if (!visible) return null;
-
   return (
-    <group position={[0, 0, 0]}>
+    <group position={[0, 0, 0]} visible={!!visible}>
       <mesh ref={glowRef} position={[0, 0, 0]}>
         <sphereGeometry args={[0.15, 16, 16]} />
         <meshBasicMaterial color={'#F0D890'} transparent opacity={0.3} depthWrite={false} blending={THREE.AdditiveBlending} />
@@ -444,8 +511,10 @@ function CompassNeedle({ visible, agentCount }) {
 
 /* ============================================================
    紫微斗数盘 - summary 阶段
+   BUG4 FIX: summary 时整张盘面向屏幕（Billboard）
 ============================================================ */
 function ZiweiDisk({ visible }) {
+  const groupRef = useRef();
   const ring1Ref = useRef();
   const ring2Ref = useRef();
 
@@ -485,17 +554,20 @@ function ZiweiDisk({ visible }) {
     return new THREE.CanvasTexture(c);
   }, []);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock, camera }) => {
     if (!visible) return;
     const t = clock.getElapsedTime();
+    // BUG4 FIX: 整张斗数盘面向屏幕
+    if (groupRef.current) {
+      groupRef.current.lookAt(camera.position);
+    }
+    // 盘面内部自转（在面向屏幕的前提下自转）
     if (ring1Ref.current) ring1Ref.current.rotation.z = t * 0.15;
     if (ring2Ref.current) ring2Ref.current.rotation.z = -t * 0.25;
   });
 
-  if (!visible) return null;
-
   return (
-    <group position={[0, 0, 0.05]}>
+    <group ref={groupRef} position={[0, 0, 0.05]} visible={!!visible}>
       <mesh ref={ring1Ref}>
         <planeGeometry args={[1.4, 1.4]} />
         <meshBasicMaterial map={diskTex} transparent opacity={0.75} depthWrite={false} blending={THREE.AdditiveBlending} />
@@ -586,19 +658,6 @@ function FlowParticles({ phase }) {
     });
   });
 
-  if (phase !== 'analyzing' && phase !== 'yan_analyze' && phase !== 'agent_debate' && phase !== 'summary' && phase !== 'reflecting') {
-    return (
-      <group ref={groupRef} position={[0, 1.5, 0]}>
-        {particles.map((_, i) => (
-          <mesh key={i}>
-            <sphereGeometry args={[1, 8, 8]} />
-            <meshBasicMaterial map={particleTex} color={'#F0D890'} transparent opacity={0} depthWrite={false} blending={THREE.AdditiveBlending} />
-          </mesh>
-        ))}
-      </group>
-    );
-  }
-
   return (
     <group ref={groupRef} position={[0, 1.5, 0]}>
       {particles.map((_, i) => (
@@ -644,7 +703,7 @@ function YanAnalyzeRunes({ visible }) {
     if (!visible || !groupRef.current) return;
     const t = clock.getElapsedTime();
     runeRefs.forEach((ref, i) => {
-      if (!ref.current) return;
+      if (!ref || !ref.current) return;
       const angle = (i / 4) * Math.PI * 2 + t * 0.15;
       const radius = 1.2 + Math.sin(t * 0.5 + i) * 0.1;
       ref.current.position.x = Math.cos(angle) * radius;
@@ -656,10 +715,8 @@ function YanAnalyzeRunes({ visible }) {
     });
   });
 
-  if (!visible) return null;
-
   return (
-    <group ref={groupRef}>
+    <group ref={groupRef} visible={!!visible}>
       {runeRefs.map((ref, i) => (
         <sprite key={i} ref={ref}>
           <spriteMaterial
@@ -688,16 +745,14 @@ function DebateEnergy({ visible, activeAgentIdx, activeAgents }) {
     if (!visible || !groupRef.current) return;
     const t = clock.getElapsedTime();
     lineRefs.current.forEach((ref, i) => {
-      if (!ref.current) return;
+      if (!ref || !ref.current) return;
       const opacity = 0.3 + Math.sin(t * 2 + i * 0.5) * 0.2;
       ref.current.material.opacity = opacity;
     });
   });
 
-  if (!visible || agents.length < 2) return null;
-
   return (
-    <group ref={groupRef}>
+    <group ref={groupRef} visible={!!visible && agents.length >= 2}>
       {agents.map((agent, i) => {
         const nextIdx = (i + 1) % agents.length;
         const angle1 = (i / agents.length) * Math.PI * 2;
@@ -729,7 +784,7 @@ function ChoiceAura({ visible, optionCount = 4 }) {
     if (!visible || !groupRef.current) return;
     const t = clock.getElapsedTime();
     auraRefs.current.forEach((ref, i) => {
-      if (!ref.current) return;
+      if (!ref || !ref.current) return;
       const angle = (i / optionCount) * Math.PI * 2;
       const radius = 2.0;
       const pulse = 1 + Math.sin(t * 0.8 + i) * 0.15;
@@ -739,8 +794,6 @@ function ChoiceAura({ visible, optionCount = 4 }) {
       ref.current.material.opacity = 0.2 + Math.sin(t * 0.6 + i) * 0.1;
     });
   });
-
-  if (!visible) return null;
 
   const auraTex = useMemo(() => {
     const size = 128;
@@ -760,7 +813,7 @@ function ChoiceAura({ visible, optionCount = 4 }) {
   }, []);
 
   return (
-    <group ref={groupRef} position={[0, 0.8, 0]}>
+    <group ref={groupRef} position={[0, 0.8, 0]} visible={!!visible}>
       {Array.from({ length: optionCount }).map((_, i) => (
         <sprite key={i} ref={(el) => (auraRefs.current[i] = el)} scale={[1.5, 1.5, 1]}>
           <spriteMaterial
@@ -1039,10 +1092,8 @@ function FateCard({ visible, choice, activeAgents, inference }) {
     cardRef.current.rotation.y = Math.sin(t * 0.3) * 0.06;
   });
 
-  if (!visible) return null;
-
   return (
-    <group ref={cardRef}>
+    <group ref={cardRef} visible={!!visible}>
       <mesh>
         <planeGeometry args={[1.5, 3.0]} />
         <meshBasicMaterial map={cardTex} transparent depthWrite={false} side={THREE.DoubleSide} />
@@ -1114,24 +1165,22 @@ export default function LightOrb({ phase, position = [0, 1.5, 0], selectedChoice
       <FateCard visible={showFate} choice={selectedChoice} activeAgents={activeAgents} inference={inference} />
 
       {/* 中心: 小符号 + 微弱光晕 + 阶段道具 - final 阶段让位给命运卡 */}
-      {phase !== 'final' && (
-        <group ref={mainGroupRef} position={position}>
-          {/* 中心小符号 - sprite 始终面向屏幕 */}
-          <CenterSymbol phase={phase} />
+      <group ref={mainGroupRef} position={position} visible={phase !== 'final'}>
+        {/* 中心小符号 - sprite 始终面向屏幕 */}
+        <CenterSymbol phase={phase} />
 
-          {/* 环绕 8 卦象 */}
-          <OrbitTrigrams phase={phase} />
+        {/* 环绕 8 卦象 */}
+        <OrbitTrigrams phase={phase} />
 
-          {/* 六爻铜钱 - 分析阶段 */}
-          <CoinRitual visible={showCoins} />
+        {/* 六爻铜钱 - 分析阶段 */}
+        <CoinRitual visible={showCoins} />
 
-          {/* 罗盘指针 - 召唤阶段 */}
-          <CompassNeedle visible={showNeedle} agentCount={(activeAgents || []).filter(a => a.role !== 'master').length || 4} />
+        {/* 罗盘指针 - 召唤阶段 */}
+        <CompassNeedle visible={showNeedle} agentCount={(activeAgents || []).filter(a => a.role !== 'master').length || 4} />
 
-          {/* 紫微斗数盘 - 总结阶段 */}
-          <ZiweiDisk visible={showDisk} />
-        </group>
-      )}
+        {/* 紫微斗数盘 - 总结阶段 */}
+        <ZiweiDisk visible={showDisk} />
+      </group>
 
       {/* 演 字标签 - 只在 agent_debate 时显示(避免与 summary 对话框重叠) */}
       {phase === 'agent_debate' && (
@@ -1141,7 +1190,7 @@ export default function LightOrb({ phase, position = [0, 1.5, 0], selectedChoice
               color: '#F0D890',
               fontSize: '14px',
               fontWeight: 600,
-              fontFamily: '"Ma Shan Zheng", serif',
+              fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", "PingFang SC", serif',
               letterSpacing: '0.4em',
               textShadow: '0 0 10px #C8A050, 0 0 4px #000',
               paddingLeft: '0.4em',

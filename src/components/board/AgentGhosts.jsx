@@ -156,7 +156,7 @@ export default function AgentGhosts({
     <group>
       {agents.map((agent, index) => (
         <AgentGhost
-          key={agent.id}
+          key={`${agent.id}__idx${index}`}
           agent={agent}
           index={index}
           total={agents.length}

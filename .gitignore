@@ -34,3 +34,12 @@ server/.env
 server/data_store/
 
 .vercel
+.env*
+
+# 构建/部署产物
+dist
+surge-dist/
+server/audit/
+
+# 本地工具目录
+.trae/

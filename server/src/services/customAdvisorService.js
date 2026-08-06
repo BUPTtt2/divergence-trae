@@ -4,13 +4,18 @@ import { generateUUID } from '../utils/id.js';
 const TABLE = 'custom_advisors';
 
 export async function listAdvisors(userId) {
-  const result = await query({
-    table: TABLE,
-    action: 'select',
-    filter: { user_id: userId },
-    queryOptions: { orderBy: 'created_at:desc' },
-  });
-  return result.rows;
+  try {
+    const result = await query({
+      table: TABLE,
+      action: 'select',
+      filter: { user_id: userId },
+      queryOptions: { orderBy: 'created_at:desc' },
+    });
+    return result.rows || [];
+  } catch (e) {
+    console.warn('[customAdvisorService] listAdvisors 失败，返回空数组（表可能未创建）:', e.message);
+    return [];
+  }
 }
 
 export async function getAdvisor(advisorId, userId) {

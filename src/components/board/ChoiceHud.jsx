@@ -260,7 +260,8 @@ function ChoiceBeam({ choice, index, total, onClick, isSelected }) {
  * 选择项容器 - 浮在"请选择你的路径"区域
  */
 export default function ChoiceHud({ phase, choices, onClick, selectedChoice }) {
-  if (phase !== 'branch_select' && phase !== 'done' && phase !== 'path_reveal') return null;
+  // 仅抉择阶段显示；path_reveal/final 阶段让浮起的命牌/命签面板唱主角，不再堆牌
+  if (phase !== 'branch_select') return null;
   if (!choices || choices.length === 0) return null;
 
   return (

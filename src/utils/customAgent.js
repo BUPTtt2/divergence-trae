@@ -1,3 +1,6 @@
+// ⚠️ 本文件中 streamYanChat 调用为旧轨，后续应迁移到 deliberationClient
+// 临时保留：铸造台预览功能依赖这些调用
+
 const CUSTOM_AGENTS_KEY = 'yance_custom_agents';
 
 const SENSITIVE_WORDS = [
@@ -114,15 +117,22 @@ export function publishAgent(agent) {
 export function getMarketAgents() {
   try {
     const raw = localStorage.getItem(MARKET_KEY);
-    const market = raw ? JSON.parse(raw) : [];
-    // 补几条示例, 让市集不为空 (本地首次)
-    if (market.length === 0) {
-      const samples = [
-        { id: 'mkt_sample_1', name: '职场老兵', desc: '从HR与管理者双重视角看职场博弈', stance: '从职场博弈出发', icon: '☴', color: '#489090', glow: '#78C0C0', subs: 12, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_1' },
-        { id: 'mkt_sample_2', name: '理性投资人', desc: '只看概率与赔率,不被情绪裹挟', stance: '从概率与赔率出发', icon: '☵', color: '#406088', glow: '#7098C8', subs: 23, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_2' },
-        { id: 'mkt_sample_3', name: '老母亲', desc: '用最朴素的道理问住你的借口', stance: '从朴素常识出发', icon: '☷', color: '#887050', glow: '#B8A080', subs: 8, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_3' },
-      ];
-      return samples;
+    let market = raw ? JSON.parse(raw) : [];
+    // 补全示例, 让市集不为空 (如果本地没有这些sample则补上)
+    const samples = [
+      { id: 'mkt_sample_1', name: '职场老兵', desc: '从HR与管理者双重视角看职场博弈', stance: '职场博弈视角', icon: '☴', color: '#489090', glow: '#78C0C0', tags: ['职场', '管理'], subs: 12, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_1' },
+      { id: 'mkt_sample_2', name: '理性投资人', desc: '只看概率与赔率,不被情绪裹挟', stance: '概率赔率视角', icon: '☵', color: '#406088', glow: '#7098C8', tags: ['投资', '理财'], subs: 23, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_2' },
+      { id: 'mkt_sample_3', name: '老母亲', desc: '用最朴素的道理问住你的借口', stance: '朴素常识视角', icon: '☷', color: '#887050', glow: '#B8A080', tags: ['家庭', '情感'], subs: 8, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_3' },
+      { id: 'mkt_sample_4', name: '背包客', desc: '万里路走出来的实地经验', stance: '实地体验视角', icon: '☶', color: '#588868', glow: '#88B898', tags: ['旅行', '户外'], subs: 5, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_4' },
+      { id: 'mkt_sample_5', name: '老中医', desc: '望闻问切，先看身体扛不扛得住', stance: '养生健康视角', icon: '☷', color: '#689060', glow: '#98C088', tags: ['健康', '养生'], subs: 7, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_5' },
+      { id: 'mkt_sample_6', name: '讼师', desc: '先划清边界，再谈选择', stance: '规则法律视角', icon: '☵', color: '#585878', glow: '#8888A8', tags: ['法律', '规则'], subs: 4, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_6' },
+    ];
+    // 补齐缺失的sample（本地有旧market时也能获得新增sample）
+    const existingIds = new Set(market.map(a => a.marketId || a.id));
+    for (const s of samples) {
+      if (!existingIds.has(s.marketId)) {
+        market.push(s);
+      }
     }
     return market;
   } catch (e) {
@@ -142,14 +152,18 @@ export function isPublished(agentId) {
 
 export function subscribeAgent(agent) {
   try {
-    // 加入自定义智囊 (用新 id 避免冲突)
+    // 已订阅（同 originMarketId / marketId / id）则直接返回
     const existing = getCustomAgents();
+    const originId = agent.marketId || agent.id;
+    const alreadySub = existing.find(a => a.originMarketId === originId || a.marketId === originId || a.id === originId);
+    if (alreadySub) return alreadySub;
+    // 加入自定义智囊 (用新 id 避免冲突)
     const newAgent = {
       ...agent,
       id: `sub_${Date.now()}`,
       isCustom: true,
       isSubscribed: true,
-      originMarketId: agent.marketId || agent.id,
+      originMarketId: originId,
       createdAt: new Date().toISOString(),
     };
     existing.unshift(newAgent);
@@ -157,11 +171,39 @@ export function subscribeAgent(agent) {
     // 市集订阅数 +1
     const raw = localStorage.getItem(MARKET_KEY);
     const market = raw ? JSON.parse(raw) : [];
-    const updated = market.map(a => a.marketId === (agent.marketId || agent.id) ? { ...a, subs: (a.subs || 0) + 1 } : a);
+    const updated = market.map(a => (a.marketId || a.id) === originId ? { ...a, subs: (a.subs || 0) + 1 } : a);
     localStorage.setItem(MARKET_KEY, JSON.stringify(updated));
     return newAgent;
   } catch (e) {
     return null;
+  }
+}
+
+/**
+ * 取消订阅智囊（同时同步市集订阅数 -1）
+ */
+export function unsubscribeAgent(agentOrId) {
+  try {
+    const existing = getCustomAgents();
+    const id = typeof agentOrId === 'string' ? agentOrId : agentOrId?.id;
+    const target = existing.find(a => a.id === id || a.originMarketId === id || a.marketId === id);
+    if (!target) return false;
+    const originId = target.originMarketId || target.marketId || target.id;
+    const filtered = existing.filter(a => a.id !== target.id);
+    localStorage.setItem(CUSTOM_AGENTS_KEY, JSON.stringify(filtered));
+    // 市集订阅数 -1
+    const raw = localStorage.getItem(MARKET_KEY);
+    const market = raw ? JSON.parse(raw) : [];
+    const updated = market.map(a => {
+      if ((a.marketId || a.id) === originId) {
+        return { ...a, subs: Math.max(0, (a.subs || 0) - 1) };
+      }
+      return a;
+    });
+    localStorage.setItem(MARKET_KEY, JSON.stringify(updated));
+    return true;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -501,7 +543,7 @@ export const RELATION_OPTIONS = [
   { id: 'other', label: '其他', icon: '☯', desc: '自定义关系' },
 ];
 
-// 视角预设（对应八卦）
+// 视角预设（对应八卦）+ 自定义
 export const PERSPECTIVE_OPTIONS = [
   { id: '财务', label: '财务视角', icon: '☰', gua: '乾', color: '#B89038', glow: '#E8C068', desc: '看账、算隐性成本、折现值' },
   { id: '风险', label: '风险视角', icon: '☵', gua: '坎', color: '#406088', glow: '#7098C8', desc: '泼冷水、最坏情况、信息不对称' },
@@ -511,6 +553,11 @@ export const PERSPECTIVE_OPTIONS = [
   { id: '宏观', label: '宏观视角', icon: '☷', gua: '坤', color: '#887050', glow: '#B8A080', desc: '周期、Beta、大时代变量' },
   { id: '行动', label: '行动视角', icon: '☳', gua: '震', color: '#588050', glow: '#88B880', desc: '窗口期、deadline、最小行动' },
   { id: '沟通', label: '沟通视角', icon: '☲', gua: '离', color: '#C07048', glow: '#E8A078', desc: '谈判、对话、对方真实诉求' },
+  { id: '法律', label: '法律视角', icon: '☵', gua: '坎', color: '#505060', glow: '#808090', desc: '权责边界、合同条款、证据留存' },
+  { id: '健康', label: '健康视角', icon: '☷', gua: '坤', color: '#607850', glow: '#90B078', desc: '身心节律、长期负荷、睡眠压力' },
+  { id: '教育', label: '教育视角', icon: '☴', gua: '巽', color: '#506878', glow: '#8098B0', desc: '学习曲线、能力迁移、认知升级' },
+  { id: '技术', label: '技术视角', icon: '☳', gua: '震', color: '#485058', glow: '#788090', desc: '可行性、技术债务、实现路径' },
+  { id: 'custom', label: '自定义', icon: '✦', gua: '变', color: '#C8A850', glow: '#F0D890', desc: '输入你需要的独特视角' },
 ];
 
 /**
@@ -588,14 +635,139 @@ function localUnderstandName(name, desc, conversationId) {
 }
 
 /**
- * 步骤4: 据关系+视角生成3个递进审问问题
+ * 动态对话式审问：根据已有信息生成下一个问题
+ * @param {Object} info - { name, relation, perspective, perspectiveLabel, contextSummary, previousQA: [{q, a}] }
+ * @returns { question: string, isLast: boolean, conversationId, source }
+ */
+export async function generateNextInterviewQuestion(info, conversationId) {
+  const { name, relation, perspective, perspectiveLabel, contextSummary, previousQA = [] } = info;
+  const relationLabel = RELATION_OPTIONS.find(r => r.id === relation)?.label || relation;
+  const perspLabel = perspectiveLabel || PERSPECTIVE_OPTIONS.find(p => p.id === perspective)?.label || perspective;
+
+  // 构造上下文
+  const qaHistory = previousQA.map((qa, i) => `问${i + 1}：${qa.q}\n答：${qa.a}`).join('\n\n');
+  const round = previousQA.length;
+
+  // 如果已经问了3轮，结束
+  if (round >= 3) {
+    return { question: null, isLast: true, conversationId, source: 'done' };
+  }
+
+  try {
+    const { streamYanChat } = await import('../services/apiClient.js');
+    const roundInstructions = [
+      '第一问：问TA最擅长的具体场景（不要泛泛而谈，要具体到一个决策时刻）',
+      '第二问：追问TA说话的风格和方式（基于上一个回答追问，要具体）',
+      '第三问：问TA的边界和盲点（什么情况下TA不可靠，需要让位给其他智囊）',
+    ];
+    const prompt = `你正在为智囊「${name}」做入营审问，帮助塑造TA的人设。
+
+关系：${relationLabel}
+视角：${perspLabel}
+演的理解：${contextSummary || '用户新铸造的智囊'}
+
+已审问：
+${qaHistory || '（刚开始，还没问）'}
+
+${roundInstructions[round]}
+
+规则：
+- 问题要简短（25字内），针对"${name}是${relationLabel}"这个具体关系
+- 要基于已有的回答追问，不要重复已经问过的
+- 像一位智者在审问，有温度但不啰嗦
+- 直接输出问题文本，不要编号、不要前缀、不要解释`;
+
+    const result = await streamYanChat({ message: prompt, conversationId });
+    if (result && result.text && result.text.length > 3) {
+      let q = result.text.trim().replace(/^(问[：:]|第[一二三]问[：:])\s*/, '').trim();
+      // 去掉可能的引号
+      q = q.replace(/^["""']|["""']$/g, '');
+      if (q.length > 2) {
+        return {
+          question: q,
+          isLast: round === 2,
+          conversationId: result.conversationId || conversationId,
+          source: 'llm',
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('[generateNextInterviewQuestion] LLM失败，降级本地:', e.message);
+  }
+
+  // 本地降级
+  const fallbackQuestions = localGenerateInterview(name, relationLabel, perspLabel);
+  return {
+    question: fallbackQuestions[round] || fallbackQuestions[0],
+    isLast: round === 2,
+    conversationId,
+    source: 'local',
+  };
+}
+
+/**
+ * LLM推荐视角：根据名字+描述+关系，推荐最合适的视角
+ * @returns { suggestions: [{id, label, reason}], conversationId, source }
+ */
+export async function suggestPerspective(name, desc, relation, conversationId) {
+  const cleanName = filterSpecialChars(name);
+  const cleanDesc = filterSpecialChars(desc || '');
+  const relationLabel = RELATION_OPTIONS.find(r => r.id === relation)?.label || relation || '';
+
+  const builtInLabels = PERSPECTIVE_OPTIONS.filter(p => p.id !== 'custom').map(p => p.label);
+
+  try {
+    const { streamYanChat } = await import('../services/apiClient.js');
+    const prompt = `用户要铸造智囊「${cleanName}」${cleanDesc ? `，描述：${cleanDesc}` : ''}，关系：${relationLabel}。
+
+现有的视角选项：${builtInLabels.join('、')}。
+也可以自定义新视角。
+
+请推荐3个最适合的视角（可以是现有视角，也可以建议新视角名），每个用一句话说明理由。
+输出格式（严格遵守，每行一个，不要编号不要解释）：
+视角名|推荐理由
+视角名|推荐理由
+视角名|推荐理由`;
+
+    const result = await streamYanChat({ message: prompt, conversationId });
+    if (result && result.text && result.text.length > 5) {
+      const lines = result.text.split('\n').map(l => l.trim()).filter(l => l.includes('|'));
+      const suggestions = lines.slice(0, 3).map(line => {
+        const [label, reason] = line.split('|').map(s => s.trim());
+        const existing = PERSPECTIVE_OPTIONS.find(p => p.label === label || p.label.includes(label) || label.includes(p.label.replace('视角', '')));
+        return { id: existing?.id || 'custom', label: existing?.label || label, reason };
+      });
+      if (suggestions.length > 0) {
+        return { suggestions, conversationId: result.conversationId || conversationId, source: 'llm' };
+      }
+    }
+  } catch (e) {
+    console.warn('[suggestPerspective] LLM失败，降级本地:', e.message);
+  }
+
+  // 本地降级：根据关键词匹配
+  const text = (cleanName + cleanDesc + relationLabel).toLowerCase();
+  const suggestions = [];
+  if (/钱|财|成本|投入|回报|收入|预算|价格/.test(text)) suggestions.push({ id: '财务', label: '财务视角', reason: '提到了金钱相关，财务视角能算清账' });
+  if (/风险|危险|坑|最坏|安全|隐患|万一/.test(text)) suggestions.push({ id: '风险', label: '风险视角', reason: '关注潜在风险，适合帮你泼冷水' });
+  if (/感情|情绪|心情|爱|关系|难过|开心/.test(text)) suggestions.push({ id: '情感', label: '情感视角', reason: '涉及情感关系，需要共情的声音' });
+  if (/说|沟通|谈判|聊|表达|对话|吵架|争论/.test(text)) suggestions.push({ id: '沟通', label: '沟通视角', reason: '涉及沟通对话，帮你看清言外之意' });
+  if (suggestions.length === 0) {
+    suggestions.push({ id: '反思', label: '反思视角', reason: '帮你翻转问题，看见盲点' });
+    suggestions.push({ id: '行动', label: '行动视角', reason: '关注当下可做的最小行动' });
+  }
+  return { suggestions: suggestions.slice(0, 3), conversationId, source: 'local' };
+}
+
+/**
+ * 步骤4: 据关系+视角生成3个递进审问问题（保留旧接口，内部用动态生成）
  * @returns { questions: [q1, q2, q3], conversationId, source }
  */
-export async function generateInterviewQuestionsByContext(name, relation, perspective, conversationId) {
+export async function generateInterviewQuestionsByContext(name, relation, perspective, conversationId, customPerspectiveLabel) {
   const relationLabel = RELATION_OPTIONS.find(r => r.id === relation)?.label || relation;
   const perspectiveOption = PERSPECTIVE_OPTIONS.find(p => p.id === perspective);
-  const perspectiveLabel = perspectiveOption?.label || perspective;
-  const perspectiveDesc = perspectiveOption?.desc || '';
+  const perspectiveLabel = customPerspectiveLabel || perspectiveOption?.label || perspective;
+  const perspectiveDesc = perspectiveOption?.desc || customPerspectiveLabel || '';
 
   // LLM 优先
   try {
@@ -656,12 +828,23 @@ function localGenerateInterview(name, relationLabel, perspectiveLabel) {
 
 /**
  * 步骤4 收尾: 据审问回答提炼最终 persona
+ * 支持两种格式：answers为字符串数组(旧)或{q,a}对象数组(新对话式)
  * @returns { persona, conversationId, source }
  */
-export async function refinePersonaWithInterview(name, relation, perspective, contextSummary, answers, conversationId) {
+export async function refinePersonaWithInterview(name, relation, perspective, contextSummary, answers, conversationId, customPerspectiveLabel) {
   const relationLabel = RELATION_OPTIONS.find(r => r.id === relation)?.label || relation;
-  const perspectiveLabel = PERSPECTIVE_OPTIONS.find(p => p.id === perspective)?.label || perspective;
-  const validAnswers = answers.filter(a => a && a.trim());
+  const perspectiveLabel = customPerspectiveLabel || PERSPECTIVE_OPTIONS.find(p => p.id === perspective)?.label || perspective;
+  // 支持对话式 QA: [{q,a}]
+  const isConversational = answers.length > 0 && typeof answers[0] === 'object' && answers[0].q;
+  let validAnswers;
+  let qaText;
+  if (isConversational) {
+    validAnswers = answers.filter(qa => qa.a && qa.a.trim());
+    qaText = validAnswers.map((qa, i) => `${i + 1}. 问：${qa.q}\n   答：${qa.a}`).join('\n');
+  } else {
+    validAnswers = answers.filter(a => a && a.trim());
+    qaText = `1. 擅长场景：${validAnswers[0] || '未明确'}\n2. 说话风格：${validAnswers[1] || '未明确'}\n3. 已知盲点：${validAnswers[2] || '未明确'}`;
+  }
 
   // LLM 优先
   if (validAnswers.length > 0) {
@@ -673,16 +856,14 @@ export async function refinePersonaWithInterview(name, relation, perspective, co
 主视角：${perspectiveLabel}
 演的理解：${contextSummary}
 
-用户的审问回答：
-1. 擅长场景：${validAnswers[0] || '未明确'}
-2. 说话风格：${validAnswers[1] || '未明确'}
-3. 已知盲点：${validAnswers[2] || '未明确'}
+审问记录：
+${qaText}
 
 请输出一段 100-150 字的 persona，包含：
 - TA 是谁（基于关系和用户的描述）
 - TA 看问题的独特角度（基于视角）
-- TA 的说话风格（基于用户回答）
-- TA 的盲点（基于用户回答）
+- TA 的说话风格（基于审问回答）
+- TA 的盲点（基于审问回答）
 
 直接输出 persona 文本，不要寒暄、不要解释、不要 "persona:" 前缀。`;
 
@@ -707,9 +888,19 @@ export async function refinePersonaWithInterview(name, relation, perspective, co
  * 本地降级：提炼 persona
  */
 function localRefinePersona(name, relationLabel, perspectiveLabel, contextSummary, answers) {
-  const scene = answers[0]?.trim() || '在用户面临抉择时';
-  const style = answers[1]?.trim() || '直接、不绕弯子';
-  const blind = answers[2]?.trim() || '容易被情绪带偏';
+  // 支持对话式 QA
+  const isConversational = answers.length > 0 && typeof answers[0] === 'object' && answers[0].q;
+  let scene, style, blind;
+  if (isConversational) {
+    const valid = answers.filter(qa => qa.a && qa.a.trim());
+    scene = valid[0]?.a?.trim() || '在用户面临抉择时';
+    style = valid[1]?.a?.trim() || '直接、不绕弯子';
+    blind = valid[2]?.a?.trim() || '容易被情绪带偏';
+  } else {
+    scene = answers[0]?.trim() || '在用户面临抉择时';
+    style = answers[1]?.trim() || '直接、不绕弯子';
+    blind = answers[2]?.trim() || '容易被情绪带偏';
+  }
 
   return `你是「${name}」，${contextSummary || `用户的${relationLabel}`}。
 你的视角是「${perspectiveLabel}」，${scene}。
@@ -757,9 +948,24 @@ export async function generateSealingBlessing(agent, conversationId) {
 /**
  * 铸造完整智囊（5步向导最终输出）
  */
-export function forgeAgent({ name, desc, relation, perspective, contextSummary, persona, blessing, source }) {
+export function forgeAgent({ name, desc, relation, perspective, perspectiveLabel, contextSummary, persona, blessing, source }) {
   const cleanName = filterSpecialChars(name);
-  const perspectiveOption = PERSPECTIVE_OPTIONS.find(p => p.id === perspective) || PERSPECTIVE_OPTIONS[0];
+  let perspectiveOption = PERSPECTIVE_OPTIONS.find(p => p.id === perspective);
+  // 自定义视角：动态匹配卦象和颜色
+  if (!perspectiveOption || perspective === 'custom') {
+    const customLabel = perspectiveLabel || perspective || '自定义视角';
+    const customTrigram = matchTrigram(cleanName, customLabel);
+    const customColor = matchColor(cleanName, customLabel);
+    perspectiveOption = {
+      id: perspective || 'custom',
+      label: customLabel,
+      icon: customTrigram,
+      gua: '变',
+      color: customColor.color,
+      glow: customColor.glow,
+      desc: customLabel,
+    };
+  }
   const trigram = perspectiveOption.icon;
   const colorPair = { color: perspectiveOption.color, glow: perspectiveOption.glow };
 
@@ -767,7 +973,8 @@ export function forgeAgent({ name, desc, relation, perspective, contextSummary, 
     id: `custom_${Date.now()}`,
     name: cleanName,
     stance: perspectiveOption.label,
-    perspective,
+    perspective: perspectiveOption.id,
+    perspectiveLabel: perspectiveOption.label,
     relation,
     relationLabel: RELATION_OPTIONS.find(r => r.id === relation)?.label || '其他',
     contextSummary: contextSummary || '',
@@ -782,7 +989,7 @@ export function forgeAgent({ name, desc, relation, perspective, contextSummary, 
     desc: desc || `${perspectiveOption.label} · ${RELATION_OPTIONS.find(r => r.id === relation)?.label || ''}`,
     pauseDuration: 600,
     isCustom: true,
-    forged: true, // 标记为5步向导铸造
+    forged: true,
     forgedAt: new Date().toISOString(),
     source: source || 'local',
   };

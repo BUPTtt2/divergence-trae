@@ -1,10 +1,6 @@
 import { useRef } from 'react';
-import { motion, useMotionValue, useTransform, useSpring, useReducedMotion } from 'framer-motion';
+import { motion, useMotionValue, useTransform, useReducedMotion } from 'framer-motion';
 
-/**
- * SpotlightCard - 鼠标聚光边框卡片
- * 鼠标移动时卡片边缘出现跟随光斑。React Bits 风格。
- */
 export default function SpotlightCard({ children, className = '', style = {}, radius = 6, spotlightColor = 'rgba(0,168,107,0.18)' }) {
   const ref = useRef(null);
   const reduce = useReducedMotion();

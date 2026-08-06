@@ -1,8 +1,9 @@
 # 演策 (YAN CE) - 项目核心说明书
 
-> **版本**: v2.0 (2026-07-30 重写)
+> **版本**: v2.1 (2026-07-31 生产级改造)
 > **用途**: 给 AI 和开发者提供完整项目上下文，避免理解偏差
 > **更新纪律**: 任何架构/功能变更必须同步更新此文件
+> **生产级改造日志**: `docs/PRODUCTION_REDESIGN_LOG.md`（每次架构变更同步更新）
 
 ---
 
@@ -34,7 +35,9 @@
 | Node.js | - | 运行时 |
 | Express | - | Web 框架 |
 | 智谱 AI (Zhipu) | - | LLM 推理引擎 |
-| SQLite | - | 数据存储 (via better-sqlite3) |
+| PostgreSQL / 内存模式 | - | 数据存储（无 DATABASE_URL 时降级内存） |
+| SSE (EventSource) | - | 推演事件流实时推送 |
+| EventBus | v2.1 | 事件总线（持久化+重放） |
 | Railway | - | 部署平台 |
 
 ### 开发工具
@@ -71,9 +74,12 @@ divergence-trae/
 │   ├── services/                 # ★ 业务逻辑层
 │   │   ├── inferenceEngine.js   # 推演引擎 (Agent合并/降级)
 │   │   ├── apiClient.js         # API客户端
+│   │   ├── deliberationClient.js # ★ 新轨API客户端 (start/answer/execute/commit/pause/resume/SSE订阅)
 │   │   ├── memoryStore.js       # 记忆存储
 │   │   ├── multiAgentFramework.js  # 多Agent框架 (Blackboard)
 │   │   └── ...
+│   ├── hooks/                    # 自定义Hooks
+│   │   └── useDeliberationStream.js # ★ SSE推演事件流订阅 (v2.1)
 │   ├── data/                     # 静态数据
 │   │   ├── agents.js            # ★ Agent池前端定义 (12个Agent)
 │   │   ├── nodes.js             # 决策树节点
@@ -86,20 +92,31 @@ divergence-trae/
 ├── server/                       # 后端 (Express)
 │   ├── src/
 │   │   ├── routes/              # API路由
-│   │   │   ├── agent.js         # ★ Agent分析/辩论
+│   │   │   ├── agent.js         # ★ Agent分析/辩论 (旧轨)
+│   │   │   ├── deliberation.js  # ★ 推演新轨 (start/answer/execute/commit/pause/resume/SSE)
 │   │   │   ├── yan.js           # ★ 演对话
 │   │   │   ├── divination.js    # 占卜
 │   │   │   └── ...
 │   │   ├── services/            # 业务服务
-│   │   │   ├── agentEngine.js   # ★ Agent编排引擎
+│   │   │   ├── agentEngine.js   # ★ Agent编排引擎 (旧轨)
+│   │   │   ├── deliberationEngine.js # ★ 推演状态机总控 (8态: PLAN/WAIT/EXECUTE/REFLECT/ORACLE/COMMIT/PAUSED/FAILED)
+│   │   │   ├── planner.js       # ★ Plan阶段 (规则降级+LLM增强+selfCritique自评+replan)
+│   │   │   ├── reflector.js     # ★ Reflect阶段 (聚合+矛盾+覆盖+立卦+重规划)
+│   │   │   ├── autonomyGate.js  # ★ 自主性判定 (P0-P4触发+2轮硬约束)
+│   │   │   ├── memoryService.js # ★ L1/L2/L3三层记忆 (TF哈希向量)
+│   │   │   ├── eventBus.js      # ★ 事件总线 (v2.1 持久化+replay重放)
+│   │   │   ├── toolProbeService.js # ★ 演侧工具调用 (天机探测)
 │   │   │   ├── llmRouter.js     # LLM路由
 │   │   │   ├── treeService.js   # 决策树生成
 │   │   │   └── ...
+│   │   ├── migrations/          # 数据库迁移
+│   │   │   ├── 004-deliberation-memory.sql # 推演会话/摘要/命格 3表
+│   │   │   └── 005-deliberation-events.sql # ★ 事件流表 (v2.1 EventBus持久化)
 │   │   ├── data/
 │   │   │   ├── agentPool.js     # ★ 权威Agent池 (后端单一来源)
 │   │   │   └── hexagrams.json   # 卦象数据
 │   │   └── middleware/          # 中间件
-│   └── index.js                 # 入口
+│   └── index.js                 # 入口 (端口 3001)
 ├── docs/                         # 设计文档
 │   ├── AGENT_DESIGN.md          # ★ Agent设计权威文档
 │   ├── PRODUCTION_ARCHITECTURE.md  # 生产级架构
@@ -269,11 +286,19 @@ input → casting → analyzing → summoning → yan_analyze → agent_select
 - [x] Step 1: 记忆系统骨架（memoryService.js + 004迁移 + db.js白名单）✅ 已自检通过
 - [x] Step 2: 推演状态机骨架（deliberationEngine + planner + /api/deliberation/start）✅ 已自检通过
 - [x] Step 3: 演侧工具调用（toolProbeService）✅ 已自检通过（无网络降级不抛错，接入planner）
-- [ ] Step 4: 自主性（autonomyGate）
-- [ ] Step 5: Reflect 与立卦（reflector）
-- [ ] Step 6: 记忆闭环（consolidate 前端命格簿）
-- [ ] Step 7: 前端状态机对齐
-- [ ] Step 8: 重规划与降级
+- [x] Step 4: 自主性（autonomyGate + ClarifyDialog改造）✅ 已自检通过（P0-P4触发+赛博风追问）
+- [x] Step 5: Reflect 与立卦（reflector + execute真实化）✅ 已自检通过（聚合/矛盾/覆盖/立卦3场景全过，execute接agentRouter并行调智囊→reflector）★ 端到端6步curl验证通过（start→answer→execute立卦→commit L2摘要→getState读回）
+- [x] Step 6: 记忆闭环（consolidate 前端命格簿）✅ 命格列表 API (GET /api/deliberation/memories) + 前端命格簿展示 + fateTicket 生成（commit 返回命签含 ticketId/question/choice/hexagram/oracleText/keyFindings/timestamp）
+- [x] Step 7: 前端状态机对齐（Game.jsx 内整合 + deliberationClient.js，feature flag 切换新轨 /api/deliberation/*，复用 ClarifyDialog + 14阶段动画，flag 关时旧轨一字不改）✅ Step 4-8 全落地 + API并行化(解决8s阻塞) + 演造智囊标记 + 命格簿展示
+- [x] Step 8: 重规划与降级 ✅ deliberationEngine.execute 中 reflect 后自动串通：result.replanned=true 时，state=PLAN 先调 planner.plan() 重新规划，state=EXECUTE 补维度后递归 execute 重新调智囊。reflector MAX_REPLAN=1 限制不会无限递归
+- [x] Step 9: 大刀阔斧重构 Phase 1（事件总线+日志系统）✅ EventBus + logger文件写入 + SSE端点 + LogPanel前端浮层 + deliberationEngine/planner接入eventBus。端到端验证：SSE实时推送THOUGHT/ACTION/OBSERVATION/ADVISOR_SPEAK/STATE_CHANGE，日志文件按天滚动
+- [x] Step 10: 痛点修复（卦位有缺+铸造状态恢复）✅ ClarifyDialog卦位缺角指示器移除(痛点1) + snapshot/resume API(痛点2) + 前端状态恢复逻辑
+- [x] Step 11: 体验修复（演有分析+智囊推荐+泛化）✅ Bug1: newTrackToInference增加analysis字段(基于dimensions+toolProbes生成演的分析文本)，yan_analyze新轨优先用inf.analysis不调streamYanChat；Bug2: 预选智囊permanent全选+dynamic选2个，市集推荐增强(视角互补+热门兜底)；泛化: toolProbeService移除拉萨硬编码兜底，city=null跳过weather_query
+- [x] Step 12: 生产级改造（EventBus持久化+Session断点续推+演ReAct自评+前端动画同步事件流）✅ 详见 `docs/PRODUCTION_REDESIGN_LOG.md`
+  - P0-1: EventBus emit 写 deliberation_events 表 + replay(sessionId) 重放恢复
+  - P0-2: STATES 加 PAUSED/FAILED + pause/resume 端点（30分钟超时转FAILED）+ SSE断线自动pause
+  - P0-3: planner.js 新增 selfCritiquePlan（3s超时降级）+ 不合理触发1次replan（硬约束）
+  - P0-4: Game.jsx 引入 useDeliberationStream hook，智囊发言由 SSE ADVISOR_SPEAK 实时驱动，不再 await executeDeliberation 整包
 
 **演进策略**: 双轨并行。旧轨 `/api/agent/*` 保留兼容；新轨 `/api/deliberation/*` 逐步切换。两轨共用 agentPool/sharedPool/llmRouter。
 
@@ -281,9 +306,13 @@ input → casting → analyzing → summoning → yan_analyze → agent_select
 
 ## 八、参考文档
 
+- **★生产级改造日志(最新)**: [`docs/PRODUCTION_REDESIGN_LOG.md`](docs/PRODUCTION_REDESIGN_LOG.md) — v2.1 改造记录、多维度审视、验证地址、后续待办
 - **Agent设计权威**: [`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md)
 - **生产架构**: [`docs/PRODUCTION_ARCHITECTURE.md`](docs/PRODUCTION_ARCHITECTURE.md)
 - **★真Agent架构(重构中)**: [`docs/REAL_AGENT_ARCHITECTURE.md`](docs/REAL_AGENT_ARCHITECTURE.md)
+- **★真Agent可行性证明(代码级对比+落地差距)**: [`docs/REAL_AGENT_FEASIBILITY.md`](docs/REAL_AGENT_FEASIBILITY.md)
+- **★新轨整合进Game.jsx设计(14阶段映射+feature flag+回溯)**: [`docs/DELIBERATION_INTEGRATION_DESIGN.md`](docs/DELIBERATION_INTEGRATION_DESIGN.md)
+- **★重设建议(对应落地)**: [`docs/重设.md`](docs/重设.md) — v2.0 架构总览，已对应到现状实施
 - **动态生成架构**: [`docs/DYNAMIC_AGENT_ARCHITECTURE.md`](docs/DYNAMIC_AGENT_ARCHITECTURE.md)
 - **工具调用(已落地)**: [`docs/TOOL_CALLING_DESIGN.md`](docs/TOOL_CALLING_DESIGN.md)
 - **接口设计**: [`docs/specs/2026-07-05-inference-interface-design.md`](docs/specs/2026-07-05-inference-interface-design.md)
@@ -307,3 +336,69 @@ node index.js        # 启动 Express server
 # 后端: Railway (auto-deploy from main)
 # 前端: Vercel / Netlify
 ```
+
+---
+
+## 十、比赛评分维度（复赛 — 权重30/30/20/20）
+
+> 来源：`docs/必要要求.md` — 所有开发决策须对照此表，优先保证高分维度
+
+### 10.1 产品完成度 (30%)
+1. **功能完整**: 具备完整用户使用路径，核心功能齐全，必要页面完备
+2. **体验稳定**: 产品结构稳定可靠，无严重bug，核心流程可顺畅走通
+- **自检清单**: 输入问题 → 演分析 → 追问 → 选智囊 → 智囊发言 → 卦象结果 → 命签收藏，全链路零崩溃
+
+### 10.2 技术实现 (30%)
+1. **交互友好**: 交互流程符合用户习惯，操作反馈及时明确
+2. **运行稳定**: 系统运行稳定，能应对正常使用场景的并发需求
+3. **技术方案**: 完整，架构设计合理（React+Three.js+Node.js+LLM+SQLite+记忆系统）
+- **加分项**: SSE实时推送推演过程、三层Agent提示词架构、L1/L2/L3三层记忆系统
+
+### 10.3 实用性 (20%)
+1. **场景成熟**: 解决真实存在且高频的需求（人生决策纠结：辞职/Offer/创业/感情/租房）
+2. **解决效果**: 有效帮用户多视角思考，避免决策盲区
+3. **持续使用价值**: 30天回访闭环 + 命签收藏 + 记忆积累，非一次性工具
+
+### 10.4 创新性 (20%)
+1. **需求创新**: AI决策推演+赛博算命，长期存在但未被有效解决（传统算命数字化+AI多Agent辩论）
+2. **解决思路**: 多视角智囊辩论+八卦立卦，不同于现有决策工具
+3. **技术创新**: TRAE能力运用（Three.js 3D罗盘+LLM多Agent+记忆系统+工具调用）
+
+---
+
+## 十一、参展要求（TRAE AI创造力大赛 · 沉浸展）
+
+> 来源：`docs/合作.md` — 2026年8月21-22日 上海西岸艺术中心 · 灵感商业街·赛博电玩·答案之屋
+
+### 11.1 展示要求
+- **形式**: 屏幕互动（iPad/触屏），观众点击屏幕体验算卦占卜
+- **无需账号**: 匿名登录，打开即用
+- **网络依赖**: 需稳定WiFi（调LLM API）
+- **无设备依赖**: 不需摄像头/麦克风（代码中的camera是Three.js 3D相机）
+
+### 11.2 适配清单
+- [ ] iPad触屏适配（OrbitControls已支持touch，需优化面板布局）
+- [ ] 3D性能降级（移动端降低粒子/画质）
+- [ ] 右侧面板改为底部抽屉（iPad竖屏320px面板太宽）
+- [ ] 演示视频录制（备用方案）
+
+### 11.3 时间节点
+- **0804**: 提交作品使用链接
+- **0805-0806**: 组委会第一轮测试
+- **0807-0812**: 二轮修改调整
+- **0813-0814**: 定稿
+- **0821-0822**: 现场展示
+
+---
+
+## 十二、开发优先级（按评分维度倒推）
+
+| 优先级 | 任务 | 对应评分维度 |
+|--------|------|-------------|
+| P0 | 核心流程零崩溃（输入→追问→智囊→卦象→命签） | 产品完成度 30% |
+| P0 | LLM超时降级完善（现场网络不稳） | 体验稳定 |
+| P1 | 赛博算命元素强化（卦象/爻辞/卦辞风格） | 创新性 20% |
+| P1 | 演分析LLM驱动（非模板拼接） | 技术实现 30% |
+| P1 | Agent推荐精准+能力描述清晰 | 交互友好 |
+| P2 | iPad/触屏适配 | 展示要求 |
+| P2 | 演示视频录制 | 展示要求 |

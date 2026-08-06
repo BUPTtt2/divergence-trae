@@ -1,7 +1,11 @@
 /assets/*.js
   Content-Type: application/javascript
+  Cache-Control: no-cache, no-store, must-revalidate, max-age=0
+  Pragma: no-cache
+  Expires: 0
 /assets/*.css
   Content-Type: text/css
+  Cache-Control: no-cache, no-store, must-revalidate, max-age=0
 /assets/*.svg
   Content-Type: image/svg+xml
 /assets/*.png
@@ -12,3 +16,7 @@
   Content-Type: font/woff2
 /assets/*.woff
   Content-Type: font/woff
+/*
+  Cache-Control: no-cache, no-store, must-revalidate, max-age=0
+  Pragma: no-cache
+  Expires: 0

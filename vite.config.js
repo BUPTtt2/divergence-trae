@@ -20,21 +20,38 @@ function spaFallbackPlugin() {
 }
 
 // https://vite.dev/config/
-// base: './' 让构建产物使用相对路径, 可在 GitHub Pages / Surge / 任意静态托管直接打开
+// ★ 必须用绝对路径 '/'，不能用 './'。
+// 因为 SPA 路由有 /sandbox、/agents、/daily 等多级子路径，相对路径 './' 会把
+// <script type="module" src="./assets/xxx.js"> 解析成 '/sandbox/assets/xxx.js'，
+// 静态文件实际在根 /assets 下找不到，就被 surge 的 200.html fallback 返回成 text/html，
+// 浏览器报 "Expected JavaScript module but got MIME type text/html"。
 export default defineConfig({
   plugins: [react(), spaFallbackPlugin()],
-  base: './',
+  base: '/',
   server: {
+    host: true,
+    port: 5173,
     proxy: {
       '/api': {
-        target: 'https://yance-bagua-engine-production.up.railway.app',
+        target: 'http://localhost:3001',
         changeOrigin: true,
-        secure: true,
+        secure: false,
         bypass(req) {
           if (req.url.startsWith('/api-config')) {
             return req.url;
           }
         },
+      },
+      // 健康检查、tracker、yan stream、agent tree 等非 /api 前缀端点
+      '/health': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/track': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
       },
     },
   },
@@ -45,6 +62,10 @@ export default defineConfig({
     chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
+        // ★ 每次构建文件名唯一，彻底解决 Surge/Vercel CDN 旧 JS 缓存问题
+        entryFileNames: `assets/[name]-[hash]-${Date.now().toString().slice(-6)}.js`,
+        chunkFileNames: `assets/[name]-[hash]-${Date.now().toString().slice(-6)}.js`,
+        assetFileNames: `assets/[name]-[hash]-${Date.now().toString().slice(-6)}.[ext]`,
         // 第三方库分包：three 生态合并(减少跨chunk开销), 其余拆细
         manualChunks(id) {
           if (id.includes('node_modules')) {

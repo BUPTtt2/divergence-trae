@@ -1,14 +1,7 @@
 // Vercel Serverless 入口 — 将所有请求转发给 Express 应用
+// CORS（含 OPTIONS 预检）统一由 src/middleware/cors.js 的 corsMiddleware 处理
 import app from '../src/app.js';
 
 export default function handler(req, res) {
-  // Vercel 需要手动设置 CORS 预检
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.status(200).end();
-    return;
-  }
   return app(req, res);
 }

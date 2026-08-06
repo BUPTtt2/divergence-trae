@@ -1,22 +1,18 @@
 {
   "version": 2,
-  "services": {
-    "web": {
-      "root": ".",
-      "buildCommand": "npm run build",
-      "outputDirectory": "dist",
-      "framework": "vite"
-    },
-    "api": {
-      "root": "server",
-      "buildCommand": "npm install",
-      "devCommand": "node index.js",
-      "entrypoint": "index.js"
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist",
+        "buildCommand": "npm run build"
+      }
     }
-  },
+  ],
+  "cleanUrls": true,
   "routes": [
-    { "src": "/api/(.*)", "dest": "api" },
     { "handle": "filesystem" },
-    { "src": "/(.*)", "dest": "/" }
+    { "src": "/.*", "dest": "/index.html", "status": 200 }
   ]
 }

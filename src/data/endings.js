@@ -2,7 +2,7 @@
  * Fate card data and dice configuration
  */
 
-export const FATE_CARDS = {
+export let FATE_CARDS = {
 
   fate_accept: {
     id: 'fate_accept',
@@ -76,3 +76,10 @@ export const DICE_CONFIG = {
     6: '天命所归!',
   },
 };
+
+/**
+ * 动态更新命牌数据（LLM 生成后调用）
+ */
+export function setFateCards(newCards) {
+  if (newCards && typeof newCards === 'object') FATE_CARDS = newCards;
+}
