@@ -7,7 +7,7 @@ const BORDER_COLOR = '#C8A850';
 const GLOW_COLOR = '#F0D890';
 const RUST_COLOR = '#A8472E';
 
-export default function FateCardPanel({ choice, inference, userInput, agentDialogues, activeAgents, currentCommit, fateContent }) {
+export default function FateCardPanel({ choice, inference, userInput, agentDialogues, activeAgents, currentCommit, fateContent, fateRevealed }) {
   const [trigramFlipped, setTrigramFlipped] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [shareTip, setShareTip] = useState('');
@@ -132,6 +132,24 @@ export default function FateCardPanel({ choice, inference, userInput, agentDialo
           fontFamily: '"Noto Serif SC", "Ma Shan Zheng", serif',
         }}
       >
+        {!fateRevealed ? (
+          <div style={{ textAlign: 'center', padding: '46px 12px', color: GLOW_COLOR }}>
+            <motion.div
+              animate={{ opacity: [0.4, 0.9, 0.4], scale: [1, 1.05, 1] }}
+              transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+              style={{ fontSize: '52px', opacity: 0.6 }}
+            >
+              ☯
+            </motion.div>
+            <div style={{ fontSize: '13px', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.4em', marginTop: '14px', opacity: 0.85 }}>
+              命 签 未 启
+            </div>
+            <div style={{ fontSize: '10px', color: '#8A847A', marginTop: '10px', letterSpacing: '0.12em', lineHeight: 1.8 }}>
+              此卦已成，封印于此<br />点击下方「揭 示 命 签」启封
+            </div>
+          </div>
+        ) : (
+          <>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
           <span style={{ fontSize: '9px', color: GLOW_COLOR, letterSpacing: '0.3em', fontFamily: '"Ma Shan Zheng", serif', opacity: 0.8 }}>
             命 签
@@ -569,6 +587,8 @@ export default function FateCardPanel({ choice, inference, userInput, agentDialo
           <div style={{ textAlign: 'center', marginTop: '6px', fontSize: '9px', color: GLOW_COLOR, letterSpacing: '0.15em' }}>
             {shareTip}
           </div>
+        )}
+          </>
         )}
       </div>
     </motion.div>

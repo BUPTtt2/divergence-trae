@@ -585,14 +585,23 @@ router.post(
       return res.status(400).json({ error: '输入内容无效' });
     }
 
-    const tree = await generateDecisionTree(question, intent || null, userMemory || '');
+    // ★ 修复：generateDecisionTree 内部 callLLM 可能抛异常或返回 null
+    // 必须用 try-catch 包裹，任何异常都返回 fallback 格式，前端据此降级到默认 nodes.js
+    // 否则端点直接 500，前端收到 Error 后会触发不必要的后端熔断。
+    try {
+      const tree = await generateDecisionTree(question, intent || null, userMemory || '');
 
-    if (!tree) {
-      // LLM 生成失败，返回 null，前端降级到默认 nodes.js
-      return res.json({ tree: null, fallback: true });
+      if (!tree) {
+        // LLM 生成失败（返回 null/空），正常返回 fallback，前端降级到默认 nodes.js
+        return res.json({ tree: null, fallback: true });
+      }
+
+      res.json({ tree, fallback: false });
+    } catch (e) {
+      console.error('[agent/tree/generate] 异常:', e.message);
+      // 任何异常都返回 fallback，不让前端认为后端挂了
+      res.json({ tree: null, fallback: true, error: e.message?.slice(0, 100) });
     }
-
-    res.json({ tree, fallback: false });
   })
 );
 

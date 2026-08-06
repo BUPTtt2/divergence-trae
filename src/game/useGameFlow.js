@@ -6,7 +6,7 @@ import { COLORS } from '../components/board/layoutConfig';
 import { generateInferenceContent, generateDialoguesForAgents, generateYanSummary, judgeContinueAsking, isLlmAvailable, generatePersonalizedCardContent, appendYanMemory } from '../services/inferenceEngine';
 import { detectConvergenceFromBlackboard } from '../services/multiAgentFramework';
 import { getCustomAgents, getMarketAgents, recommendSubscribedAgents } from '../utils/customAgent';
-import { streamYanChat, addYanMemory, getYanMemories } from '../services/apiClient';
+import { streamYanChat, addYanMemory, getYanMemories, isBackendCircuitOpen } from '../services/apiClient';
 import { recallRelevantMemories, formatMemoriesForPrompt, saveWorkingMemory, saveEpisode, inferFactsFromSession, saveAgentFeedback, detectChoicePattern } from '../services/memoryStore';
 import { _buildLocalChoices } from './localEngine';
 import { generateCaseFile, canAdvance as caseFileCanAdvance, gateProgress, nextQuestionForGap, CASE_GATES, labelForGate } from './caseFile';
@@ -1341,12 +1341,16 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
             setFloatTip('演 · 正在斟酌下一个追问...');
             const qTypeLabel = typeof qType === 'string' ? qType : (Array.isArray(qType) ? qType[0] : '人生抉择');
             const llmPrompt = `你是「演」，一位沉稳直指核心的引导者。\n\n${accumulatedContext}\n\n当前用户已回答${nextRound}轮澄清问题。请用自然、沉稳、直指核心的口吻，提出1个新的追问，深入挖掘用户还没说出口的真实顾虑、背景约束或核心诉求。不要用5W模板，不要用编号，不要用【何事】【何时】这类标签，就用自然语言对话。只输出1个问题，不要解释。要求：追问必须紧扣用户「${qTypeLabel}」类问题的核心方向，不能扯不相关的领域。`;
+            // ★ 修复：澄清追问 LLM 调用从 8s → 20s
+            // 原 8s 太短，Vercel 冷启动 + 智谱高峰期响应时间经常超过 8s，
+            // 导致 Promise.race 返回 null → 触发"后端+LLM追问生成失败，启用本地自然语言降级"，
+            // 用户感知就是"前面对话好好的，突然就降级了"。
             const race = await Promise.race([
               streamYanChat({
                 message: llmPrompt,
                 conversationId: yanConversationId
               }, (chunk, fullText, convId) => { setYanConversationId(convId); }),
-              new Promise(resolve => setTimeout(() => resolve(null), 8000)),
+              new Promise(resolve => setTimeout(() => resolve(null), 20000)),
             ]);
             if (race && race.text && race.text.length > 10) {
               nextQuestion = race.text;
@@ -1387,10 +1391,11 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       try {
         const summarizePrompt = `${accumulatedContext}\n\n请基于以上多轮问答，用2-3句话提炼关键信息作为智囊团讨论的背景上下文。直接输出结果。`;
         if (isLlmAvailable() && !downgradeRef.current) {
+          // ★ 修复：澄清后上下文总结从 8s → 20s，与澄清追问保持一致
           const race = await Promise.race([
             streamYanChat({ message: summarizePrompt, conversationId: yanConversationId },
               (chunk, fullText, convId) => { setYanConversationId(convId); }),
-            new Promise(resolve => setTimeout(() => resolve(null), 8000)),
+            new Promise(resolve => setTimeout(() => resolve(null), 20000)),
           ]);
           if (race && race.text && race.text.length > 5) {
             userContext = race.text;
@@ -2087,11 +2092,14 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       setShowAgentErrorModal(true);
     };
 
-    const TIMEOUT_MS = 25000;
-    let raceFinished = false;
+    // ★ 修复：多Agent辩论改为【每个Agent独立计时】，不再用整体 race。
+    // 用户要求"每次说话之后回答的计时"，而非整体时间。
+    // generateDialoguesForAgents 内部已对每个 Agent 单独 45s 超时（getAgentDialogueWithTimeout），
+    // 单个 Agent 失败只跳过它自己，其他 Agent 继续走真实 LLM → 实现"单次降级"而非整体降级。
+    // 外层不再设整体超时，杜绝"一个慢 → 全部降级模板"。
 
     const localPresetDialogues = () => {
-      // 后端不可达时：本地自然语言兜底，必须注入 userContextFull 澄清历史，保证本地降级也有上下文
+      // 后端已断路时：本地自然语言兜底（快速，不等每个 Agent 45s）
       selected.forEach((a, i) => {
         const prevReplies = Object.values(newDialogues).filter(Boolean);
         newDialogues[a.id] = localGenerateAgentReply(a, userContextFull, prevReplies, 0);
@@ -2100,44 +2108,34 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       setInference(prev => prev ? { ...prev, agentDialogues: { ...newDialogues } } : { agentDialogues: newDialogues });
     };
 
-    const backendPromise = (async () => {
+    if (isBackendCircuitOpen()) {
+      // 后端网络不可达 → 快速走本地，不让用户干等
+      console.warn('[handleConfirmAgents] 后端已断路，直接走本地自然语言发言');
+      localPresetDialogues();
+      setDebateRound(1);
+      setDebateConvergence({ converged: true, consensusScore: 0.7 });
+    } else {
       try {
         // D2: 后端也注入澄清上下文，不再传 inference.userContext（可能是空），而是传合成后的 userContextFull
         const mergedContext = clarifiedHistoryText || inference?.userContext || '';
+        // 内部单Agent独立计时（45s超时跳过单个），整体自然结束，不设外层race
         const result = await generateDialoguesForAgents(question, selected, qType, onAgentComplete, onError, mergedContext, { round: 1, toolCallbacks });
-        if (raceFinished) return null;
-        return result;
-      } catch (e) {
-        console.warn('[handleConfirmAgents] 后端辩论失败，降级本地自然语言发言:', e.message);
-        if (raceFinished) return null;
-        localPresetDialogues();
-        return { local: true, backendFailed: true };
-      }
-    })();
-
-    const timeoutPromise = new Promise((resolve) => {
-      const id = setTimeout(() => {
-        if (!raceFinished) {
-          console.warn('[handleConfirmAgents] 后端辩论超时，降级本地自然语言发言');
-          localPresetDialogues();
-          resolve({ timeout: true, backendFailed: true });
+        if (result && result.blackboard) {
+          debateBlackboardRef.current = result.blackboard;
+          debateMentionQueueRef.current = result.mentionQueue || [];
+          const convergence = detectConvergenceFromBlackboard(result.blackboard, { currentRound: 1 });
+          setDebateRound(1);
+          setDebateConvergence(convergence);
+        } else {
+          setDebateRound(1);
+          setDebateConvergence({ converged: true, consensusScore: 0.7 });
         }
-      }, TIMEOUT_MS);
-      stageTimersRef.current.push(id);
-    });
-
-    const result = await Promise.race([backendPromise, timeoutPromise]);
-    raceFinished = true;
-
-    if (result && result.blackboard) {
-      debateBlackboardRef.current = result.blackboard;
-      debateMentionQueueRef.current = result.mentionQueue || [];
-      const convergence = detectConvergenceFromBlackboard(result.blackboard, { currentRound: 1 });
-      setDebateRound(1);
-      setDebateConvergence(convergence);
-    } else {
-      setDebateRound(1);
-      setDebateConvergence({ converged: true, consensusScore: 0.7 });
+      } catch (e) {
+        console.warn('[handleConfirmAgents] 后端辩论异常，仅本次降级本地发言:', e.message);
+        localPresetDialogues();
+        setDebateRound(1);
+        setDebateConvergence({ converged: true, consensusScore: 0.7 });
+      }
     }
 
     if (hasErrors && Object.keys(allErrors).length > 0) {

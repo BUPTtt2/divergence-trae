@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 后端 API 封装模块
  * 统一管理所有后端接口调用，包含 SSE 流式处理
  *
@@ -135,11 +135,12 @@ function clearAuth() {
 export { PRIMARY_API, FALLBACK_API };
 export { isBackendCircuitOpen, resetBackendCircuit, ApiUnavailableError };
 
-// 超时放宽：Vercel serverless 冷启动（5-10s）+ 真实 LLM 响应（10-20s）叠加，
-// 15s/30s 会误杀真实对话，导致智囊被跳过、后端被判"不可达"而降级预设。
-// 放宽到 25s/45s，让真实 LLM 有足够时间流式返回。
-export const API_TIMEOUT = 25000;
-export const SSE_TIMEOUT = 45000;
+// 超时再次大幅放宽：用户明确要求"以真正可用为优先级，不要一直降级走完流程"
+// Vercel serverless 冷启动（5-10s）+ Edge Runtime 最长执行（30s）+ LLM 真实推理（10-25s）叠加
+// 普通请求：50s（Vercel Edge 30s + 网络缓冲）
+// SSE 流式：90s（多智囊顺序发言，每个Agent 10-20s，4个就是40-80s）
+export const API_TIMEOUT = 50000;
+export const SSE_TIMEOUT = 90000;
 
 async function tryFetch(url, options = {}, timeout = API_TIMEOUT) {
   if (isBackendCircuitOpen()) {
@@ -232,10 +233,7 @@ async function requestWithFallback(path, options = {}, attempt = 1) {
 
     return handleResponse(resp, path);
   } catch (e) {
-    if (attempt < 2 && api !== FALLBACK_API) {
-      markApiUnavailable();
-      return requestWithFallback(path, options, attempt + 1);
-    }
+    // ★ 修复：同 request()，绝不无条件熔断。网络级不可达由 tryFetch 内部处理。
     throw e;
   }
 }
@@ -296,10 +294,11 @@ async function request(path, options = {}, attempt = 1) {
 
     return handleResponse(resp, path);
   } catch (e) {
-    if (attempt < 2 && api !== FALLBACK_API) {
-      markApiUnavailable();
-      return request(path, options, attempt + 1);
-    }
+    // ★ 根本性修复：request 的 catch 里【绝不】无条件熔断后端。
+    // 之前这里无条件 markApiUnavailable()（5分钟），导致单次请求超时（AbortError）
+    // 就把整个后端拉黑 5 分钟 → 后续总结/命牌/全部降级成本地模板。
+    // 网络级不可达已由 tryFetch 内部 tripBackendCircuit（30s）处理；
+    // 这里只透传错误，让上层做单次降级，绝不影响其他请求。
     throw e;
   }
 }
@@ -482,6 +481,11 @@ export async function streamAgentDialogue(agent, question, previousDialogues, on
     method: 'POST',
     headers: streamHeaders,
     body: JSON.stringify(requestBody),
+    // ★ 关键修复：Agent 对话初始 fetch 必须加超时信号
+    // 否则 Vercel 冷启动或 LLM 端挂起时，Promise 永远不 resolve/reject，
+    // 前端整体 race 到了 25s 超时 → 所有 Agent 一起降级成本地发言。
+    // 90s 上限保证 Edge Runtime 30s + 推理时间内都能正常返回。
+    signal: AbortSignal.timeout(SSE_TIMEOUT),
   });
 
   if (!resp.ok) {
@@ -828,8 +832,24 @@ export async function streamYanChat({ message, conversationId, history }, onChun
   } catch (e) {
     const name = e?.name || '';
     const msg = e?.message || String(e);
-    if (name === 'AbortError' || name === 'TimeoutError' || msg.includes('Failed to fetch') || msg.includes('abort') || name === 'TypeError') {
-      tripBackendCircuit(name || 'sse_fail');
+    // ★ 根本性修复：只有真正的「网络级不可达」才熔断整个后端（30秒内所有请求走本地）
+    // AbortError / TimeoutError 是前端主动超时（单接口慢、LLM 推理久），绝不代表后端不可用！
+    // 如果把超时也算作熔断条件，一次澄清追问超时 → 后续所有智囊发言/总结/命牌全部降级，
+    // 这才是用户说的"前面对话好好的，然后突然就全部降级了"的根因。
+    const isNetworkUnreachable =
+      name === 'TypeError' ||
+      msg.includes('Failed to fetch') ||
+      msg.includes('NetworkError') ||
+      msg.includes('Network request failed') ||
+      msg.includes('load failed') ||
+      msg.includes('connection refused') ||
+      msg.includes('ENOTFOUND') ||
+      msg.includes('ERR_NAME_NOT_RESOLVED');
+    if (isNetworkUnreachable) {
+      tripBackendCircuit(name || 'sse_network_fail');
+    } else {
+      // 非网络错误（超时/abort 等）：只记日志，不熔断
+      console.warn('[yan] 单请求失败（不熔断后端）:', name, msg.slice(0, 100));
     }
     return {
       text: '',

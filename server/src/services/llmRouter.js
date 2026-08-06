@@ -7,10 +7,10 @@
  *   4. 本地降级（返回 null，由调用方处理）
  *
  * 所有提供商都用 OpenAI 兼容格式。
- * 每个请求 15 秒超时，失败自动切换到下一个。
- * (8s 太短：免费主力 glm-4-flash 在冷启动/长回答时经常超过 8s，会被截断导致整条链路降级预设)
+ * 每个请求 30 秒超时（原15s太短：glm-4-flash 在高峰期/长 prompt 经常超过 15s 被截断降级），
+ * 失败自动切换到下一个。用户明确要求"以真正可用为优先级，不要一直降级走完流程"。
  */
-const DEFAULT_TIMEOUT_MS = 15000;
+const DEFAULT_TIMEOUT_MS = 30000;
 
 /**
  * 构建提供商列表（按优先级）
@@ -208,7 +208,7 @@ export async function callLLMStream(messages, options = {}, res) {
   const {
     maxTokens = 400,
     temperature = 0.85,
-    timeout = DEFAULT_TIMEOUT_MS * 2, // 流式超时放宽到 16s
+    timeout = DEFAULT_TIMEOUT_MS * 2, // 流式超时放宽到 60s（Vercel Edge 30s + 推理缓冲）
     alreadyStreaming = false,
   } = options;
 

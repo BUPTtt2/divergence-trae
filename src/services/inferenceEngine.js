@@ -174,8 +174,9 @@ export async function fetchAgentPersonas() {
   } catch (e) {
     // 后端 persona 获取失败是正常降级路径（本地缓存兜底）→ 不刷红日志，只打 debug
     console.debug('[persona] 后端不可达，使用本地内置 persona:', e?.message || 'network error');
-    // 失败后立刻打开断路器，下次进来直接跳过，不再打日志
-    try { markApiUnavailable(3 * 60 * 1000).catch(() => {}); } catch (_) {}
+    // ★ 修复：不再 markApiUnavailable()（3分钟熔断）。
+    // persona 加载失败可能只是网络抖动，不该把整个后端拉黑 3 分钟，
+    // 否则后续所有智囊发言/总结/命牌全部降级。这里静默返回本地即可。
   }
   return _remotePersonas;
 }
@@ -688,7 +689,7 @@ async function getFullAgentDialogue(agent, question, previousDialogues, dialogue
 }
 
 /**
- * 带超时的单个 Agent 对话请求（10秒）
+ * 带超时的单个 Agent 对话请求
  * 含 LLM 调用埋点：llm_call（调用前）+ llm_result（调用后，含成功/失败/超时/耗时）
  * @param {Object} toolCallbacks - 工具调用回调 { onToolStart, onToolCall, onToolResult }（Step 3）
  */
@@ -700,8 +701,13 @@ async function getAgentDialogueWithTimeout(agent, question, previousDialogues, d
   // 合并工具回调到 dialogueOptions（apiClient.streamAgentDialogue 从 options 解构）
   const mergedOptions = { ...dialogueOptions, ...toolCallbacks };
 
+  // ★ 修复：单个 Agent 对话超时从 20s → 45s
+  // 用户明确要求"以真正可用为优先级"。
+  // 原 20s 在 Vercel 冷启动（5-10s）+ 工具调用首轮（10s）+ 最终流式发言（5-15s）叠加时经常超时，
+  // 导致单个 Agent 抛错 → 整体本地降级。
+  // 45s 足够覆盖 Edge Runtime 30s 上限 + 网络抖动缓冲。
   const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('单个 Agent 对话超时')), 20000)
+    setTimeout(() => reject(new Error('单个 Agent 对话超时')), 45000)
   );
   const dialoguePromise = getFullAgentDialogue(agent, question, previousDialogues, mergedOptions);
   try {
@@ -2291,23 +2297,22 @@ export async function generateInferenceContent(question) {
       if (!alive) throw new ApiUnavailableError('probe_fail');
     }
 
-    // ===== 意图识别 + 动态决策树（可选增强，失败静默降级，不阻塞核心分析链）=====
-    // 根本性修复：决策树/意图识别是「锦上添花」的可选功能。
-    // 之前它们失败会直接 throw BACKEND_REQUIRED，导致 analyze-v2 核心 Agent 分析链被跳过，
-    // 前端只能退回本地兜底 Agent 池 → 智囊数量变少 + 后续对话/总结全部降级为预设模板。
-    // 现在：失败仅记日志，intent=null 继续走 analyze-v2，核心 LLM 能力不受影响。
+    // ===== 意图识别 + 动态决策树（后台并行，不阻塞 analyze-v2 核心选智囊）=====
+    // 用户反馈：决策树"没用却拖慢"。原实现串行 await classifyIntent + generateTree，
+    // 叠加最多 60s，导致选智囊前白白等待。现在改为后台 fire-and-forget：
+    // analyze-v2 立即执行，决策树在后台静默更新，任何失败都不影响主链。
+    // intent/assessment 声明在此（可能为 null），供返回对象使用，不阻塞主链。
     let intent = null;
     let assessment = null;
-    try {
-      const intentResp = await apiClient.classifyIntent(question);
-      intent = intentResp.intent;
-      assessment = intentResp.assessment;
-    } catch (e) {
-      console.warn('[inference] 意图识别失败，静默跳过（不影响核心分析）:', e.message);
-    }
-
-    // 动态生成决策树（替代硬编码 nodes.js）— 可选增强，失败静默
-    if (intent) {
+    const backgroundEnhance = (async () => {
+      try {
+        const intentResp = await apiClient.classifyIntent(question);
+        intent = intentResp.intent;
+        assessment = intentResp.assessment;
+      } catch (e) {
+        console.warn('[inference] 意图识别失败，静默跳过（不影响核心分析）:', e.message);
+      }
+      if (!intent) return;
       try {
         const treeResp = await apiClient.generateTree(question, intent);
         if (treeResp.tree && !treeResp.fallback) {
@@ -2337,9 +2342,10 @@ export async function generateInferenceContent(question) {
       } catch (e) {
         console.warn('[inference] 决策树生成失败，使用默认决策树:', e.message);
       }
-    }
+    })();
 
     // ===== 演·深度分析：调用后端 analyze-v2（已有智囊推荐 + 新维度Agent动态生成）=====
+    // 主链：立即执行，不被后台决策树阻塞
     const v2 = await apiClient.analyzeQuestionV2(question);
     console.log('[inference] 后端analyze-v2分析成功:', {
       dimensions: v2.dimensions?.length || 0,

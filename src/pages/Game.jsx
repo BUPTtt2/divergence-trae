@@ -1175,6 +1175,7 @@ export default function Game() {
               activeAgents={activeAgents}
               currentCommit={currentCommit}
               fateContent={fateContent}
+              fateRevealed={fateRevealed}
             />
           )}
         </AnimatePresence>
@@ -1281,80 +1282,114 @@ export default function Game() {
               exit={{ opacity: 0, y: 20 }}
               transition={{ duration: 0.7, ease: 'easeOut' }}
             >
-              {!oracleResult ? (
-                <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-                  {[0, 1, 2].map((i) => (
-                    <motion.div
-                      key={i}
-                      animate={oracleThrowing ? {
-                        rotateY: [0, 1260],
-                        y: [0, -22, 0],
-                        scale: [1, 1.12, 1],
-                      } : { rotateY: 0, y: 0, scale: 1 }}
-                      transition={{
-                        duration: 1.2,
-                        ease: 'easeInOut',
-                        delay: i * 0.15,
-                      }}
+              <AnimatePresence mode="wait">
+                {oracleResult ? (
+                  <motion.div
+                    key="result"
+                    initial={{ opacity: 0, scale: 0.92 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.94 }}
+                    transition={{ duration: 0.7, ease: 'easeOut' }}
+                    className="flex flex-col items-center gap-5"
+                  >
+                    <GuaMirror
+                      size={210}
+                      name={oracleResult.gua || '大有'}
+                      symbol={oracleResult.trigram || '☰'}
+                      trigram={oracleResult.trigram || '☰'}
+                      wuxing={oracleResult.element}
+                    />
+                    <motion.button
+                      whileHover={{ y: -2, boxShadow: `0 0 26px ${GLOW_COLOR}AA, 0 0 8px ${GLOW_COLOR}` }}
+                      whileTap={{ scale: 0.96 }}
+                      onClick={handleProceedToChoices}
+                      className="px-8 py-3 text-[14px]"
                       style={{
-                        width: 48, height: 48, borderRadius: '50%',
-                        background: `
-                          radial-gradient(circle at 28% 22%, #F5E6C8 0%, #E8D098 30%, #C49A5C 65%, #8A6A30 100%)
-                        `,
-                        border: '2px solid #6B4A1F',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: '#3A2810',
+                        backgroundColor: 'transparent',
+                        color: GLOW_COLOR,
                         fontFamily: '"Ma Shan Zheng", serif',
-                        fontSize: 18,
-                        boxShadow: '0 4px 14px rgba(0,0,0,0.35), 0 0 12px rgba(200, 168, 80, 0.35), inset 0 2px 6px rgba(255, 240, 200, 0.4), inset 0 -2px 6px rgba(90, 58, 26, 0.3)',
-                        position: 'relative',
+                        letterSpacing: '0.35em',
+                        border: `1px solid ${BORDER_COLOR}`,
+                        borderRadius: 2,
+                        cursor: 'pointer',
+                        transition: 'all 0.3s ease',
+                        boxShadow: `0 0 22px ${GLOW_COLOR}33`,
                       }}
                     >
-                      <div style={{
-                        position: 'absolute',
-                        width: 12, height: 12,
-                        background: '#A8472E',
-                        boxShadow: '0 0 6px rgba(168, 71, 46, 0.6), inset 0 1px 2px rgba(0,0,0,0.3)',
-                      }} />
-                    </motion.div>
-                  ))}
-                </div>
-              ) : (
-                <motion.div
-                  key="result"
-                  initial={{ opacity: 0, scale: 0.92 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.7, ease: 'easeOut' }}
-                  className="flex flex-col items-center gap-5"
-                >
-                  <GuaMirror
-                    size={210}
-                    name={oracleResult.gua || '大有'}
-                    symbol={oracleResult.trigram || '☰'}
-                    trigram={oracleResult.trigram || '☰'}
-                    wuxing={oracleResult.element}
-                  />
-                  <button
-                    onClick={handleProceedToChoices}
-                    className="px-6 py-2.5 text-[13px]"
-                    style={{
-                      backgroundColor: 'transparent',
-                      color: GLOW_COLOR,
-                      fontFamily: '"Ma Shan Zheng", serif',
-                      letterSpacing: '0.3em',
-                      border: `1px solid ${BORDER_COLOR}`,
-                      borderRadius: 2,
-                      cursor: 'pointer',
-                      transition: 'all 0.3s ease',
-                      boxShadow: `0 0 18px ${GLOW_COLOR}22`,
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.boxShadow = `0 0 20px ${GLOW_COLOR}AA, 0 0 6px ${GLOW_COLOR}`; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.boxShadow = `0 0 18px ${GLOW_COLOR}22`; }}
+                      携 此 天 光 · 看 分 岔 ↓
+                    </motion.button>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="throwing"
+                    exit={{ opacity: 0, scale: 0.92 }}
+                    transition={{ duration: 0.4 }}
+                    className="flex flex-col items-center gap-6"
+                    style={{ perspective: 700 }}
                   >
-                    携 此 天 光 · 看 分 岔
-                  </button>
-                </motion.div>
-              )}
+                    <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+                      {[0, 1, 2].map((i) => (
+                        <motion.div
+                          key={`coin-${i}`}
+                          initial={{ y: -140, opacity: 0, rotateY: 0 }}
+                          animate={{ y: 0, opacity: 1, rotateY: [0, 360, 720] }}
+                          transition={{ duration: 1.15, delay: i * 0.2, ease: 'easeOut' }}
+                          style={{
+                            width: 52, height: 52, borderRadius: '50%',
+                            background: 'radial-gradient(circle at 30% 24%, #F6E8C8 0%, #E8D098 32%, #C49A5C 66%, #8A6A30 100%)',
+                            border: '2px solid #6B4A1F',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: '#3A2810',
+                            fontFamily: '"Ma Shan Zheng", serif',
+                            fontSize: 20,
+                            boxShadow: '0 6px 18px rgba(0,0,0,0.4), 0 0 14px rgba(200,168,80,0.35), inset 0 2px 6px rgba(255,240,200,0.4), inset 0 -2px 6px rgba(90,58,26,0.3)',
+                            position: 'relative',
+                          }}
+                        >
+                          <div style={{
+                            position: 'absolute', inset: 0, borderRadius: '50%',
+                            border: '1px solid rgba(168,71,46,0.45)',
+                          }} />
+                          <div style={{
+                            width: 12, height: 12,
+                            background: i % 2 === 0 ? '#A8472E' : '#1E3A5F',
+                            borderRadius: '50%',
+                            boxShadow: '0 0 6px rgba(0,0,0,0.5), inset 0 1px 2px rgba(255,255,255,0.4)',
+                          }} />
+                        </motion.div>
+                      ))}
+                    </div>
+                    <div style={{
+                      fontFamily: '"Ma Shan Zheng", serif',
+                      color: GLOW_COLOR,
+                      letterSpacing: '0.4em',
+                      fontSize: 14,
+                      opacity: 0.85,
+                    }}>
+                      演 · 落卦中 …
+                    </div>
+                    {/* 兜底：投掷等待中也能往下走，绝不卡死 */}
+                    <motion.button
+                      whileHover={{ y: -2 }}
+                      whileTap={{ scale: 0.96 }}
+                      onClick={handleSkipOracle}
+                      className="px-5 py-2 text-[12px]"
+                      style={{
+                        backgroundColor: 'transparent',
+                        color: `${GLOW_COLOR}88`,
+                        fontFamily: '"Ma Shan Zheng", serif',
+                        letterSpacing: '0.3em',
+                        border: `1px solid ${BORDER_COLOR}55`,
+                        borderRadius: 2,
+                        cursor: 'pointer',
+                        transition: 'all 0.3s ease',
+                      }}
+                    >
+                      不待天机 · 直 看 分 岔
+                    </motion.button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           )}
         </AnimatePresence>
