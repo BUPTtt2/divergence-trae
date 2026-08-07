@@ -19,7 +19,7 @@
  */
 
 import { callLLM } from './llmRouter.js';
-import { executeTool, summarizeToolResult, TOOL_REGISTRY } from './mcpService.js';
+import { executeEvidenceTool, getAgentToolRegistry } from './toolEvidenceGateway.js';
 import { generateAgentDialogue } from './agentEngine.js';
 import { AGENT_POOL } from '../data/agentPool.js';
 import { withRetry, withTimeout } from './retryHelper.js';
@@ -36,6 +36,7 @@ const TOOL_TIMEOUT_MS = 25000;
 const ADVISOR_TIMEOUT_MS = 35000;
 const BLACKBOARD_MAX_CHARS = 8000;
 const TOOL_RESULT_MAX_CHARS = 2000;
+const AGENT_TOOL_REGISTRY = getAgentToolRegistry();
 
 /**
  * 构建演的 ReAct 系统提示
@@ -44,7 +45,7 @@ const TOOL_RESULT_MAX_CHARS = 2000;
  * @param {object} cachedMemories 缓存的记忆 {profile, related}
  */
 function buildReActSystemPrompt(state, round, cachedMemories) {
-  const availableTools = Object.values(TOOL_REGISTRY)
+  const availableTools = Object.values(AGENT_TOOL_REGISTRY)
     .map((t) => `- ${t.name}: ${t.description}`)
     .join('\n');
   const availableAgents = (state.advisorPool || AGENT_POOL.slice(0, 6))
@@ -117,7 +118,12 @@ function buildBlackboard(state) {
   // 工具结果
   if (state.toolResults && state.toolResults.length > 0) {
     const toolText = state.toolResults
-      .map((r) => `[工具${r.tool}] ${r.summary || JSON.stringify(r.result || {}).slice(0, 200)}`)
+      .map((r) => {
+        const evidenceLabel = r.evidence
+          ? `${r.evidence.level}/${r.evidence.freshness}/${r.evidence.sourceName}`
+          : `未采信/${r.status || 'unknown'}`;
+        return `[工具${r.tool} · ${evidenceLabel}] ${r.summary || JSON.stringify(r.result || {}).slice(0, 200)}`;
+      })
       .join('\n');
     parts.push(`【工具观测】\n${toolText}`);
   }
@@ -297,7 +303,7 @@ export async function runReActLoop(sessionId, state) {
       switch (action.type) {
         case 'tool_call': {
           const { tool, params } = action.args;
-          if (!TOOL_REGISTRY[tool]) {
+          if (!AGENT_TOOL_REGISTRY[tool]) {
             observation = `工具 ${tool} 不存在`;
             break;
           }
@@ -317,18 +323,29 @@ export async function runReActLoop(sessionId, state) {
             consecutiveSameTool = 1;
           }
           if (action.type === 'output') break;
-          const result = await withRetry(
-            () => withTimeout(
-              () => executeTool(tool, params || {}),
-              TOOL_TIMEOUT_MS,
-              `工具${tool}`
-            ),
-            { retries: 1, delayMs: 1000, name: `tool_${tool}` }
+          const gatewayResult = await withTimeout(
+            () => executeEvidenceTool(tool, params || {}, {
+              sessionId,
+              actorId: state.userId || 'yan',
+              allowedTools: Object.keys(AGENT_TOOL_REGISTRY),
+            }),
+            TOOL_TIMEOUT_MS,
+            `工具${tool}`
           );
-          const summary = summarizeToolResult(tool, result);
-          observation = summary.slice(0, TOOL_RESULT_MAX_CHARS);
+          observation = (
+            gatewayResult.evidence?.summary
+            || `工具证据未被接受：${gatewayResult.error?.code || gatewayResult.status}`
+          ).slice(0, TOOL_RESULT_MAX_CHARS);
           if (!state.toolResults) state.toolResults = [];
-          state.toolResults.push({ tool, result, summary: observation });
+          state.toolResults.push({
+            tool,
+            result: gatewayResult.evidence?.data || null,
+            evidence: gatewayResult.evidence || null,
+            status: gatewayResult.status,
+            ok: gatewayResult.ok,
+            summary: observation,
+            error: gatewayResult.error || null,
+          });
           break;
         }
 

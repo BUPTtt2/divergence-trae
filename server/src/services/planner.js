@@ -530,7 +530,9 @@ export async function plan(session) {
   try {
     const toolNeeds = toolProbeService.detectToolNeeds(session.question, questionType);
     toolResults = toolNeeds.length > 0
-      ? await toolProbeService.probe(session.question, questionType)
+      ? await toolProbeService.probe(session.question, questionType, {
+        context: { sessionId: session.id, actorId: userId },
+      })
       : [];
     logger.info('[Planner] 工具探测完成', {
       toolNeeds,
@@ -607,7 +609,16 @@ export async function plan(session) {
   const deliberationPlan = {
     dimensions,
     agents: agentsForPlan,
-    toolProbes: toolResults.map((r) => ({ tool: r.tool, summary: r.summary, ok: r.ok })),
+    toolProbes: toolResults.map((r) => ({
+      tool: r.tool,
+      summary: r.summary,
+      ok: r.ok,
+      status: r.status,
+      evidenceLevel: r.evidence?.level || null,
+      freshness: r.evidence?.freshness || null,
+      sourceName: r.evidence?.sourceName || null,
+      observedAt: r.evidence?.observedAt || null,
+    })),
     askUser: [],
     minFindings: MIN_FINDINGS,
     analysis: agentResult.analysis || '',

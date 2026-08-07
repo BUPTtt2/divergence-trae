@@ -19,7 +19,7 @@
  *  - 总耗时硬限制 6s，超时则放弃未完成的，返回已完成的 + 超时标注
  */
 
-import { executeTool, summarizeToolResult, TOOL_REGISTRY } from './mcpService.js';
+import { executeEvidenceTool, getAgentToolRegistry } from './toolEvidenceGateway.js';
 import logger from './logger.js';
 
 // ============ 常量 ============
@@ -31,6 +31,7 @@ const PROBE_TOTAL_TIMEOUT_MS = 6000;
  * 涉及医疗/法律的工具不直接执行，返回 needApproval 让演感知未被执行
  */
 const DANGEROUS_TOOLS = ['medical_query', 'legal_query'];
+const AGENT_TOOL_REGISTRY = getAgentToolRegistry();
 
 /**
  * 问题类型 → 工具清单（确定性映射）
@@ -90,7 +91,7 @@ export function detectToolNeeds(question, questionType) {
   if (STOCK_PATTERN.test(q) && !probes.includes('stock_query')) probes.push('stock_query');
 
   // 去重 + 过滤掉 mcpService 中不存在的工具
-  const valid = [...new Set(probes)].filter((n) => !!TOOL_REGISTRY[n]);
+  const valid = [...new Set(probes)].filter((n) => !!AGENT_TOOL_REGISTRY[n]);
   return valid;
 }
 
@@ -239,7 +240,9 @@ function extractCompanyName(question) {
  * @returns {Promise<Array<{tool, args, result, summary, ok, elapsed?, error?}>>}
  *   失败的工具 ok:false，不抛错；总耗时硬限制 6s
  */
-export async function probe(question, questionType) {
+export async function probe(question, questionType, options = {}) {
+  const executeGateway = options.executeGateway || executeEvidenceTool;
+  const gatewayContext = options.context || {};
   const tools = detectToolNeeds(question, questionType);
   if (tools.length === 0) {
     logger.info('[ToolProbe] 无工具需求', {
@@ -286,11 +289,28 @@ export async function probe(question, questionType) {
         return;
       }
       try {
-        const result = await executeTool(toolName, args);
-        const summary = summarizeToolResult(toolName, result);
+        const gatewayResult = await executeGateway(toolName, args, gatewayContext);
         const elapsed = Date.now() - toolStart;
-        logger.info('[ToolProbe] 工具成功', { tool: toolName, elapsed, summary });
-        completed.push({ tool: toolName, args, result, summary, ok: true, elapsed });
+        const summary = gatewayResult.evidence?.summary
+          || `天机未明（${toolName}:${gatewayResult.error?.code || gatewayResult.status}）`;
+        const item = {
+          tool: toolName,
+          args,
+          result: gatewayResult.evidence?.data || null,
+          evidence: gatewayResult.evidence || null,
+          status: gatewayResult.status,
+          summary,
+          ok: gatewayResult.ok === true && gatewayResult.evidence?.accepted === true,
+          elapsed,
+          ...(gatewayResult.error ? { error: gatewayResult.error.message, errorCode: gatewayResult.error.code } : {}),
+        };
+        logger[item.ok ? 'info' : 'warn']('[ToolProbe] 网关判定完成', {
+          tool: toolName,
+          elapsed,
+          status: item.status,
+          evidenceLevel: item.evidence?.level,
+        });
+        completed.push(item);
       } catch (e) {
         const elapsed = Date.now() - toolStart;
         const summary = `天机未明（${toolName}探测失败）`;
@@ -302,10 +322,15 @@ export async function probe(question, questionType) {
   }
 
   // 等待全部完成 或 总超时（6s 硬限制）
+  let timeoutId;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve(true), PROBE_TOTAL_TIMEOUT_MS);
+  });
   const timeoutHit = await Promise.race([
     Promise.allSettled(inflight).then(() => false),
-    new Promise((resolve) => setTimeout(() => resolve(true), PROBE_TOTAL_TIMEOUT_MS)),
+    timeoutPromise,
   ]);
+  clearTimeout(timeoutId);
 
   const totalElapsed = Date.now() - startTs;
 
