@@ -132,7 +132,10 @@ function findingTaskId(finding) {
 }
 
 function provenOutcome(findings) {
-  if (findings.some((finding) => finding?.evidenceId || finding?.evidence)) return 'evidence-added';
+  if (findings.some((finding) => (
+    finding?.evidenceStatus === 'accepted'
+    && (finding?.evidenceId || finding?.evidence)
+  ))) return 'evidence-added';
   if (findings.some((finding) => finding?.challengedClaimId || finding?.claimChallenged)) return 'claim-challenged';
   if (findings.some((finding) => finding?.exitCondition || finding?.exitConditionAdded)) return 'exit-condition-added';
   return 'no-change';
@@ -150,7 +153,7 @@ export function createLensImpactRecords(plan, findings) {
     const outcome = provenOutcome(linked);
     const findingIds = [...new Set(linked.map((finding) => finding.id))];
     const summary = outcome === 'no-change'
-      ? '完成审查，未改变核心判断。'
+      ? '暂无可证明影响。'
       : `已关联 ${findingIds.length} 条已有 finding，记录了可追溯的 ${outcome}。`;
 
     return {
@@ -162,4 +165,3 @@ export function createLensImpactRecords(plan, findings) {
     };
   });
 }
-

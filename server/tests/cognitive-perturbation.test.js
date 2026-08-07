@@ -26,6 +26,7 @@ test('64 卦 Lens 目录完整、唯一且不含行动裁决', () => {
   assert.equal(HEXAGRAM_LENSES.length, 64);
   assert.equal(new Set(HEXAGRAM_LENSES.map((lens) => lens.hexagramId)).size, 64);
   assert.equal(new Set(HEXAGRAM_LENSES.map((lens) => lens.name)).size, 64);
+  assert.equal(new Set(HEXAGRAM_LENSES.map((lens) => lens.themes.join('|'))).size, 64);
 
   for (const lens of HEXAGRAM_LENSES) {
     assert.deepEqual(Object.keys(lens).sort(), [
@@ -64,6 +65,25 @@ test('相同输入会生成同一摘要、Lens 与任务，并锁定四项不可
   });
 });
 
+test('语义相同但键插入顺序不同的输入生成同一计划', () => {
+  const reordered = {
+    sessionSeed: 'session-06-seed',
+    dimensions: [{ perspective: 'risk' }, { perspective: 'cost' }],
+    gaps: [{ name: '成本', perspective: 'cost', id: 'gap_cost' }],
+    conflicts: [{ reason: '毛利假设与报价记录不一致', id: 'conflict_margin' }],
+    findings: [
+      { evidenceStatus: 'accepted', content: '已有报价记录', perspective: 'risk', id: 'finding_known' },
+      { evidenceStatus: 'unknown', content: '成本上限未知', perspective: 'cost', id: 'finding_unknown' },
+    ],
+    oracle: {
+      dynamics: [2],
+      primary: { binaryKey: 0 },
+    },
+  };
+
+  assert.deepEqual(createCognitivePerturbationPlan(source), createCognitivePerturbationPlan(reordered));
+});
+
 test('扰动计划最多三项且每项可追溯到 Lens 和原始未知或冲突', () => {
   const plan = createCognitivePerturbationPlan(source);
 
@@ -93,7 +113,7 @@ test('影响记录只关联已有 finding，无法证明影响时明确 no-chang
   const plan = createCognitivePerturbationPlan(source);
   const [firstTask] = plan.reviewTasks;
   const records = createLensImpactRecords(plan, [
-    { id: 'finding_added', lensTaskId: firstTask.id, evidenceId: 'ev_1', content: '补充了报价证据' },
+    { id: 'finding_added', lensTaskId: firstTask.id, evidenceId: 'ev_1', evidenceStatus: 'accepted', content: '补充了报价证据' },
     { id: 'finding_unrelated', lensTaskId: 'missing_task', content: '无关联' },
   ]);
 
@@ -103,6 +123,22 @@ test('影响记录只关联已有 finding，无法证明影响时明确 no-chang
   for (const record of records.slice(1)) {
     assert.equal(record.outcome, 'no-change');
     assert.deepEqual(record.findingIds, []);
-    assert.match(record.summary, /未改变核心判断/);
+    assert.equal(record.summary, '暂无可证明影响。');
   }
+});
+
+test('未知状态的关联证据不会被升级为 evidence-added', () => {
+  const plan = createCognitivePerturbationPlan(source);
+  const [firstTask] = plan.reviewTasks;
+  const [record] = createLensImpactRecords(plan, [
+    {
+      id: 'finding_unverified',
+      lensTaskId: firstTask.id,
+      evidenceStatus: 'unknown',
+      evidence: '未经核验的说法',
+    },
+  ]);
+
+  assert.equal(record.outcome, 'no-change');
+  assert.equal(record.summary, '暂无可证明影响。');
 });
