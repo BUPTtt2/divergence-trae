@@ -1,0 +1,4 @@
+#!/bin/bash
+
+export PORT="${PORT:-9000}"
+exec node index.js

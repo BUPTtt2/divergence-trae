@@ -10,7 +10,6 @@
     "build": "echo 'No build needed for Node.js'"
   },
   "dependencies": {
-    "@mastra/core": "^1.50.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

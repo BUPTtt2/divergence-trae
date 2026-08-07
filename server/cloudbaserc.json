@@ -1,22 +1,37 @@
 {
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
   "envId": "yance-bagua-dev-d1fq4lxm0c0541be",
-  "region": "ap-singapore",
-  "framework": {
-    "name": "cloudrun",
-    "config": {
-      "serviceName": "yance-bagua-engine",
-      "envId": "yance-bagua-dev-d1fq4lxm0c0541be",
-      "cpu": 1,
-      "mem": 1,
-      "minNum": 0,
-      "maxNum": 5,
-      "concurrency": 20,
-      "port": 3000,
-      "dockerImage": "",
+  "functionRoot": ".",
+  "functions": [
+    {
+      "name": "yance-bagua-engine",
+      "type": "HTTP",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 60,
+      "memorySize": 512,
+      "installDependency": true,
       "envVariables": {
-        "PORT": "3000",
-        "NODE_ENV": "production"
-      }
+        "PORT": "9000",
+        "NODE_ENV": "production",
+        "CORS_ORIGIN": "https://yance-bagua.surge.sh"
+      },
+      "ignore": [
+        "node_modules",
+        ".memory-db.json",
+        "tests",
+        "logs",
+        ".env",
+        ".env.*",
+        ".vercel",
+        "Dockerfile",
+        ".dockerignore",
+        "cloudbaserc.json",
+        "vercel.json",
+        "railway.json",
+        "render.yaml",
+        "worker"
+      ]
     }
-  }
+  ]
 }
