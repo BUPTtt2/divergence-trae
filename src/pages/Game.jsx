@@ -12,7 +12,7 @@ import { detectQuestionType } from '../data/agents';
 import { generateDialoguesForAgents } from '../services/inferenceEngine';
 import { saveAgentFeedback } from '../services/memoryStore';
 import { sanitizeLLMText } from '../utils/helpers';
-import useGameFlow from '../game/useGameFlow';
+import useSandboxFlow from '../game/useSandboxFlow';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -411,7 +411,7 @@ function _renderNavButton(phase, ctx) {
 }
 
 export default function Game() {
-  const flow = useGameFlow({ DEFAULT_CHOICES });
+  const flow = useSandboxFlow({ DEFAULT_CHOICES });
   const {
     phase, userInput, inputValue, setInputValue, inference, showInput,
     showQuestion, activeAgentIdx, selectedChoice, agentDialogues,
@@ -422,6 +422,8 @@ export default function Game() {
     debateConvergence, showAgentErrorModal, setShowAgentErrorModal,
     agentErrors, fateContent, activeAgents, choices, phaseLabel,
     historyCount, mentionMessages, setFloatTip, setInference,
+    backendError, streamError, handleRejectRetry,
+    commitPending,
     caseFile, yanQuestionRounds, progress, memoryLayers, mirrorReview,
     debateAutoPlay, setDebateAutoPlay, handleSkipToSummary,
     handleRestart, handleStart, handleUserAdvance, handleSkipClarify, handleConfirmAgents,
@@ -447,6 +449,20 @@ export default function Game() {
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)' }}>
       <div className="crt-overlay" />
+      {(backendError || streamError) && (
+        <div role="alert" style={{
+          position: 'fixed', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 100,
+          display: 'flex', alignItems: 'center', gap: 12, maxWidth: 'min(560px, 90vw)',
+          padding: '9px 12px', background: 'rgba(34, 14, 12, 0.96)', color: '#F1C2AE',
+          border: '1px solid rgba(168, 71, 46, 0.8)', fontSize: 12,
+        }}>
+          <span>Agent Runtime：{backendError || streamError}</span>
+          <button type="button" onClick={handleRejectRetry} style={{
+            flexShrink: 0, padding: '4px 9px', color: '#F0D890', background: 'transparent',
+            border: '1px solid rgba(240, 216, 144, 0.6)', cursor: 'pointer',
+          }}>重试</button>
+        </div>
+      )}
       <div className="flex-1 min-h-0 overflow-hidden relative">
         <div className="w-full h-full relative">
           <Board
@@ -510,8 +526,7 @@ export default function Game() {
                   input:'立', casting:'卜', yan_analyze:'演', clarify_loop:'问',
                   agent_select:'召', agent_debate:'辩', summary:'凝',
                   oracle_prompt:'辞', oracle:'卦', branch_select:'择',
-                  path_reveal:'命', committing:'启', final:'藏',
-                  committing:'铭', final:'符'
+                  path_reveal:'命', committing:'铭', final:'符'
                 }[phase] || '演')}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -1362,7 +1377,7 @@ export default function Game() {
         </AnimatePresence>
 
         <AnimatePresence>
-          {phase === 'path_reveal' && selectedChoice && (
+          {(phase === 'path_reveal' || (phase === 'final' && fateContent)) && selectedChoice && (
             <FateCardPanel
               choice={selectedChoice}
               inference={inference}
@@ -1612,6 +1627,7 @@ export default function Game() {
                 }}
                 placeholder="落笔一句你的本心所向 (可不填,Enter 跳过)"
                 maxLength={60}
+                disabled={commitPending}
                 style={{
                   width: '100%',
                   padding: '10px 16px',
@@ -1630,7 +1646,8 @@ export default function Game() {
                 }}
               />
               <button
-                onClick={handleCommit}
+                onClick={commitPending ? undefined : handleCommit}
+                disabled={commitPending}
                 style={{
                   padding: '12px 36px',
                   background: `linear-gradient(135deg, ${BORDER_COLOR} 0%, ${GLOW_COLOR} 100%)`,
@@ -1640,7 +1657,8 @@ export default function Game() {
                   fontFamily: '"Ma Shan Zheng", serif',
                   letterSpacing: '0.3em',
                   border: 'none',
-                  cursor: 'pointer',
+                  cursor: commitPending ? 'wait' : 'pointer',
+                  opacity: commitPending ? 0.65 : 1,
                   boxShadow: `0 0 24px ${GLOW_COLOR}50`,
                   transition: 'all 0.3s ease',
                 }}
@@ -1651,7 +1669,7 @@ export default function Game() {
                   e.currentTarget.style.boxShadow = `0 0 24px ${GLOW_COLOR}50`;
                 }}
               >
-                落 笔 · 看 分 岔
+                {commitPending ? '落 印 中…' : '落 笔 · 收 此 命'}
                 <span style={{ marginLeft: '12px', opacity: 0.6, fontSize: '11px' }}>·  ENTER</span>
               </button>
             </motion.div>

@@ -9,6 +9,7 @@ import { getAccessToken, refreshAccessToken } from './auth.js';
 import { probeDeliberationHealth } from './deliberationHealth.js';
 import { openAuthenticatedSse } from './sseStream.js';
 import {
+  createCommitRequest,
   createExecuteRequest,
   normalizeExecuteResponse,
 } from '../../shared/deliberationContract.js';
@@ -229,11 +230,12 @@ export async function executeDeliberation(sessionId, command) {
  * 提交用户抉择 / 落卦
  * POST /api/deliberation/:sessionId/commit
  */
-export async function commitDeliberation(sessionId, choice) {
+export async function commitDeliberation(sessionId, command) {
+  const payload = createCommitRequest(command);
   const resp = await _deliberationFetch(`/api/deliberation/${sessionId}/commit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ choice }),
+    body: JSON.stringify(payload),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
@@ -390,7 +392,7 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
     let closed = false;
     const fakeSource = {
       get readyState() { return closed ? 2 : 1; },
-      close() { closed = true; onClose && onClose(); },
+      close() { closed = true; onClose?.(); },
     };
     setTimeout(() => onOpen && onOpen(), 0);
     return fakeSource;

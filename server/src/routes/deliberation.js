@@ -195,18 +195,18 @@ router.get('/:sessionId/events', requirePrincipal, requireOwnedDeliberation, asy
 
   try {
     await eventBus.subscribe(sessionId, res);
-  } catch (e) {
+  } catch {
     // subscribe 失败通常只是回放历史失败，但连接继续可用
   }
 
   const heartbeat = setInterval(() => {
-    try { res.write(`: heartbeat\n\n`); } catch (e) {}
+    try { res.write(`: heartbeat\n\n`); } catch {}
   }, 30000);
 
   let paused = false;
   req.on('close', async () => {
     clearInterval(heartbeat);
-    try { eventBus.unsubscribe(sessionId, res); } catch (e) {}
+    try { eventBus.unsubscribe(sessionId, res); } catch {}
     if (!paused) {
       paused = true;
       setTimeout(() => {
@@ -333,10 +333,11 @@ router.post(
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
-    const { choice, feedback } = req.body || {};
+    const { choice, feedback, actionId } = req.body || {};
     if (!choice) return res.status(400).json({ error: '缺少 choice 参数' });
     const result = await deliberationEngine.commit(sessionId, choice, feedback || '', {
       userId: req.principal.userId,
+      actionId,
     });
     res.json(result);
   })

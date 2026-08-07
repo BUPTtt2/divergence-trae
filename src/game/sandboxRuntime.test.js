@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  resolveSandboxRuntime,
+  mapDeliberationPhase,
+  mapServerStateToInternalPhase,
+  adaptFateTicket,
+} from './sandboxRuntime.js';
+
+test('sandbox defaults to the Agent runtime and only explicit legacy rolls back', () => {
+  assert.equal(resolveSandboxRuntime(undefined), 'agent');
+  assert.equal(resolveSandboxRuntime('agent'), 'agent');
+  assert.equal(resolveSandboxRuntime('legacy'), 'legacy');
+  assert.equal(resolveSandboxRuntime('LOCAL_FULL'), 'agent');
+});
+
+test('server business states map to presentation phases without inventing completion', () => {
+  assert.equal(mapDeliberationPhase('PLAN'), 'yan_analyze');
+  assert.equal(mapDeliberationPhase('WAIT'), 'clarify_loop');
+  assert.equal(mapDeliberationPhase('DELIBERATE'), 'agent_debate');
+  assert.equal(mapDeliberationPhase('REFLECT'), 'summary');
+  assert.equal(mapDeliberationPhase('ORACLE'), 'summary');
+  assert.equal(mapDeliberationPhase('COMMIT'), 'committing');
+  assert.equal(mapDeliberationPhase('COMPLETE'), 'final');
+  assert.equal(mapDeliberationPhase('FAILED'), 'input');
+});
+
+test('commit event cannot reset the Agent flow to idle before completion', () => {
+  assert.equal(mapServerStateToInternalPhase('ORACLE'), 'choice');
+  assert.equal(mapServerStateToInternalPhase('COMMIT'), 'committing');
+  assert.equal(mapServerStateToInternalPhase('COMPLETE'), 'done');
+});
+
+test('authoritative fate ticket is adapted to the existing view contract', () => {
+  const adapted = adaptFateTicket({
+    ticketId: 'ft_1',
+    oracleText: '先试后定。',
+    keyFindings: [{ agentName: '镜渊', excerpt: '两周后用结果复盘' }],
+  });
+
+  assert.equal(adapted.source, 'deliberation_session');
+  assert.equal(adapted.verse, '先试后定。');
+  assert.deepEqual(adapted.keyPoints, ['两周后用结果复盘']);
+  assert.deepEqual(adapted.agentSnippets, [{ name: '镜渊', snippet: '两周后用结果复盘' }]);
+});

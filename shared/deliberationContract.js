@@ -28,6 +28,17 @@ export function parseExecuteRequest(input) {
   return createExecuteRequest(input || {});
 }
 
+export function createCommitRequest(input) {
+  const command = input && typeof input === 'object' && Object.hasOwn(input, 'choice')
+    ? input
+    : { choice: input };
+  return {
+    choice: nonEmptyString(command.choice, 'choice'),
+    feedback: String(command.feedback || command.commit || '').trim().slice(0, 1000),
+    actionId: command.actionId ? nonEmptyString(command.actionId, 'actionId') : '',
+  };
+}
+
 export function normalizeExecuteResponse(input = {}) {
   return {
     sessionId: nonEmptyString(input.sessionId, 'sessionId'),

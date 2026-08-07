@@ -45,12 +45,14 @@ export const STATES = {
   REFLECT: 'REFLECT',
   ORACLE: 'ORACLE',
   COMMIT: 'COMMIT',
+  COMPLETE: 'COMPLETE',
   PAUSED: 'PAUSED',
   FAILED: 'FAILED',
 };
 
 const MAX_ROUND = 2;
 const PAUSE_TIMEOUT_MS = 30 * 60 * 1000; // 30 分钟内可 resume
+const commitFlights = new Map();
 
 // ============ 工具函数 ============
 
@@ -394,7 +396,16 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
   const stillNeedClarify = Array.isArray(askUser) && askUser.length > 0 && (session.state === STATES.WAIT || session.state === STATES.PLAN);
   if (stillNeedClarify) {
     // SEV2 审计记录
-    try { AuditAgentSingleton && typeof AuditAgentSingleton.record === 'function' && AuditAgentSingleton.record({ sev: 2, rule: 'STATE_LEAP', evidence: `execute 被调用但 session 仍在澄清 (state=${session.state} askUser=${askUser.length})`, sessionId }); } catch { /* noop */ }
+    try {
+      if (typeof AuditAgentSingleton?.record === 'function') {
+        AuditAgentSingleton.record({
+          sev: 2,
+          rule: 'STATE_LEAP',
+          evidence: `execute 被调用但 session 仍在澄清 (state=${session.state} askUser=${askUser.length})`,
+          sessionId,
+        });
+      }
+    } catch { /* noop */ }
     logger.warn('[Deliberation] execute 被拒绝：仍在澄清阶段，需先 answerDeliberation 完成追问', { sessionId, state: session.state, askUserCount: askUser.length });
     const resp = buildResponseFromSession(session);
     resp.clarifyRequired = true;
@@ -619,13 +630,71 @@ function buildExecuteResponse(sessionId, result) {
  * @param {string} feedback 用户反馈
  * @returns {Promise<{sessionId, fateTicket, memoryUpdated}>}
  */
-export async function commit(sessionId, choice, feedback, executionCtx = {}) {
-  logger.info('[Deliberation] commit 收到', { sessionId, choice, feedback: (feedback || '').slice(0, 60) });
+export function commit(sessionId, choice, feedback, executionCtx = {}) {
+  const actionId = String(executionCtx.actionId || '').trim();
+  const existing = commitFlights.get(sessionId);
+  if (existing) {
+    if (existing.actionId !== actionId) {
+      const error = new Error('该 Session 正在提交另一项抉择');
+      error.code = 'COMMIT_IN_PROGRESS';
+      return Promise.reject(error);
+    }
+    return existing.promise.then((result) => ({ ...result, idempotentReplay: true }));
+  }
+
+  const promise = performCommit(sessionId, choice, feedback, executionCtx);
+  const flight = { actionId, promise };
+  commitFlights.set(sessionId, flight);
+  const cleanup = () => {
+    if (commitFlights.get(sessionId) === flight) commitFlights.delete(sessionId);
+  };
+  promise.then(cleanup, cleanup);
+  return promise;
+}
+
+async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
+  const actionId = String(executionCtx.actionId || '').trim();
+  const requestedChoice = typeof choice === 'object' && choice
+    ? String(choice.id || choice.label || '').trim()
+    : String(choice || '').trim();
+  logger.info('[Deliberation] commit 收到', { sessionId, choice: requestedChoice, actionId, feedback: (feedback || '').slice(0, 60) });
 
   const session = await assertSessionOwner(sessionId, executionCtx.userId);
+  if (session.state === STATES.COMPLETE && session.commit_result) {
+    const cached = typeof session.commit_result === 'string'
+      ? JSON.parse(session.commit_result)
+      : session.commit_result;
+    if (!actionId || !cached.actionId || cached.actionId === actionId) {
+      return { ...cached, idempotentReplay: true };
+    }
+    const error = new Error('该 Session 已完成，不能提交新的抉择');
+    error.code = 'SESSION_ALREADY_COMMITTED';
+    throw error;
+  }
+  if (session.state !== STATES.ORACLE) {
+    const error = new Error(`当前状态 ${session.state} 不允许提交抉择`);
+    error.code = 'INVALID_SESSION_STATE';
+    throw error;
+  }
 
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'ORACLE', to: 'COMMIT', choice } });
-  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'commit', thought: `演·落印：用户选择「${choice}」` } });
+  let dynamicChoices = session.dynamic_choices || session.dynamicChoices || [];
+  if (typeof dynamicChoices === 'string') {
+    try { dynamicChoices = JSON.parse(dynamicChoices); } catch { dynamicChoices = []; }
+  }
+  const selected = Array.isArray(dynamicChoices)
+    ? dynamicChoices.find((item) => (
+      String(item?.id || '') === requestedChoice || String(item?.label || '') === requestedChoice
+    ))
+    : null;
+  if (!selected) {
+    const error = new Error('提交的抉择不属于该 Session 的动态选项');
+    error.code = 'INVALID_COMMIT_CHOICE';
+    throw error;
+  }
+  const authoritativeChoice = String(selected.id || selected.label);
+
+  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'ORACLE', to: 'COMMIT', choice: authoritativeChoice } });
+  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'commit', thought: `演·落印：用户选择「${authoritativeChoice}」` } });
 
   // 记录抉择（写入 session 供 consolidate 提取）
   try {
@@ -677,7 +746,7 @@ export async function commit(sessionId, choice, feedback, executionCtx = {}) {
       question: session.question,
       qaHistory,
       findings,
-      userChoice: choice || '',
+      userChoice: authoritativeChoice,
       userFeedback: feedback || '',
       existingMemories,
     });
@@ -703,7 +772,22 @@ export async function commit(sessionId, choice, feedback, executionCtx = {}) {
   }
 
   // Step 6: 生成命签（fateTicket）
-  const fateTicket = generateFateTicket(session, choice, feedback);
+  const fateTicket = generateFateTicket(session, authoritativeChoice, feedback);
+  const commitResult = {
+    sessionId,
+    state: STATES.COMPLETE,
+    actionId,
+    fateTicket,
+    memoryUpdated,
+  };
+
+  await memoryService.updateSessionState(sessionId, STATES.COMPLETE, {
+    oracle: session.oracle || null,
+    findings: session.findings || [],
+    commit_result: commitResult,
+  });
+  await eventStore.appendEvent(sessionId, 'STATE_CHANGE', { from: 'COMMIT', to: 'COMPLETE' }, 'yan');
+  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'COMMIT', to: 'COMPLETE' } });
 
   eventBus.emit(sessionId, {
     type: 'OBSERVATION',
@@ -711,18 +795,15 @@ export async function commit(sessionId, choice, feedback, executionCtx = {}) {
   });
 
   // 推演结束，清理事件总线
-  setTimeout(() => eventBus.cleanup(sessionId), 60000);
+  const cleanupTimer = setTimeout(() => eventBus.cleanup(sessionId), 60000);
+  cleanupTimer.unref?.();
 
   // P1 Eval Pipeline：异步评估推演质量（不 await，失败不阻塞 commit 返回）
   evaluateSession(sessionId).catch((e) => {
     logger.warn('[Deliberation] commit evaluateSession 失败（不阻塞）', { sessionId, error: e.message });
   });
 
-  return {
-    sessionId,
-    fateTicket,
-    memoryUpdated,
-  };
+  return commitResult;
 }
 
 /**

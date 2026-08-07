@@ -7,7 +7,7 @@
 - 当前 `/sandbox` 不是生产级 Multi-Agent，用户主链仍是 `useGameFlow.js` 旧轨。
 - 目标是“东方仪式语言 + 可验证 Agent Runtime + 决策账本 + 结果校准”。
 - 不先增加新动画、智囊数量或外围页面。
-- 当前执行阶段：**03 已完成；下一步是 04 · `/sandbox` 唯一 Agent 主链**。
+- 当前执行阶段：**04 代码收口完成；真实模型端到端验收后才进入 05**。
 
 ## 01 · 权威设计
 
@@ -21,7 +21,7 @@
 | 01 | Runtime 与前后端契约 | AgentRunner、探活、execute 契约和测试全部可信 | 完成（2026-08-07） |
 | 02 | 身份与 Session 隔离 | 所有 Session/Event/Memory 操作验证真实 owner | 完成（2026-08-07） |
 | 03 | Tool/Evidence Gateway | mock 不进入证据链，工具有权限、来源和时间 | 完成（2026-08-07） |
-| 04 | `/sandbox` 唯一 Agent 主链 | 后端 Session 驱动业务，旧轨只作为可回滚版本 | 03 完成后设计 |
+| 04 | `/sandbox` 唯一 Agent 主链 | 后端 Session 驱动业务，旧轨只作为可回滚版本 | 实现完成，待真实模型联调 |
 | 05 | Agent Event 与活推演阵 | 动画只消费真实事件，支持断线重放和减弱动画 | 04 完成后设计 |
 | 06 | 卦象认知扰动器 | 卦象改变审查角度，不改变事实或安全边界 | 05 完成后设计 |
 | 07 | 决策账本与结果校准 | 3/7/30/90 天结果可回写并校准 Agent | 06 完成后设计 |
@@ -34,6 +34,8 @@
 - Stage 02 计划：[身份与会话隔离实施计划](计划/02-身份与会话隔离实施计划.md)
 - Stage 03 设计：[工具与证据网关](规格/03-工具与证据网关设计.md)
 - Stage 03 计划：[工具与证据网关实施计划](计划/03-工具与证据网关实施计划.md)
+- Stage 04 设计：[Sandbox 唯一 Agent 主链](规格/04-Sandbox唯一Agent主链设计.md)
+- Stage 04 计划：[Sandbox 唯一 Agent 主链实施计划](计划/04-Sandbox唯一Agent主链实施计划.md)
 
 ## 04 · Stage 01 完成证据
 
@@ -74,3 +76,14 @@
 5. 安全与审计：R2 以上默认要求人工确认；外部文本移除典型提示词劫持语句并限制体积；接受、拒绝、失败和待审批均有审计事件。
 6. 验证：后端 `35/35`、前端 `4/4`，Vite build 转换 1063 个模块；Stage 03 定向 lint 为 0 error、2 条既有未使用 catch 参数 warning；业务目录绕过扫描只剩网关底层执行器定义。
 7. 边界：没有部署生产；没有更新静态宏观数据或实现通用审批 UI；E2 搜索结果不冒充权威 E3。
+
+## 08 · Stage 04 实现证据与验收缺口
+
+1. 唯一入口：`Game.jsx` 改为只调用 `useSandboxFlow`；默认值固定为 `agent`，只有构建变量 `VITE_SANDBOX_RUNTIME=legacy` 才回到旧轨。
+2. Session 权威：新轨启动强制 `REMOTE`；健康检查或 Session 无效时显示错误并保留输入，不再静默进入 `LOCAL_FULL`。
+3. 视图适配：后端状态映射到现有 UI phase；智囊、发现、总结、动态选项、卦象、commit 和收藏命签均由 Deliberation 响应派生，不调用旧轨本地选项生成器。
+4. 提交契约：choice 与 feedback 归一化并验证；没有有效 choice 不能提交；收藏必须已有后端 `fateTicket`。
+5. 验证：前端纯函数与契约测试 `9/9`、后端 `38/38`；Agent 默认构建和 legacy 回滚构建均成功，转换 1068 个模块；Stage 04 改动文件定向 lint 0 error（`Game.jsx` 仍有 7 条既有未使用项 warning）。
+6. 扫描：`Game.jsx` 对 `useGameFlow` 的直接引用为 0；新 Hook 中 `LOCAL_FULL` 切换、本地动态选项和本地 Agent 发言生成器引用均为 0。
+7. 未验收：当前工作树没有真实模型密钥，尚未完成“真实 Planner → ReAct → 动态选项 → commit”浏览器端到端；因此 Stage 04 不能标记生产验收通过，也不进入 Stage 05。
+8. 边界：未部署生产；旧轨代码仍保留用于显式回滚；CloudBase 仍是内存存储，刷新/扩容后的 Session 恢复不具备生产保证。

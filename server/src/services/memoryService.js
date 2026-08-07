@@ -114,7 +114,10 @@ export async function saveSession(session) {
     tool_results: session.tool_results,
     findings: session.findings,
     oracle: session.oracle,
+    dynamic_choices: session.dynamic_choices ?? session.dynamicChoices,
+    master_summary: session.master_summary ?? session.masterSummary,
     memory_used: session.memory_used,
+    commit_result: session.commit_result,
     replan_count: session.replan_count ?? 0,
   });
 
