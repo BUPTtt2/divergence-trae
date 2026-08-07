@@ -91,3 +91,28 @@ test('concurrent commits with the same actionId share one authoritative result',
   assert.equal(second.fateTicket.ticketId, first.fateTicket.ticketId);
   assert.equal(second.idempotentReplay, true);
 });
+
+test('a failed planner attempt becomes one persisted fallback instead of overlapping retries', async () => {
+  const session = await ownedSession({
+    state: 'WAIT',
+    round: 2,
+    questionContext: '是否换工作 补充：我只能承受六个月空窗',
+    answers: [{ answer: '我只能承受六个月空窗' }],
+  });
+  let attempts = 0;
+
+  const result = await engine.planSessionWithFallback(session, async () => {
+    attempts += 1;
+    throw new Error('planner budget exhausted');
+  });
+  const restored = await memoryService.getSession(session.id);
+
+  assert.equal(attempts, 1);
+  assert.equal(result.fallback, true);
+  assert.equal(result.session.state, 'EXECUTE');
+  assert.equal(result.askUser.length, 0);
+  assert.equal(restored.state, 'EXECUTE');
+  assert.equal(restored.plan.round, 2);
+  assert.equal(restored.question_context, session.questionContext);
+  assert.deepEqual(restored.answers, session.answers);
+});

@@ -24,13 +24,31 @@ import { evaluate as evaluateAutonomy } from './autonomyGate.js';
 import * as agentEngine from './agentEngine.js';
 import logger from './logger.js';
 import eventBus from './eventBus.js';
-import { withRetry, withTimeout } from './retryHelper.js';
+import { withRetry } from './retryHelper.js';
 
 // ============ 常量 ============
 
-const LLM_TIMEOUT_MS = 15000;
+const LLM_TIMEOUT_MS = 20000;
 const MIN_FINDINGS = 3;
 const MAX_ROUND = 2;
+
+export async function callPlannerLLM(messages, options = {}, runtime = {}) {
+  const call = runtime.call || callLLM;
+  const retries = runtime.retries ?? 1;
+  return withRetry(async () => {
+    const text = await call(messages, {
+      ...options,
+      timeout: options.timeout || LLM_TIMEOUT_MS,
+    });
+    if (!text) throw Object.assign(new Error(`${runtime.name || 'planner LLM'}返回空文本`), { type: 'LLM_EMPTY_OUTPUT' });
+    return text;
+  }, {
+    retries,
+    delayMs: runtime.delayMs ?? 800,
+    backoffMs: runtime.backoffMs ?? 1200,
+    name: runtime.name || 'planner LLM',
+  });
+}
 
 // v3.0 已删除 QUESTION_TYPE_TO_DIMENSIONS 硬编码映射（零预设：维度由 LLM 自主生成）
 
@@ -78,19 +96,13 @@ export async function detectQuestionType(question) {
   }
 
   // 正则未命中 → LLM 分类（带重试，失败抛错）
-  const text = await withRetry(
-    () => withTimeout(
-      () => callLLM(
+  const text = await callPlannerLLM(
         [
           { role: 'system', content: '你是问题分类专家。将用户问题归类为以下类型之一：travel(出行/旅游/出差)、finance(财务/投资)、career(职业/工作)、health(健康/医疗)、relationship(情感/人际关系)、pet(养宠)、education(教育/学习)、legal(法律)、competition(比赛/竞赛)、tech(技术/编程)、city(租房/买房/定居/搬家/城市生活)、life(日常生活)、other(其他)。只返回类型关键词，不要解释。注意：租房买房是city不是travel；去某地工作/定居/生活是city不是travel。' },
           { role: 'user', content: `问题：${q}\n分类结果：` },
         ],
-        { maxTokens: 10, temperature: 0.1 }
-      ),
-      3000,
-      'LLM问题分类'
-    ),
-    { retries: 2, delayMs: 500, name: 'detectQuestionType' }
+        { maxTokens: 10, temperature: 0.1, timeout: 10000 },
+        { retries: 2, delayMs: 500, name: 'detectQuestionType' },
   );
 
   const normalized = (text || '').trim().toLowerCase();
@@ -119,9 +131,7 @@ async function generateYanAnalysis(question, questionType, dimensions, toolResul
   const memoryHints = (memories || []).slice(0, 3).map(m => m.content).filter(Boolean);
 
   try {
-    const result = await withRetry(
-      () => withTimeout(
-        () => callLLM(
+    const result = await callPlannerLLM(
           [
             {
               role: 'system',
@@ -150,12 +160,8 @@ async function generateYanAnalysis(question, questionType, dimensions, toolResul
 请以演的身份，用卦象风格分析此问。`,
             },
           ],
-          { maxTokens: 150, temperature: 0.7 }
-        ),
-        6000,
-        '演分析生成'
-      ),
-      { retries: 1, delayMs: 800, name: 'generateYanAnalysis' }
+          { maxTokens: 150, temperature: 0.7 },
+          { retries: 1, delayMs: 800, name: 'generateYanAnalysis' },
     );
 
     if (result && String(result).trim()) {
@@ -218,13 +224,10 @@ perspective 可选: financial/risk/emotional/reflection/strategic/action/communi
 4. 只返回 JSON 数组，不要任何解释`;
 
   try {
-    const text = await withRetry(
-      () => withTimeout(
-        () => callLLM([{ role: 'user', content: prompt }], { maxTokens: 400, temperature: 0.3 }),
-        8000,
-        'LLM维度生成'
-      ),
-      { retries: 2, delayMs: 1000, name: 'llmGenerateDimensions' }
+    const text = await callPlannerLLM(
+      [{ role: 'user', content: prompt }],
+      { maxTokens: 400, temperature: 0.3 },
+      { retries: 2, delayMs: 1000, name: 'llmGenerateDimensions' },
     );
 
     const parsed = parseDimensionsJSON(text);
@@ -370,13 +373,10 @@ perspective 可选: financial/risk/emotional/reflection/strategic/action/communi
 4. 只返回 JSON 数组，不要任何解释`;
 
   try {
-    const text = await withRetry(
-      () => withTimeout(
-        () => callLLM([{ role: 'user', content: prompt }], { maxTokens: 400, temperature: 0.3 }),
-        LLM_TIMEOUT_MS,
-        'LLM维度增强'
-      ),
-      { retries: 2, delayMs: 1000, name: 'llmEnhanceDimensions' }
+    const text = await callPlannerLLM(
+      [{ role: 'user', content: prompt }],
+      { maxTokens: 400, temperature: 0.3 },
+      { retries: 2, delayMs: 1000, name: 'llmEnhanceDimensions' },
     );
 
     if (text) {
@@ -422,9 +422,7 @@ async function selfCritiquePlan(question, dimensions, toolResults, memories) {
   const memoryHints = (memories || []).slice(0, 3).map(m => m.content).filter(Boolean);
 
   try {
-    const result = await withRetry(
-      () => withTimeout(
-        () => callLLM(
+    const result = await callPlannerLLM(
           [
             {
               role: 'system',
@@ -449,12 +447,8 @@ async function selfCritiquePlan(question, dimensions, toolResults, memories) {
 请自评。`,
             },
           ],
-          { maxTokens: 200, temperature: 0.2 }
-        ),
-        6000,
-        '演自评'
-      ),
-      { retries: 1, delayMs: 800, name: 'selfCritiquePlan' }
+          { maxTokens: 200, temperature: 0.2 },
+          { retries: 1, delayMs: 800, name: 'selfCritiquePlan' },
     );
 
     if (result) {
@@ -500,7 +494,7 @@ async function selfCritiquePlan(question, dimensions, toolResults, memories) {
  */
 export async function plan(session) {
   const userId = session.user_id;
-  const question = session.question || '';
+  const question = session.question_context || session.questionContext || session.question || '';
   logger.info('[Planner] Plan 阶段开始', { sessionId: session.id, userId, question: question.slice(0, 60) });
 
   // 1. 读 L3 命格
@@ -580,14 +574,7 @@ export async function plan(session) {
   }
 
   // 4.7 LLM 驱动选择 Agent（1-6个），失败抛错不降级
-  const agentResult = await withRetry(
-    () => withTimeout(
-      () => agentEngine.analyzeQuestion(question, userId, { useCustomAdvisors: true }),
-      10000,
-      'Agent选择'
-    ),
-    { retries: 1, delayMs: 800, name: 'selectAgents' }
-  );
+  const agentResult = await agentEngine.analyzeQuestion(question, userId, { useCustomAdvisors: true });
   const selectedAgentIds = Array.isArray(agentResult.agentIds) ? agentResult.agentIds : [];
   const selectedAgents = selectedAgentIds
     .map(id => {

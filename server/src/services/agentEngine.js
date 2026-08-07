@@ -99,7 +99,7 @@ ${agentList}
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      { maxTokens: 300, temperature: 0.3, timeout: 8000 }
+      { maxTokens: 300, temperature: 0.3, timeout: 18000 }
     );
 
     if (!text) {

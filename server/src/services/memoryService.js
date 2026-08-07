@@ -109,6 +109,8 @@ export async function saveSession(session) {
   const data = dropUndefined({
     user_id: session.user_id,
     question: session.question,
+    question_context: session.question_context ?? session.questionContext,
+    answers: session.answers,
     plan: session.plan,
     state: session.state || 'PLAN',
     tool_results: session.tool_results,

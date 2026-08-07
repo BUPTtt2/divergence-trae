@@ -28,7 +28,6 @@ import * as customAdvisorService from './customAdvisorService.js';
 import logger from './logger.js';
 import eventBus from './eventBus.js';
 import { evaluateSession } from './evalPipeline.js';
-import { withRetry, withTimeout } from './retryHelper.js';
 import * as reactLoop from './reactLoop.js';
 import * as eventStore from './eventStore.js';
 import { normalizeExecuteResponse } from '../../../shared/deliberationContract.js';
@@ -138,6 +137,21 @@ export async function assertSessionOwner(sessionId, verifiedUserId) {
   return session;
 }
 
+export async function planSessionWithFallback(session, planFn = planner.plan) {
+  try {
+    return await planFn(session);
+  } catch (error) {
+    logger.warn('[Deliberation] planner 失败，保存可继续的规则兜底', { sessionId: session.id, error: error.message });
+    const fallback = _fallbackPlanResult(session, error.message);
+    await memoryService.saveSession({
+      ...fallback.session,
+      state: fallback.session.state,
+      plan: fallback.plan,
+    });
+    return fallback;
+  }
+}
+
 // ============ 主入口 ============
 
 /**
@@ -183,22 +197,8 @@ export async function start(question, userId) {
 
   eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'start', thought: `演·起卦：用户问「${question.trim().slice(0, 40)}」` } });
 
-  // 调 planner.plan()，失败时给 fallback 版本（绝对不 throw）
-  let result;
-  try {
-    result = await withRetry(
-      () => withTimeout(
-        () => planner.plan(session),
-        20000,
-        '演规划'
-      ),
-      { retries: 2, delayMs: 1000, backoffMs: 2000, name: 'planner.plan' }
-    );
-  } catch (e) {
-    // v3.1 兜底：plan 彻底失败时，仍然返回一个有 sessionId + 启发式追问/维度 的合法响应
-    logger.warn('[Deliberation] planner.plan 彻底失败，使用最后一道规则兜底:', e.message);
-    result = _fallbackPlanResult(session, e.message);
-  }
+  // Planner 内部各 I/O 已有可中止超时；外层不再 Promise.race 重试，避免超时任务在后台重叠执行。
+  const result = await planSessionWithFallback(session);
 
   // 确保 sessionId 一致（兜底时可能用的是内存态对象）
   result.session.id = result.session.id || sessionId;
@@ -273,28 +273,31 @@ function _fallbackPlanResult(session, errorMsg = '') {
     { id: 'jingyuan', name: '镜渊', stance: '反思视角', role: 'dynamic', trigram: '☷', color: '#706088', glow: '#A890C8' },
   ];
 
-  // 启发式追问（按问题关键词，最多 3 条）
+  const round = Math.max(1, Number(session.round) || 1);
+  const shouldClarify = round < MAX_ROUND;
+
+  // 启发式追问（仅首轮；回答后的兜底必须继续进入执行，不能再次卡在 WAIT）
   const askUser = [];
-  if (/(租房|买房|换城市|城市|房租|房源)/.test(q)) {
+  if (shouldClarify && /(租房|买房|换城市|城市|房租|房源)/.test(q)) {
     askUser.push({ question: '能接受的月预算大概是多少？', reason: '预算决定筛选范围', source: 'P0-FB' });
     askUser.push({ question: '工作/学校大概在哪个区域？期望的单程通勤时长是？', reason: '通勤是日常双输的元凶', source: 'P0-FB' });
     askUser.push({ question: '是短期过渡还是长期居住？有没有对象或家人同住？', reason: '长期/同住会改变风险评估', source: 'P0-FB' });
-  } else if (/(offer|工作|跳槽|创业|辞职|转行|升职|职业)/.test(q)) {
+  } else if (shouldClarify && /(offer|工作|跳槽|创业|辞职|转行|升职|职业)/.test(q)) {
     askUser.push({ question: '你现在最看重的是收入、成长，还是稳定性？', reason: '三者不可兼得，先定权重', source: 'P0-FB' });
     askUser.push({ question: '目前的储蓄能撑多久（裸辞缓冲期）？', reason: '财务缓冲决定决策风险', source: 'P0-FB' });
-  } else if (/(投资|股票|基金|理财|贷款|汇率|借钱|还钱)/.test(q)) {
+  } else if (shouldClarify && /(投资|股票|基金|理财|贷款|汇率|借钱|还钱)/.test(q)) {
     askUser.push({ question: '能接受的最大亏损比例是多少？', reason: '风险承受力决定配置', source: 'P0-FB' });
     askUser.push({ question: '这笔钱多久内要用？能锁多久？', reason: '期限决定产品选择', source: 'P0-FB' });
-  } else if (/(感情|恋爱|结婚|分手|对象|伴侣|老公|老婆|父母|家人)/.test(q)) {
+  } else if (shouldClarify && /(感情|恋爱|结婚|分手|对象|伴侣|老公|老婆|父母|家人)/.test(q)) {
     askUser.push({ question: '你最不能接受的底线是什么？', reason: '没有底线的选择都是后悔', source: 'P0-FB' });
     askUser.push({ question: '家人/对方的态度是？', reason: '亲密关系的事不是一个人决定的', source: 'P0-FB' });
-  } else {
+  } else if (shouldClarify) {
     askUser.push({ question: '这件事的时间限制是什么？多久之内必须决定？', reason: '时间决定信息获取深度', source: 'P0-FB' });
     askUser.push({ question: '最坏情况是什么？你能接受吗？', reason: '先判底线再谈收益', source: 'P0-FB' });
   }
 
-  session.state = STATES.WAIT;
-  session.round = 1;
+  session.state = shouldClarify ? STATES.WAIT : STATES.EXECUTE;
+  session.round = round;
   session.askUser = askUser;
 
   const plan = {
@@ -303,7 +306,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     toolProbes: [],
     askUser,
     minFindings: 3,
-    round: 1,
+    round,
     openingLine: `关于「${(session.question || '').slice(0, 30)}」，先问清几个关键点再推。`,
     analysis: `（LLM 暂不可用：${String(errorMsg || '').slice(0, 40)}，演已按规则生成维度与追问）`,
   };
@@ -314,7 +317,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     plan,
     askUser,
     openingLine: plan.openingLine,
-    round: 1,
+    round,
     maxRound: MAX_ROUND,
     memory: [],
     fallback: true,
@@ -351,14 +354,7 @@ export async function answer(sessionId, answers, executionCtx = {}) {
   });
 
   // 重新 plan（planner 内 autonomyGate 按 session.round 判定 ASK/CONTINUE/STOP）
-  const result = await withRetry(
-    () => withTimeout(
-      () => planner.plan(session),
-      20000,
-      '演规划'
-    ),
-    { retries: 2, delayMs: 1000, backoffMs: 2000, name: 'planner.plan' }
-  );
+  const result = await planSessionWithFallback(session);
 
   logger.info('[Deliberation] answer 完成', {
     sessionId,
@@ -414,7 +410,7 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
     return normalizeExecuteResponse(resp);
   }
 
-  const question = session.questionContext || session.question || '';
+  const question = session.question_context || session.questionContext || session.question || '';
 
   // 1. 构建智囊池：优先用传入的 agentIds（用户选择的），否则用 plan 中的 agents（演推荐的）
   //    ReAct 循环里演自主决定调哪些智囊，这里只提供候选池
@@ -542,14 +538,7 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
     await memoryService.saveSession(result.session);
     // state='PLAN'：先重新 plan（planner 会读 session 已有 findings 重新规划）
     if (result.session.state === 'PLAN') {
-      await withRetry(
-        () => withTimeout(
-          () => planner.plan(result.session),
-          20000,
-          '演规划'
-        ),
-        { retries: 2, delayMs: 1000, backoffMs: 2000, name: 'planner.plan' }
-      );
+      await planSessionWithFallback(result.session);
     }
     // 递归 execute（传空 agentIds 让 agentRouter 基于新维度推荐智囊，replan_count 已+1 不会无限）
     return execute(sessionId, [], executionCtx);
@@ -812,7 +801,7 @@ async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
  * - 用于前端展示、收藏、分享
  */
 function generateFateTicket(session, choice, feedback) {
-  const question = session.questionContext || session.question || '';
+  const question = session.question_context || session.questionContext || session.question || '';
   const oracle = session.oracle || {};
   const findings = Array.isArray(session.findings) ? session.findings : [];
 
