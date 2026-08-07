@@ -681,6 +681,22 @@ async function getFullAgentDialogue(agent, question, previousDialogues, dialogue
       enrichedQuestion = `${question}${hint}`;
     }
   } catch (e) { /* 降级, 不影响主流程 */ }
+
+  // ★ Q5 修复：根据 intent（advice/inquiry）动态追加风格约束
+  //   - advice 模式：禁止反问用户，必须直接给建议、方案、判断；
+  //   - inquiry 模式（默认）：保留追问，但避免连续抛 3 个以上无内容的问题；
+  const intent = String(dialogueOptions?.intent || dialogueOptions?.replyIntent || 'inquiry');
+  const isAdvice = intent === 'advice' || intent === 'advise' || intent === 'suggest';
+  const isMentioned = Array.isArray(dialogueOptions?.pendingMentions) && dialogueOptions.pendingMentions.length > 0;
+  if (isAdvice) {
+    enrichedQuestion = `${enrichedQuestion}\n\n【模式要求 · 建议模式】请你直接给出具体建议、判断和行动方案，禁止反问用户任何问题，禁止用"你觉得呢""你怎么看""你想清楚了吗"结尾。你的回答必须包含至少 1 条可执行的建议 + 1 条警示判断。`;
+  } else {
+    enrichedQuestion = `${enrichedQuestion}\n\n【模式要求 · 探究模式】你可以追问澄清，但禁止连续抛出 3 个以上无实质内容的问题；追问要附带你自己的分析或判断，避免空泛。`;
+  }
+  if (isMentioned) {
+    enrichedQuestion = `${enrichedQuestion}\n【模式要求 · 被@回应】用户刚刚明确点了你的名，请先回应用户对你说的话，重点、针对性回复，不要重复其他智囊已经说过的内容。`;
+  }
+
   let full = '';
   await apiClient.streamAgentDialogue(
     agent, enrichedQuestion, previousDialogues, (chunk) => { full += chunk; }, dialogueOptions
@@ -955,7 +971,8 @@ function reorderAgentsByIntent(agents, intent) {
 export async function generateDialoguesForAgents(question, agents, questionType, onAgentComplete, onError, userContext, options = {}) {
   if (!agents || agents.length === 0) return { dialogues: {}, results: {}, errors: {} };
 
-  const { existingBlackboard, existingMentionQueue = [], round = 1, toolCallbacks, intent } = options;
+  // ★ T1 修复：必须同时解构 replyIntent（之前只写了 if (replyIntent)... 赋值没声明→ ReferenceError）
+  const { existingBlackboard, existingMentionQueue = [], round = 1, toolCallbacks, intent, replyIntent, commitText } = options;
   let nonMasterAgents = agents.filter(a => a.role !== 'master');
 
   // P0: 根据 intent 特征重排智囊发言顺序（共情/对抗/发散模式）
@@ -1151,6 +1168,9 @@ export async function generateDialoguesForAgents(question, agents, questionType,
     const dialogueOptions = {};
     if (pendingMentions.length > 0) dialogueOptions.pendingMentions = pendingMentions;
     if (availableAgents.length > 0) dialogueOptions.availableAgents = availableAgents;
+    // ★ Q5：把顶层 intent 注入每个 agent 的对话选项，供 getFullAgentDialogue 做风格分流
+    if (intent) dialogueOptions.intent = intent;
+    if (replyIntent) dialogueOptions.replyIntent = replyIntent;
 
     // 构建前面 Agent 的发言摘要，供当前 Agent 参考（保留原格式以兼容后端 API）
     const previousDialogues = Object.entries(dialogues).map(([aid, dText]) => {
@@ -1169,6 +1189,15 @@ export async function generateDialoguesForAgents(question, agents, questionType,
     const prevBrief = previousDialogues.map(d => clamp(d, 90));
 
     const contextParts = [];
+    // ★ T7 上下文工程：落笔本心 commitText 必须注入所有 Agent 可见上下文（有安全长度校验，异常忽略）
+    if (commitText) {
+      try {
+        const raw = String(commitText || '').trim();
+        if (raw.length >= 2 && raw.length <= 180) {
+          contextParts.push(`【用户落笔本心所向 · 所有推演必须以此为锚】${clamp(raw, 120)}`);
+        }
+      } catch (_) { /* ignore */ }
+    }
     if (userContext) contextParts.push(`【用户补充】${clamp(userContext, 80)}`);
     if (prevBrief.length > 0) {
       contextParts.push(`【前面智囊】${prevBrief.join(' | ')}`);
@@ -1246,17 +1275,39 @@ export async function generateDialoguesForAgents(question, agents, questionType,
     }
 
     if (!apiSuccess) {
-      // ★ 修复：单个智囊发言失败（LLM超时/网络问题/空文本）→ 立即本地自然语言兜底，不能让它"消失"
-      // 之前的 continue 会直接跳过该智囊，用户看到"选了两个但只出一个"的怪现象。
-      // 现在：该智囊仍然有内容（只是内容是本地生成的自然语言），UI 不缺块，用户体验完整。
-      const prevReplies = Object.values(dialogues).filter(Boolean);
-      text = localGenerateAgentReply(agent, userContext || question, prevReplies, i);
-      dialogues[agent.id] = text;
-      source = 'local_natural_degraded';
-      const collaboration = inferCollaboration(text, nonMasterAgents);
-      results[agent.id] = { text, success: true, error: errorInfo || '发言降级（本地自然语言）', source, collaboration };
-      if (onAgentComplete) onAgentComplete(agent.id, text, true, errorInfo || '（单Agent本地降级）', source, collaboration);
-      console.warn(`[发言] Agent ${agent.name} 发言失败，降级本地自然语言：`, errorInfo || '无内容');
+      // ★ T5 修复：单个 Agent 发言失败（超时/网络/空内容）不再静默「本地自然语言降级」
+      // 像豆包一样：失败就是失败，不假装生成了；明确把失败交给上层，给用户"再试一次"按钮。
+      // - errors 中写入失败详情（名字+原因），供弹层显示；
+      // - dialogues 留空占位，UI 可以显示"生成失败，请重试"而不是拿一段假内容敷衍；
+      // - results 标 success=false + needRetry=true，上层可据此重试单个或失败的全部。
+      const agentName = agent.name || agent.id || '此智囊';
+      const finalErr = errorInfo || '网络或服务超时';
+      const errMsg = (() => {
+        if (/超时|timeout/i.test(finalErr)) return '发言超时，可能网络慢或服务繁忙';
+        if (/429|过多|限流|Too Many/i.test(finalErr)) return '请求频率过高，请稍后再试';
+        if (/401|403|未授权|权限|Unauth/i.test(finalErr)) return '登录或鉴权失效，请重新打开页面';
+        if (/404|Not Found|路由/i.test(finalErr)) return '服务暂不可用，请稍后再试';
+        if (/5\d{2}|服务器|Server|Bad Gatewa|502|503/i.test(finalErr)) return '后端服务异常，请稍后重试';
+        if (/问题过长|500 字|字符上限/i.test(finalErr)) return '上下文过长，请精简内容后重试';
+        return finalErr || '未知错误';
+      })();
+
+      dialogues[agent.id] = ''; // 空占位，避免被当成成功
+      source = 'failed_need_retry';
+      errors[agent.id] = {
+        agentId: agent.id,
+        agentName,
+        error: errMsg,
+        rawError: finalErr,
+        needRetry: true,
+      };
+      results[agent.id] = {
+        text: null, success: false, error: errMsg, source,
+        collaboration: null, needRetry: true,
+      };
+      // 回调仍然触发（success=false），让上层 UI 能感知失败并弹重试
+      if (onAgentComplete) onAgentComplete(agent.id, null, false, errMsg, source, null);
+      console.warn(`[发言] Agent ${agentName} 失败，交由用户选择是否重试：`, errMsg || finalErr);
     }
 
     // 消费待回应 mention：该 Agent 已发言，移除其 pendingMentions（避免下轮重复注入）

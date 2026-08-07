@@ -26,6 +26,18 @@ export default function FateCardPanel({ choice, inference, userInput, agentDialo
   const guaGanzhi = realGua?.ganzhi;
   const guaWuxingRels = realGua?.wuxingRels;
 
+  // 赛博算命仪式：从 fateContent 或 inference 中读注入字段（优先取 fateContent.cyber*）
+  const cyberSignId = fateContent?.cyberSignId || inference?.cyberSignId || '';
+  const cyberPoem = Array.isArray(fateContent?.cyberPoem) && fateContent.cyberPoem.length===4 ? fateContent.cyberPoem : null;
+  const cyberPoemTranslate = fateContent?.cyberPoemTranslate || '';
+  const cyberFateSign16 = fateContent?.cyberFateSign16 || '';
+  const cyberRuneSvg = fateContent?.cyberRuneSvg || '';
+  const cyberNiGua = fateContent?.cyberNiGua || inference?.cyberNiGua || '';
+  const cyberFuTie = fateContent?.cyberFuTie || inference?.cyberFuTie || '';
+  const cyberSanBianPick = fateContent?.cyberSanBianPick || '';
+  const cyberZhuangGuaLog = fateContent?.cyberZhuangGuaLog || '';
+  const hasRitualPayload = !!(cyberSignId || cyberPoem || cyberFateSign16 || cyberRuneSvg || cyberNiGua || cyberFuTie);
+
   const pillars = useMemo(() => {
     if (guaGanzhi?.year && guaGanzhi?.month && guaGanzhi?.day && guaGanzhi?.hour) {
       const yStr = guaGanzhi.year.replace('年', '');
@@ -231,6 +243,61 @@ export default function FateCardPanel({ choice, inference, userInput, agentDialo
             </motion.div>
           )}
         </div>
+
+        {/* 赛博算命仪式产物：四句七言签语 + 赛博翻译（流程核心产物，不是动画） */}
+        {hasRitualPayload && cyberPoem && (
+          <div style={{ marginBottom: '12px', padding: '10px 12px', background: 'linear-gradient(180deg, rgba(200,168,80,0.10) 0%, rgba(16,12,8,0.88) 100%)', border: `1px solid ${BORDER_COLOR}55`, borderRadius: '2px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontSize: '9px', color: GLOW_COLOR, letterSpacing: '0.3em', opacity: 0.85 }}>赛 卜 · 签 语（四句七言）</div>
+              {cyberSignId && <div style={{ fontSize: '8.5px', color: '#A89878', letterSpacing: '0.18em' }}>签号 {cyberSignId}</div>}
+            </div>
+            <div style={{ fontFamily: '"Ma Shan Zheng", serif', fontSize: '14px', color: '#F0E8D0', lineHeight: 2.05, letterSpacing: '0.05em', marginBottom: '8px' }}>
+              {cyberPoem.map((l, i) => <div key={i}>· {l}</div>)}
+            </div>
+            {cyberPoemTranslate && (
+              <div style={{ fontSize: '10px', color: '#B0A890', lineHeight: 1.85, letterSpacing: '0.04em', padding: '8px 10px', background: 'rgba(10,8,4,0.55)', borderTop: `1px dashed ${BORDER_COLOR}40` }}>
+                <span style={{ color: GLOW_COLOR, fontSize: '8.5px', letterSpacing: '0.25em' }}>赛博翻译 · </span>
+                {cyberPoemTranslate}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 逆卦/符贴/三变定局：可追溯产物 */}
+        {hasRitualPayload && (cyberNiGua || cyberFuTie || cyberSanBianPick) && (
+          <div style={{ marginBottom: '10px', padding: '6px 10px', fontSize: '9.5px', color: '#C8B890', lineHeight: 1.85, letterSpacing: '0.08em', border: `1px dashed ${BORDER_COLOR}35`, background: 'rgba(20,14,8,0.45)', borderRadius: '2px' }}>
+            {cyberNiGua && <div>▸ {cyberNiGua} —— 反着走就是错路，别骗自己</div>}
+            {cyberFuTie && <div>▸ 符贴 · {cyberFuTie}</div>}
+            {cyberSanBianPick && <div>▸ 三变落子 · {cyberSanBianPick === 'path_A' ? '径甲·顺势而为' : cyberSanBianPick === 'path_B' ? '径乙·稳守当下' : '本心径'}</div>}
+          </div>
+        )}
+
+        {/* 赛博16位符命 + 行动符文SVG：流程产物 */}
+        {hasRitualPayload && (cyberFateSign16 || cyberRuneSvg) && (
+          <div style={{ marginBottom: '12px', padding: '12px 12px 10px', border: `1px solid ${GLOW_COLOR}55`, background: 'radial-gradient(circle at 20% 0%, rgba(240,216,144,0.10), rgba(12,10,6,0.9) 55%)', borderRadius: '2px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontSize: '9px', color: GLOW_COLOR, letterSpacing: '0.3em', opacity: 0.85 }}>符 命 · 本 命 16 位</div>
+              <button
+                onClick={() => { try { navigator.clipboard && navigator.clipboard.writeText(cyberFateSign16 || ''); } catch(_){} }}
+                style={{ fontSize: '8.5px', color: '#B8A880', border: `1px solid ${BORDER_COLOR}40`, background: 'transparent', padding: '3px 8px', letterSpacing: '0.2em', cursor: 'pointer' }}
+              >复 制</button>
+            </div>
+            {cyberFateSign16 && (
+              <div style={{ fontFamily: '"SF Mono", ui-monospace, Menlo, Consolas, monospace', fontSize: '13px', color: GLOW_COLOR, letterSpacing: '0.20em', marginBottom: '10px', textAlign: 'center', padding: '6px 8px', background: '#080604', border: `1px solid ${BORDER_COLOR}35`, userSelect: 'all' }}>
+                {cyberFateSign16}
+              </div>
+            )}
+            {cyberRuneSvg && (
+              <div onClick={(e) => { try { const r = document.createRange(); r.selectNodeContents(e.currentTarget); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } catch(_){} }}
+                style={{ background: '#0a0806', border: `1px dashed ${BORDER_COLOR}35`, padding: '6px', textAlign: 'center', userSelect: 'all', cursor: 'text' }}
+                dangerouslySetInnerHTML={{ __html: cyberRuneSvg }}
+              />
+            )}
+            <div style={{ fontSize: '8.5px', color: '#8A8478', textAlign: 'center', marginTop: '6px', letterSpacing: '0.18em' }}>
+              行动符文·把此符贴在手机壁纸/贴墙上·七日一见便验
+            </div>
+          </div>
+        )}
 
         {guaWuxingRels && guaWuxingRels.length > 0 && (
           <div style={{ marginBottom: '10px', padding: '8px 10px', background: 'rgba(120, 98, 60, 0.10)', borderRadius: '2px' }}>

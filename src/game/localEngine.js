@@ -22,10 +22,20 @@ export const _safeClearTimeout = (id) => {
 /**
  * 基于问题 + 智囊维度 + 对话内容，本地生成 3~4 个有意义的抉择选项
  * 不依赖后端 dynamicChoices，避免后端返回不相关内容
+ * ★ Q6：新增第4个参数 commitText（用户落笔本心），作为"本心锚点"选项优先展示（有异常处理）
  */
-export function _buildLocalChoices(question, agents, dialogueMap) {
+export function _buildLocalChoices(question, agents, dialogueMap, commitText = '') {
   const q = (question || '').trim();
   const qSlice = q.length > 18 ? q.slice(0, 18) + '…' : (q || '此事');
+
+  // ★ Q6 本心异常处理：任何异常都不抛，直接当空串走原逻辑
+  let safeCommit = '';
+  try {
+    const raw = String(commitText || '').trim();
+    if (raw && raw.length >= 2 && raw.length <= 200) safeCommit = raw;
+  } catch (_) { safeCommit = ''; }
+  const hasCommit = safeCommit.length > 0;
+  const commitShort = hasCommit && safeCommit.length > 16 ? safeCommit.slice(0, 14) + '…' : safeCommit;
 
   const allTexts = [];
   const agentTexts = []; // 保留每条带人名的，用于生成选项要点
@@ -114,6 +124,19 @@ export function _buildLocalChoices(question, agents, dialogueMap) {
   };
 
   return [
+    // ★ Q6：有落笔本心的话，把「本心所向」作为第一张牌置顶，重点抓用户自己的选择
+    ...(hasCommit ? [{
+      id: 'commit_anchor',
+      label: `本心所向 · ${commitShort}`,
+      desc: `你落笔写下「${safeCommit}」。此念既出，万法随之——所有推演最终都要回归你这颗心的起点。`,
+      keyPoints: [
+        `你亲笔写了：「${safeCommit.length > 28 ? safeCommit.slice(0, 26) + '…' : safeCommit}」`,
+        `以此念为锚，每临分岔自问：我此刻的选择，是否还对得上这句话？`,
+        `若 3 个月后回看今日，这句本心之言可会让你心安？可会让你后悔？`
+      ],
+      verse: _makeVerse('中孚', `鸣鹤在阴，其子和之 · 心诚则灵`),
+      color: '#D49838', glowColor: '#F0C870', icon: '䷼', gua: '中孚',
+    }] : []),
     {
       id: 'opportunity',
       label: `抓住机会 · 优先${kws[0] || '推进'}`,

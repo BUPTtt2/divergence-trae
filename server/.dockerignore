@@ -1,0 +1,23 @@
+# 云托管镜像构建排除文件
+node_modules
+.git
+.gitignore
+.env
+.env.local
+.env.development
+.env.production
+*.log
+.memory-db.json
+tests
+README.md
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+.dockerignore
+cloudbaserc.json
+vercel.json
+railway.json
+render.yaml
+.vercelignore
+worker

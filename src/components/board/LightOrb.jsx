@@ -1143,20 +1143,29 @@ export default function LightOrb({ phase, position = [0, 1.5, 0], selectedChoice
   const showYanRunes = phase === 'yan_analyze';
   const showDebateEnergy = phase === 'agent_debate';
   const showChoiceAura = phase === 'branch_select';
+  // ★ Q2 修复：投铜钱/立卦/落卦阶段（qinian_*/casting/oracle/sanbian）——
+  //    用户明确说"我的演和下面的八卦台怎么没了"，所以：
+  //    - 保留：中心光球（演）+ 八卦环绕 + 底部八卦台（这些是仪式感核心，不能丢）
+  //    - 隐藏：六爻铜钱道具/罗盘指针/紫微斗数盘/流动粒子/符文/辩论能量（这些压视觉）
+  const hideFXOnlyForRitual =
+    phase === 'qinian_mind' || phase === 'qinian_tou' ||
+    phase === 'zhuanggua'  || phase === 'yongshen' ||
+    phase === 'casting'    || phase === 'oracle_prompt' ||
+    phase === 'oracle'     || phase === 'sanbian';
 
   return (
     <group>
-      {/* 底部八卦阵 - 水平躺地 */}
+      {/* 底部八卦阵 - 水平躺地（仪式阶段也保留！用户说八卦台没了 —— 所以任何阶段都有） */}
       <BaguaCompass />
 
-      {/* 流动粒子 - 阶段化显示 */}
-      <FlowParticles phase={phase} />
+      {/* 流动粒子 - 阶段化显示（仪式阶段隐藏，因为会压盖视觉） */}
+      {!hideFXOnlyForRitual && <FlowParticles phase={phase} />}
 
-      {/* 演·析问符文 */}
-      <YanAnalyzeRunes visible={showYanRunes} />
+      {/* 演·析问符文（仅 yan_analyze 阶段，仪式阶段隐藏） */}
+      <YanAnalyzeRunes visible={showYanRunes && !hideFXOnlyForRitual} />
 
-      {/* Agent辩论能量连接 */}
-      <DebateEnergy visible={showDebateEnergy} activeAgents={activeAgents} />
+      {/* Agent辩论能量连接（仅 agent_debate 阶段，仪式阶段隐藏） */}
+      <DebateEnergy visible={showDebateEnergy && !hideFXOnlyForRitual} activeAgents={activeAgents} />
 
       {/* 选择阶段选项光晕 */}
       <ChoiceAura visible={showChoiceAura} optionCount={yanOptions?.length || 4} />
@@ -1164,36 +1173,39 @@ export default function LightOrb({ phase, position = [0, 1.5, 0], selectedChoice
       {/* 命运卡 - 最终阶段 - 偏左上 */}
       <FateCard visible={showFate} choice={selectedChoice} activeAgents={activeAgents} inference={inference} />
 
-      {/* 中心: 小符号 + 微弱光晕 + 阶段道具 - final 阶段让位给命运卡 */}
+      {/* 中心: 小符号 + 微弱光晕 + 阶段道具 - final 阶段让位给命运卡
+           仪式阶段：保留 CenterSymbol（演） + OrbitTrigrams（八卦环绕），去掉 铜钱/指针/紫微盘 等特效道具 */}
       <group ref={mainGroupRef} position={position} visible={phase !== 'final'}>
         {/* 中心小符号 - sprite 始终面向屏幕 */}
         <CenterSymbol phase={phase} />
 
-        {/* 环绕 8 卦象 */}
+        {/* 环绕 8 卦象（任何阶段都有！仪式感核心） */}
         <OrbitTrigrams phase={phase} />
 
-        {/* 六爻铜钱 - 分析阶段 */}
-        <CoinRitual visible={showCoins} />
+        {/* 六爻铜钱 - 分析阶段（仪式阶段隐藏） */}
+        <CoinRitual visible={showCoins && !hideFXOnlyForRitual} />
 
-        {/* 罗盘指针 - 召唤阶段 */}
-        <CompassNeedle visible={showNeedle} agentCount={(activeAgents || []).filter(a => a.role !== 'master').length || 4} />
+        {/* 罗盘指针 - 召唤阶段（仪式阶段隐藏） */}
+        <CompassNeedle visible={showNeedle && !hideFXOnlyForRitual} agentCount={(activeAgents || []).filter(a => a.role !== 'master').length || 4} />
 
-        {/* 紫微斗数盘 - 总结阶段 */}
-        <ZiweiDisk visible={showDisk} />
+        {/* 紫微斗数盘 - 总结阶段（仪式阶段隐藏） */}
+        <ZiweiDisk visible={showDisk && !hideFXOnlyForRitual} />
       </group>
 
-      {/* 演 字标签 - 只在 agent_debate 时显示(避免与 summary 对话框重叠) */}
-      {phase === 'agent_debate' && (
+      {/* 演 字标签 - 任何阶段都显示（用户说「演」怎么没了，所以任何阶段只要 CenterSymbol 可见都显示）
+           final 阶段让位给命运卡，不显示 */}
+      {phase !== 'final' && (
         <group ref={labelGroupRef} position={[position[0], position[1] + 0.7, position[2]]}>
           <Html center distanceFactor={9} style={{ pointerEvents: 'none' }}>
             <div style={{
               color: '#F0D890',
-              fontSize: '14px',
-              fontWeight: 600,
+              fontSize: phase === 'casting' || phase === 'qinian_tou' || phase === 'oracle' ? '20px' : '14px',
+              fontWeight: 700,
               fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", "PingFang SC", serif',
               letterSpacing: '0.4em',
-              textShadow: '0 0 10px #C8A050, 0 0 4px #000',
+              textShadow: '0 0 14px #E8C060, 0 0 6px #000',
               paddingLeft: '0.4em',
+              opacity: 0.95,
             }}>
               演
             </div>

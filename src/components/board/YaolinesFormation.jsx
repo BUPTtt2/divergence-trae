@@ -171,43 +171,9 @@ function FinalHalo({ fireKey }) {
 }
 
 export default function YaolinesFormation({ phase, oracle = null, question = '', sessionId = '' }) {
-  // 所有Agent说完→演总结→立卦(oracle)阶段才激活
-  const active = phase === 'oracle';
-  const yaoArr = useMemo(() => {
-    if (oracle && Array.isArray(oracle.lines) && oracle.lines.length === 6) {
-      return oracle.lines.map(v => (v === '1' || v === 1 || v === true || v === 'yang') ? 1 : 0);
-    }
-    return stableGua(question, sessionId);
-  }, [oracle?.lines, question, sessionId, phase]);
-
-  // 用一个简单递增的 fireKey 驱动FinalHalo（每次 phase 刚切到 oracle +1）
-  const [haloKey, setHaloKey] = useState(0);
-  const lastPhaseRef = useRef('');
-  const arrivedCount = useRef(0);
-  useEffect(() => {
-    arrivedCount.current = 0;
-    if (phase === 'oracle' && lastPhaseRef.current !== 'oracle') {
-      // 等六爻动画差不多结束(0.14*5 + 1.4 + 0.22 ≈ 2.3s)，然后触发halo
-      const t = setTimeout(() => {
-        setHaloKey(k => k + 1);
-      }, 2400);
-      return () => clearTimeout(t);
-    }
-    lastPhaseRef.current = phase;
-  }, [phase]);
-
-  return (
-    <group visible={!!active} position={[0, 0, 0]}>
-      {yaoArr.map((yang, idx) => (
-        <YaoLine
-          key={`oracle-yao-${idx}-${yang}-${sessionId.slice(0, 6)}`}
-          yaoIdx={idx}
-          yang={yang}
-          delay={idx * 0.14}
-          onArrive={() => { arrivedCount.current += 1; }}
-        />
-      ))}
-      <FinalHalo fireKey={haloKey} />
-    </group>
-  );
+  // ★ Q2 修复：用户明确要求"把掷铜钱环节的这个棍状东西删去"——
+  //    YaolinesFormation 画的是 6 根 boxGeometry 长方体（阳爻一根长棍 / 阴爻两根短棍），
+  //    现在彻底不在 oracle/任何阶段显示这些棍了。保留组件框架（其他地方可能还有引用），但渲染空 group。
+  //    卦象显示全部走 2D HUD（Game.jsx phase===casting 的卦符大圆 + 左下角八卦摆件）
+  return <group visible={false} />;
 }

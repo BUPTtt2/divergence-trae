@@ -1,0 +1,22 @@
+{
+  "envId": "yance-bagua-dev-d1fq4lxm0c0541be",
+  "region": "ap-singapore",
+  "framework": {
+    "name": "cloudrun",
+    "config": {
+      "serviceName": "yance-bagua-engine",
+      "envId": "yance-bagua-dev-d1fq4lxm0c0541be",
+      "cpu": 1,
+      "mem": 1,
+      "minNum": 0,
+      "maxNum": 5,
+      "concurrency": 20,
+      "port": 3000,
+      "dockerImage": "",
+      "envVariables": {
+        "PORT": "3000",
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}

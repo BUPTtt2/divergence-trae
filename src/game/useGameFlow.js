@@ -13,6 +13,13 @@ import { generateCaseFile, canAdvance as caseFileCanAdvance, gateProgress, nextQ
 import { assembleAgentContext, readMemoryLayers, writeL1Card, writeL2Bio, buildDoNotRepeat } from './context_assembler';
 import { recordCost, checkBudget, maybeDowngrade, routeModelTier, makeCacheKey, getCached, setCached } from './costControl';
 import { sanitizeLLMText } from '../utils/helpers';
+import cyberRitual from './cyberRitual';
+const {
+  generateQinianSeed, makeGuaSignId, buildZhuangGuaLog, buildYongShenConfirm,
+  recommendAgentsByGua, yanBreakDown, buildSanBian, buildFuTie,
+  buildSignPoemAndTranslate, buildFateSign16, buildActionRuneSvg,
+  getGuaByIdx, allGuaList,
+} = cyberRitual;
 
 /* ============================================================
    B1-B3 生产级系统 Agent 工具：
@@ -834,6 +841,17 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
   const negativeStreakRef = useRef(0);
   const [clarifyRound, setClarifyRound] = useState(0);
   const [infoProgress, setInfoProgress] = useState(0);
+  // ============ 赛博算命仪式专用状态（流程节点，非动画）============
+  const [qinianInput, setQinianInput] = useState({ mindNum: 0, sixThrows: [], yongShenConfirmed: null, agentRecAccepted: null, sanBianStep: 0, sanJiChecked: [false,false,false], sanYaoChecked: [false,false,false] });
+  const [cyberGua, setCyberGua] = useState(null); // { signId, gua(卦元对象), yaoArray, movingLine, zhuangGuaLog, yongShenObj, agentRecommendedIds, sanBian, poem, fateSign16, runeSvg, fuTie, niGuaTag }
+  // ★ 根因修复：setQinian 必须同时支持「对象 patch」和「函数式更新」两种调用。
+  //   之前只支持对象，导致 handleCastOneCoin/handleToggleSanJi/handleSanbianNext 等传入的
+  //   函数被当对象展开（...(fn||{}) 无键）→ 状态永不更新 → 投一枚/勾选/下一变按钮"点不动"。
+  const setQinian = useCallback((patch) => setQinianInput(prev => {
+    const base = prev || {};
+    if (typeof patch === 'function') return patch(base);
+    return { ...base, ...(patch || {}) };
+  }), []);
 
   const GAME_SAVE_KEY = 'yance_game_session';
 
@@ -860,6 +878,21 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       if (!raw) return;
       const s = JSON.parse(raw);
       if (!s || !s.phase || s.phase === 'input') return;
+      // ★ Q1 修复：起始仪式阶段（立卦/投钱/装卦/三变/演问前）的半拉子状态一律不恢复，
+      //         防止"恢复完立刻被 awaitingUser effect 自动推进到演问问题环节，用户根本填不了"
+      const RITUAL_STAGES = new Set([
+        'qinian_mind','qinian_tou','zhuanggua','yongshen','sanbian',
+        'casting','oracle_prompt','oracle','yan_analyze','agent_select','case_file_confirm'
+      ]);
+      const restoredIsRitual = RITUAL_STAGES.has(s.phase);
+      if (restoredIsRitual) {
+        // 只恢复用户输入的问题（保留他写的提问），其他阶段/状态丢掉，让用户从 qinian_mind 重新起卦
+        if (s.userInput) setUserInput(s.userInput);
+        if (s.inputValue) setInputValue(s.inputValue);
+        sessionStorage.removeItem(GAME_SAVE_KEY);
+        return;
+      }
+      // 非仪式阶段（辩/结/择/命/定）才完整恢复
       if (s.userInput) setUserInput(s.userInput);
       if (s.inputValue) setInputValue(s.inputValue);
       if (s.inference) setInference(s.inference);
@@ -913,9 +946,18 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
 
   const choices = useMemo(() => {
     const cleanTxt = (s) => sanitizeLLMText(String(s || '').replace(/\s+/g, ' ').trim());
+    // ★ Q6 异常处理：currentCommit 可能是 undefined/null/空字符串/超长，一律安全处理
+    const safeCommit = (() => {
+      try {
+        const raw = String(currentCommit || '').trim();
+        if (!raw) return '';
+        if (raw.length > 120) return raw.slice(0, 117) + '…';
+        return raw;
+      } catch (_) { return ''; }
+    })();
     try {
-      // 1. 先拿本地动态生成（含智囊原话切片、问题关键词）
-      const local = _buildLocalChoices(userInput, activeAgents, agentDialogues) || [];
+      // 1. 先拿本地动态生成（含智囊原话切片、问题关键词、currentCommit 本心锚点）
+      const local = _buildLocalChoices(userInput, activeAgents, agentDialogues, safeCommit) || [];
       const seenIds = new Set();
       const merged = [];
       const pushUniq = (c) => {
@@ -988,7 +1030,7 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
     return withFields.length > 0 ? withFields : [
       { id: 'opportunity', label: '抓住机会', keyPoints: ['先做再说', '占住位置', '补漏洞'], verse: '元亨。利有攸往。', icon: '☰', gua: '大有', color: '#C88848', glowColor: '#E8B880' },
     ];
-  }, [DEFAULT_CHOICES, userInput, activeAgents, agentDialogues, inference]);
+  }, [DEFAULT_CHOICES, userInput, activeAgents, agentDialogues, inference, currentCommit]);
 
   const progress = useMemo(() => {
     if (phase === 'clarify_loop') return 0;
@@ -1067,7 +1109,10 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
     debateMentionQueueRef.current = [];
     downgradeRef.current = null;
     setClarifyRound(0);
-  }, [clearTimers]);
+    // 赛博算命仪式：重置全部
+    setQinian({ mindNum: 0, sixThrows: [], yongShenConfirmed: null, agentRecAccepted: null, sanBianStep: 0, sanJiChecked: [false,false,false], sanYaoChecked: [false,false,false] });
+    setCyberGua(null);
+  }, [clearTimers, setQinian]);
 
   const handleStart = useCallback(async () => {
     try {
@@ -1092,130 +1137,48 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       setUserInput(question);
       setShowInput(false);
       setShowQuestion(true);
-      setPhase('casting');
+      // 流程赛博算命 A：走完 [立卦 · 起念数字 → 六次真投爻 → 装卦日志 → 用神校准]
+      //  → 再进入澄清/析理；用户可以一键跳过仪式，保留控制权
       setActiveAgentIdx(-1);
       setSelectedChoice(null);
       setAgentDialogues({ history: {} });
-      setAwaitingUser(false);
+      setAwaitingUser(false);  // ★ Q1 根因修复：qinian_mind 阶段必须用户手动点按钮推进，绝对不许 awaitingUser=true 触发自动推进
       setCurrentResponse('');
       setCaseFile(null);
       setClarifyRound(0);
       setInference(null);
+      setQinian({ mindNum: 0, sixThrows: [], yongShenConfirmed: null, agentRecAccepted: null, sanBianStep: 0, sanJiChecked: [false,false,false], sanYaoChecked: [false,false,false] });
+      setCyberGua(null);
+      setPhase('qinian_mind');  // 仪式 P1：起念数字 ← 就停在这里！用户不按按钮不许往下
+
+      // ★ Q1 根因修复：删掉 handleStart 里所有「自动延时推进到 analyzing/summoning/clarify_loop」的代码！
+      //    之前写的 await delay(4000) setPhase('analyzing') 是「填不了就自己跳到演问问题」的直接罪魁祸首。
+      //    现在流程必须用户手动按按钮一步一步推进：
+      //      qinian_mind →（点确认落数·起卦）→ qinian_tou →（六投·装卦）→ zhuanggua →（点装卦日志确认）→ yongshen
+      //      →（点用神校准）→ sanbian →（点 6 次 下一变/定局揭命）→ casting → yan_analyze → clarify_loop → agent_select → …
+      //    如果用户想跳过整个仪式 → 点 UI 右上角「不愿立卦 · 直接开演（跳过仪式）」链接，那个会直接走跳过分支到 clarify_loop
 
       const openingQuestion = _generate5WQuestions(question, typeLabel, keywords);
       // 初始占位：真实提问在演生成后回写，保证卡片与右侧推演记录同源
       setYanQuestionRounds([{
-        question: '演 · 正在斟酌首个追问……',
+        question: '演 · 候你一念落数 · 起卦定局……',
         userAnswer: '',
         questionBy: '演',
       }]);
 
+      // ★ Q1：不再启动任何推进定时器，保持 clearTimers 后停住
       clearTimers();
 
-      await delay(4000);
-      setPhase('analyzing');
-
-      await delay(3000);
-      setPhase('summoning');
-
-      await delay(2500);
-      setPhase('clarify_loop');
-
-      setAgentDialogues(prev => ({
-        ...prev,
-        yan: '演 · 正在思索……',
-      }));
-
-      const yanAgent = { id: 'yan', name: '演', stance: '澄清视角' };
-      // 双保险：judgeContinueAsking 内部已做本地 fallback，此处再套 try/catch 防任何异常
-      let firstJudge = { continueAsking: false, nextQuestion: '' };
-      try {
-        firstJudge = await judgeContinueAsking(yanAgent, question, [], '');
-      } catch (e) {
-        console.warn('[handleStart] firstJudge 异常，降级本地首轮追问:', e.message);
-        firstJudge = {
-          continueAsking: true,
-          // 直接复用 generateContextAwareClarify 的首轮逻辑
-          nextQuestion: generateContextAwareClarify(question, [], 0),
-        };
-      }
-
-      let yanText = '';
-      let source = 'preset';
-      const yanCacheKey = makeCacheKey('yan_clarify_first', { question, keywords }, { qType, typeLabel });
-      const cachedYan = getCached(yanCacheKey);
-
-      if (firstJudge?.continueAsking && firstJudge.nextQuestion) {
-        yanText = firstJudge.nextQuestion;
-        source = 'llm_judge';
-      } else if (cachedYan && !downgradeRef.current) {
-        yanText = cachedYan.text;
-        source = cachedYan.source || 'cache';
-      } else if (downgradeRef.current) {
-        yanText = openingQuestion;
-        source = 'local_5w';
-      } else {
-        try {
-          let backendMemories = [];
-          try {
-            backendMemories = await getYanMemories(question.slice(0, 20));
-            setYanMemories(backendMemories || []);
-          } catch (e) {
-            console.warn('[演澄清] 后端记忆失败:', e);
-          }
-
-          const localMemories = recallRelevantMemories(question);
-          const localMemoryContext = formatMemoriesForPrompt(localMemories);
-          const backendMemoryContext = (backendMemories || []).slice(0, 5)
-            .map(m => `【记忆】${m.title}: ${m.content.slice(0, 50)}`).join('\n');
-          const memoryContext = [localMemoryContext, backendMemoryContext].filter(Boolean).join('\n\n');
-          const fullQuestion = memoryContext ? `${question}\n\n用户过往相关信息:\n${memoryContext}` : question;
-
-          if (isLlmAvailable()) {
-            setFloatTip('演 · 正在斟酌第一个问题...');
-            try {
-              const promptChars = fullQuestion.length + 300;
-              const promptForStream = `你是「演」，一位沉稳直指核心的引导者。用户的问题是：「${fullQuestion}」\n\n请基于用户的原始问题，用自然、沉稳、直指核心的口吻，提出1个关键的追问，帮助用户说出真正想说的、藏在表层之下的真实情况。不要用5W模板，不要用编号，不要用【何事】【何时】这类标签，就用自然语言对话。只输出1个问题，不要解释，不要输出其他内容。`;
-              const result = await streamYanChat({
-                message: promptForStream,
-                conversationId: yanConversationId
-              }, (chunk, fullText, convId) => {
-                setYanConversationId(convId);
-              });
-
-              if (result && result.text && result.text.length > 5) {
-                yanText = result.text;
-                source = 'llm';
-                recordCost(promptChars, result.text.length);
-                setCached(yanCacheKey, { text: yanText, source });
-                if (result.conversationId) {
-                  setYanConversationId(result.conversationId);
-                }
-              }
-            } catch (e) {
-              console.warn('[演澄清] streamYanChat失败:', e);
-            }
-          }
-        } catch (e) {
-          console.warn('[演澄清] 整体处理失败，降级本地:', e);
-        }
-      }
-
-      if (!yanText || yanText.length <= 5) {
-        console.warn('[演澄清] 后端+LLM全部失败，启用本地自然语言澄清降级');
-        // E2: 第一轮追问没有历史，传空数组 []
-        yanText = generateContextAwareClarify(question, [], 0);
-        source = 'local_natural';
-      }
-
-      setFloatTip(null);
-      appendYanDialogue(yanText, source);
-      // ★ 单一真源：把真实演生成的 yanText 同步回 yanQuestionRounds，保证 Game.jsx 卡片与右侧推演记录同源
-      setYanQuestionRounds(prev => {
-        if (prev.length === 0) return [{ question: yanText, userAnswer: '', questionBy: '演' }];
-        return prev.map((r, i) => i === 0 ? { ...r, question: yanText, questionBy: '演' } : r);
-      });
-      setAwaitingUser(true);
+      // ★ A1 根因修复：handleStart 里**绝对不许再调用演生成首个问题**！
+      //   之前 L1165-1259 这段 judgeContinueAsking + streamYanChat + appendYanDialogue 是
+      //   「选数字界面演就开始问问题」的直接原因。
+      //   生成演第一个问题的逻辑现在只在两个地方：
+      //     ① 用户正常走完仪式 → handleConfirmSanBian（定局·揭命 后调用）
+      //     ② 用户点跳过仪式 → handleSkipQinian（不愿立卦·直接开演 后调用）
+      //   这里只保留一个占位，让 UI 在仪式阶段显示「候命」，不要真的去发请求/写对话。
+      setAgentDialogues(prev => ({ ...prev, yan: '演 · 候命 · 待卦成象……' }));
+      // 不再 setAwaitingUser(true)，也不 appendYanDialogue / setYanQuestionRounds
+      // 保证 qinian_mind / qinian_tou 阶段 UI 上不会出现"演已经问了第一个问题"
     } catch (e) {
       console.warn('[handleStart] 推演启动失败:', e);
       setFloatTip('推演启动失败，请重试');
@@ -1223,10 +1186,18 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
         handleRestart();
       }, 2000);
     }
-  }, [inputValue, clearTimers, yanConversationId, handleRestart, showFloatTipBriefly, appendYanDialogue]);
+  }, [inputValue, clearTimers, handleRestart, showFloatTipBriefly, appendYanDialogue]);
 
   const handleUserAdvance = useCallback(async (opts = {}) => {
     const { forceClarifyStop = false } = opts;
+    // ★ Q1+Q7 修复：阶段守卫——summary/committing/oracle/branch_select/path_reveal/final 不再触发任何自动推进或旧 agent 追加发言
+    // 避免"总结之后还有这些在发言"
+    const LOCKED_PHASES = ['reflecting', 'summary', 'committing', 'oracle_prompt', 'oracle', 'branch_select', 'path_reveal', 'final', 'qinian_mind', 'qinian_tou', 'zhuanggua', 'yongshen', 'sanbian', 'agent_select', 'case_file_confirm'];
+    if (LOCKED_PHASES.includes(phase) && !forceClarifyStop) {
+      // 这些阶段只能走各自的专用按钮（handleShowChoices / handleCommit / handleStartOracle 等）
+      // handleUserAdvance 在这些阶段一律不做事，杜绝"自己往后跳"
+      return;
+    }
     if (phase === 'clarify_loop') {
       const yanAnswer = currentResponse.trim();
       const nextRound = forceClarifyStop ? MAX_CLARIFY_ROUNDS : clarifyRound + 1;
@@ -1489,37 +1460,42 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
         const recommendPrompt = `用户的问题是：「${userInput}」\n用户背景上下文：${userContext || '（无）'}\n\n现有智囊池：\n${agentInfoStr}\n\n请你作为「演」，从现有智囊中，根据问题的语义匹配度，挑选3-5个最适合参议的智囊作为推荐池。要求：\n1. 根据问题关键词和场景，匹配智囊的 stance（立场）和 desc（描述）\n2. 只返回智囊 ID 数组的 JSON，不要其他内容，格式如：{"recommendedIds": ["id1", "id2", "id3"]}\n3. 数量控制在3-5个之间`;
 
         if (isLlmAvailable() && !downgradeRef.current) {
-          const recRace = await Promise.race([
-            streamYanChat({ message: recommendPrompt, conversationId: yanConversationId },
-              (chunk, fullText, convId) => { setYanConversationId(convId); }),
-            new Promise(resolve => setTimeout(() => resolve(null), 4000)),
-          ]);
-          if (recRace && recRace.text) {
-            recordCost(recommendPrompt.length, recRace.text.length);
-            try {
-              const jsonMatch = recRace.text.match(/\{[^}]+\}/);
-              if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[0]);
-                if (Array.isArray(parsed.recommendedIds) && parsed.recommendedIds.length > 0) {
-                  const validIds = parsed.recommendedIds.filter(id =>
-                    existingAgents.some(a => a.id === id)
-                  );
-                  // R2 Fix: 即使后端返回推荐，也用「任务分派·镜」三重匹配二次校验/排序，防止减肥问题乱推荐职场老兵/讼师
-                  const backendPickedAgents = validIds.map(id => existingAgents.find(a => a.id === id)).filter(Boolean);
-                  const rerankedIds = taskAssignerMatchAgents(
-                    userInput,
-                    backendPickedAgents.length > 0 ? backendPickedAgents : existingAgents,
-                    5
-                  );
-                  // 合并（后端+本地重排），去重后取前5
-                  recommendedAgentIds = [...new Set([...rerankedIds, ...validIds])].slice(0, 5).filter(id =>
-                    existingAgents.some(a => a.id === id)
-                  );
+          try {
+            const recRace = await Promise.race([
+              streamYanChat({ message: recommendPrompt, conversationId: yanConversationId },
+                (chunk, fullText, convId) => { setYanConversationId(convId); }),
+              new Promise(resolve => setTimeout(() => resolve(null), 4000)),
+            ]);
+            if (recRace && recRace.text) {
+              recordCost(recommendPrompt.length, recRace.text.length);
+              try {
+                const jsonMatch = recRace.text.match(/\{[^}]+\}/);
+                if (jsonMatch) {
+                  const parsed = JSON.parse(jsonMatch[0]);
+                  if (Array.isArray(parsed.recommendedIds) && parsed.recommendedIds.length > 0) {
+                    const validIds = parsed.recommendedIds.filter(id =>
+                      existingAgents.some(a => a.id === id)
+                    );
+                    // R2 Fix: 即使后端返回推荐，也用「任务分派·镜」三重匹配二次校验/排序，防止减肥问题乱推荐职场老兵/讼师
+                    const backendPickedAgents = validIds.map(id => existingAgents.find(a => a.id === id)).filter(Boolean);
+                    const rerankedIds = taskAssignerMatchAgents(
+                      userInput,
+                      backendPickedAgents.length > 0 ? backendPickedAgents : existingAgents,
+                      5
+                    );
+                    // 合并（后端+本地重排），去重后取前5
+                    recommendedAgentIds = [...new Set([...rerankedIds, ...validIds])].slice(0, 5).filter(id =>
+                      existingAgents.some(a => a.id === id)
+                    );
+                  }
                 }
+              } catch (e) {
+                console.warn('[推荐智囊] JSON解析失败:', e);
               }
-            } catch (e) {
-              console.warn('[推荐智囊] JSON解析失败:', e);
             }
+          } catch (e) {
+            // 429/网络失败：不阻断流程，走下方本地匹配兜底
+            console.warn('[推荐智囊] LLM失败，走本地匹配兜底:', (e && e.message) ? e.message : e);
           }
         }
 
@@ -1532,38 +1508,43 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
         const genPrompt = `用户的问题是：「${userInput}」\n用户背景上下文：${userContext || '（无）'}\n\n现有智囊池：\n${agentInfoStr}\n\n请你作为「演」，判断：现有智囊的视角是否已经足够覆盖这个问题场景？如果存在明显缺失的视角（例如用户问健身选私教还是自学，但没有"健身教练"视角；用户问亲子教育，没有"家长"视角等），请动态生成1-2个全新的「新维度智囊」加入候选池。\n\n要求：\n1. 返回 JSON 数组格式：[{"id":"gen_xxx","name":"名称","stance":"XX视角","desc":"一句描述","color":"十六进制颜色","trigram":"一个八卦符号如☰☵等"}]\n2. id 必须以 gen_ 开头，后面跟有意义的英文缩写，不要和现有 ID 重复\n3. 每个新智囊的 name、stance、desc 要独特，不要和现有智囊重复\n4. color 从以下调色板中选：#C88848,#508870,#A87898,#5078A8,#C86848,#48A898,#A84848,#685888\n5. trigram 从以下选一个：☰☷☳☴☵☲☶☱\n6. 如果觉得现有智囊视角已足够，返回空数组 [] 即可\n7. 只输出 JSON，不要其他解释文字`;
 
         if (isLlmAvailable() && !downgradeRef.current) {
-          const genRace = await Promise.race([
-            streamYanChat({ message: genPrompt, conversationId: yanConversationId },
-              (chunk, fullText, convId) => { setYanConversationId(convId); }),
-            new Promise(resolve => setTimeout(() => resolve(null), 5000)),
-          ]);
-          if (genRace && genRace.text) {
-            recordCost(genPrompt.length, genRace.text.length);
-            try {
-              const jsonMatch = genRace.text.match(/\[[\s\S]*\]/);
-              if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[0]);
-                if (Array.isArray(parsed)) {
-                  generatedAgents = parsed
-                    .filter(a => a && a.id && a.id.startsWith('gen_'))
-                    .slice(0, 2)
-                    .map(a => ({
-                      id: a.id,
-                      name: a.name || '新维度智囊',
-                      stance: a.stance || '新视角',
-                      desc: a.desc || '',
-                      color: a.color || '#A87898',
-                      glow: a.color || '#A87898',
-                      trigram: a.trigram || '☯',
-                      icon: a.trigram || '☯',
-                      role: 'dynamic',
-                      isGenerated: true,
-                    }));
+          try {
+            const genRace = await Promise.race([
+              streamYanChat({ message: genPrompt, conversationId: yanConversationId },
+                (chunk, fullText, convId) => { setYanConversationId(convId); }),
+              new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+            ]);
+            if (genRace && genRace.text) {
+              recordCost(genPrompt.length, genRace.text.length);
+              try {
+                const jsonMatch = genRace.text.match(/\[[\s\S]*\]/);
+                if (jsonMatch) {
+                  const parsed = JSON.parse(jsonMatch[0]);
+                  if (Array.isArray(parsed)) {
+                    generatedAgents = parsed
+                      .filter(a => a && a.id && a.id.startsWith('gen_'))
+                      .slice(0, 2)
+                      .map(a => ({
+                        id: a.id,
+                        name: a.name || '新维度智囊',
+                        stance: a.stance || '新视角',
+                        desc: a.desc || '',
+                        color: a.color || '#A87898',
+                        glow: a.color || '#A87898',
+                        trigram: a.trigram || '☯',
+                        icon: a.trigram || '☯',
+                        role: 'dynamic',
+                        isGenerated: true,
+                      }));
+                  }
                 }
+              } catch (e) {
+                console.warn('[新维度智囊] JSON解析失败:', e);
               }
-            } catch (e) {
-              console.warn('[新维度智囊] JSON解析失败:', e);
             }
+          } catch (e) {
+            // 429/网络失败：跳过新维度生成，不影响后续
+            console.warn('[新维度智囊] LLM失败，跳过:', (e && e.message) ? e.message : e);
           }
         }
 
@@ -1608,48 +1589,76 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       const userSupplement = currentResponse.trim();
       if (userSupplement.length > 0) {
         const agents = inference.agents;
-        // 检测是否 @某Agent：格式「@老中医 你说的xxx我补充一下...」「@心禾 还有...」
-        const mentionMatch = userSupplement.match(/^@([^\s]+)\s*/);
-        const mentionName = mentionMatch ? mentionMatch[1] : null;
+        // ★ Q4-5 修复：更严格的 @mention 匹配
+        // 1) 支持「@老中医你觉得呢」（没有空格）、「@风 我想问...」（中间有空格）
+        // 2) 任意位置 @，不限定在开头
+        const mentionMatchAll = [...userSupplement.matchAll(/@([^\s，。！？、,.!?@#$%^&*()（）【】\[\]'""]+)/g)];
+        const mentionNames = mentionMatchAll.map(m => m[1]).filter(Boolean);
+        const mentionName = mentionNames[0] || null;
+
+        // ★ Q5.2 风格分流：检测用户是要「建议」还是「追问」
+        // 用户说「你觉得呢/给我建议/怎么办/怎么做/帮我看看/出个主意/我该选哪个/推荐哪个」→ advice 模式（给出建议，别反问）
+        // 否则默认 inquiry 模式（澄清追问，继续问清楚）
+        const sLow = userSupplement.toLowerCase();
+        const isAdviceIntent = /觉得|建议|怎么办|怎么做|支招|主意|推荐|选哪个|该选|帮我|给我|方案|意见|看法|说下|说说|分析|判断|到底|结果/.test(sLow);
+        const replyIntent = isAdviceIntent ? 'advice' : 'inquiry';
+
+        // ★ 只要 @mention 命中了 >=1 个 agent，其他 agent 一律不准回复（解决「我和风说话，老兵也回了」）
         let targetAgents = agents;
-        if (mentionName) {
-          const matched = agents.filter(a => String(a.name).includes(mentionName) || String(a.id).includes(mentionName));
+        if (mentionNames.length > 0) {
+          const matched = agents.filter(a =>
+            mentionNames.some(n => String(a.name).includes(n) || String(a.id).includes(n) || String(a.stance || '').includes(n))
+          );
           if (matched && matched.length > 0) targetAgents = matched;
         }
 
-        // 追加用户输入到对话历史
+        // 追加用户输入到对话历史 —— @mention 命中时只写入目标 agent 的历史，避免其他 agent 被触发
         setAgentDialogues(prev => {
           const history = { ...(prev.history || {}) };
           const newPrev = { ...prev, history };
-          // 把用户补充写到所有Agent的历史里（保证上下文），并单独显示在「演」的对话栏提醒
-          for (const a of agents) {
+          const agentsToWrite = targetAgents;
+          for (const a of agentsToWrite) {
             const arr = history[a.id] || [];
             history[a.id] = [...arr, `【你补充】${userSupplement}`];
             newPrev[a.id] = `【你补充】${userSupplement}`;
           }
           newPrev.yan = mentionName
-            ? `（你追问了 @${mentionName}，Ta 正在斟酌回复…）`
-            : `（你补充了信息，诸位智囊正在重新斟酌…）`;
+            ? `（你追问了 @${mentionName}，Ta 正在斟酌${isAdviceIntent ? '建议' : '回复'}…）`
+            : `（你补充了信息，诸位智囊正在重新斟酌${isAdviceIntent ? '建议方案' : '澄清思路'}…）`;
           const yanHistory = history.yan || [];
           history.yan = [...yanHistory, newPrev.yan];
           return newPrev;
         });
 
         setCurrentResponse('');
-        setFloatTip(mentionName ? `@${mentionName} 正在补充回复…` : '诸位智囊正在斟酌补充意见…');
+        setFloatTip(mentionName
+          ? `@${mentionName} 正在斟酌${isAdviceIntent ? '建议' : '回复'}…`
+          : `诸位智囊正在斟酌${isAdviceIntent ? '建议方案' : '补充意见'}…`);
 
-        // 根本性修复：用户补充/追问时，让智囊走「真实 LLM」回复，而不是本地预设模板。
-        // 之前用 localGenerateAgentReply 本地兜底，导致对话全是预设话术、且与用户输入脱节。
-        // 现在通过 generateDialoguesForAgents → streamAgentDialogue → 后端 /api/agent/dialogue 真实流式生成。
-        // 只有后端确实完全不可达（网络级）时，才回退到本地兜底，保证对话尽力真实。
         try {
           const qType = detectQuestionType(userInput);
-          const prevRepliesArr = agents.map(a => (agentDialogues[a.id] ? String(agentDialogues[a.id]) : ''));
           const supplementQuestion = `${userInput}\n\n【用户补充说明】${userSupplement}`;
+
+          // ★ T7：currentCommit（落笔本心）注入辩论上下文（异常安全）
+          let safeCommitTxt = '';
+          try {
+            const raw = String(currentCommit || '').trim();
+            if (raw && raw.length >= 2 && raw.length <= 200) safeCommitTxt = raw;
+          } catch (_) { safeCommitTxt = ''; }
+
           const onAgentComplete = (agentId, text, success, error, source) => {
-            if (!success || !text) return;
-            const replyText = sanitizeLLMText(String(text).trim());
-            if (!replyText) return;
+            const agentName = targetAgents.find(a => a.id === agentId)?.name || agentId;
+            let replyText = '';
+            if (success && text) {
+              replyText = sanitizeLLMText(String(text).trim());
+            }
+            // ★ T5：补充辩论失败时也明确显示失败占位，不要直接 return 不写 UI
+            if (!success || !replyText) {
+              const why = (error && typeof error === 'string') ? error.replace(/[。！？!?\.]+$/, '') : '网络或服务超时';
+              replyText = `「${agentName}」本次生成失败（${why}），请点重试按钮再试一次。`;
+              setAgentErrors(prev => ({ ...(prev || {}), [agentId]: { agentName, error: why || '生成失败', needRetry: true } }));
+              setShowAgentErrorModal(true);
+            }
             setAgentDialogues(prev => {
               const history = { ...(prev.history || {}) };
               const arr = history[agentId] || [];
@@ -1659,39 +1668,48 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
           };
           const onErr = (errs) => {
             console.warn('[agent_debate 追问补充] 部分智囊失败:', errs);
+            if (errs && Object.keys(errs).length > 0) {
+              setAgentErrors(prev => ({ ...(prev || {}), ...errs }));
+              setShowAgentErrorModal(true);
+            }
           };
-          // 仅让目标智囊（@ 到的或全部）基于补充信息真实回复一轮
+          // ★ Q4-5 + Q5.2：传入 targetAgents（@ 时只给被@的）和 intent（advice/inquiry 分流，
+          //   注意：options.intent 是对象(给重排用)，options.replyIntent 是字符串(给风格分流用)，
+          //   之前把 replyIntent 塞到 intent 字段，会导致 reorderAgentsByIntent 接字符串报错）
           await generateDialoguesForAgents(
             supplementQuestion, targetAgents, qType, onAgentComplete, onErr, supplementQuestion,
-            { round: (debateRound || 1) + 1 }
+            {
+              round: (debateRound || 1) + 1,
+              intent: { decisionStructure: qType },
+              replyIntent,
+              commitText: safeCommitTxt,
+            }
           );
           setInfoProgress(prev => Math.min(95, prev + 10));
         } catch (e) {
-          // 兜底：仅后端完全不可达时用本地自然语言回复，避免整段空白
-          console.warn('[agent_debate 追问补充] 真实LLM失败，本地兜底:', e.message);
+          // ★ T5：补充阶段抛异常时也不要本地填内容，明确标失败 + 打开重试
+          console.warn('[agent_debate 追问补充] 真实LLM失败，交由用户重试:', e.message);
+          const errMsg = e?.message || '未知错误';
           try {
-            const prevRepliesArr = agents.map(a => (agentDialogues[a.id] ? String(agentDialogues[a.id]) : ''));
-            for (let i = 0; i < targetAgents.length; i++) {
-              const a = targetAgents[i];
-              try {
-                const replyText = localGenerateAgentReply(a, `${userInput}\n\n【用户补充说明】${userSupplement}`, prevRepliesArr, (debateRound || 1) + 1);
-                setAgentDialogues(prev => {
-                  const history = { ...(prev.history || {}) };
-                  const arr = history[a.id] || [];
-                  history[a.id] = [...arr, replyText];
-                  return { ...prev, [a.id]: replyText, history };
-                });
-              } catch (e2) {
-                console.warn('[agent_debate 追问补充] 本地兜底失败:', e2.message);
-              }
-            }
+            targetAgents.forEach((a) => {
+              const placeholder = `「${a.name || a.id}」本次生成失败（${errMsg}），请点重试按钮再试一次。`;
+              setAgentDialogues(prev => {
+                const history = { ...(prev.history || {}) };
+                const arr = history[a.id] || [];
+                history[a.id] = [...arr, placeholder];
+                return { ...prev, [a.id]: placeholder, history };
+              });
+            });
+            const allE = {};
+            targetAgents.forEach(a => { allE[a.id] = { agentName: a.name || a.id, error: errMsg, needRetry: true }; });
+            setAgentErrors(prev => ({ ...(prev || {}), ...allE }));
+            setShowAgentErrorModal(true);
           } catch (e2) {
-            console.warn('[agent_debate 追问补充] 整体失败:', e2.message);
+            console.warn('[agent_debate 追问补充] 异常处理失败:', e2.message);
           }
         } finally {
           setFloatTip(null);
           setAwaitingUser(true);
-          // 不切下一位！停在当前阶段，等待用户继续输入或点「跳过到总结」
           return;
         }
       }
@@ -2041,6 +2059,14 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
         return next;
       });
     }
+    // 赛博算命仪式 B：把合局的 agent 再做一次按卦象打分，写入 cyberGua.agentRecommendedIds（仅用于仪式产物展示，不改变用户选择）
+    if (selected.length > 0 && cyberGua?.gua) {
+      try {
+        const rec = recommendAgentsByGua(selected, userInput, cyberGua.gua, Math.min(3, selected.length));
+        const pickIds = (rec?.topK || []).map(a => a?.id).filter(Boolean);
+        setCyberGua(prev => prev ? { ...prev, agentRecommendedIds: pickIds, agentRationale: rec?.rationale || '' } : prev);
+      } catch (e) { console.warn('[cyber ritual] agentRec 注入失败', e.message); }
+    }
     setInference(prev => prev ? { ...prev, agents: selected } : { agents: selected });
     setAwaitingUser(false);
 
@@ -2077,11 +2103,22 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
     setToolCallState({ agentId: null, tools: [], currentTool: null, results: [], status: 'idle' });
 
     const onAgentComplete = (agentId, text, success, error, source, collaboration) => {
-      newDialogues[agentId] = text;
+      // ★ T5 修复：单个失败时用占位失败文本明确告诉用户失败了，不假装成功；也不丢 UI 块
+      if (success) {
+        newDialogues[agentId] = text;
+      } else {
+        const agentName = selected.find(a => a.id === agentId)?.name || agentId;
+        const why = (error && typeof error === 'string') ? error.replace(/[。！？!?\.]+$/, '') : '网络或服务超时';
+        newDialogues[agentId] = `「${agentName}」本次生成失败（${why}），请点重试按钮再试一次。`;
+      }
       callResults[agentId] = { success, error, source, collaboration };
       if (!success) {
         hasErrors = true;
-        allErrors[agentId] = { agentName: selected.find(a => a.id === agentId)?.name || agentId, error: error || '未知错误' };
+        allErrors[agentId] = {
+          agentName: selected.find(a => a.id === agentId)?.name || agentId,
+          error: error || '未知错误',
+          needRetry: true,
+        };
       }
       setInference(prev => prev ? { ...prev, agentDialogues: { ...newDialogues } } : { agentDialogues: newDialogues });
       setToolCallState(prev => prev.agentId === agentId ? { ...prev, status: 'done' } : prev);
@@ -2099,7 +2136,7 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
     // 外层不再设整体超时，杜绝"一个慢 → 全部降级模板"。
 
     const localPresetDialogues = () => {
-      // 后端已断路时：本地自然语言兜底（快速，不等每个 Agent 45s）
+      // 仅最后兜底（极端情况）用；单 Agent 失败 / 后端不可达时：走"明确失败 + 用户重试"，不再静默本地填充
       selected.forEach((a, i) => {
         const prevReplies = Object.values(newDialogues).filter(Boolean);
         newDialogues[a.id] = localGenerateAgentReply(a, userContextFull, prevReplies, 0);
@@ -2109,17 +2146,43 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
     };
 
     if (isBackendCircuitOpen()) {
-      // 后端网络不可达 → 快速走本地，不让用户干等
-      console.warn('[handleConfirmAgents] 后端已断路，直接走本地自然语言发言');
-      localPresetDialogues();
+      // ★ T5：后端网络不可达——像豆包一样明确提示"网络不可达"，不要本地填内容假装成功
+      console.warn('[handleConfirmAgents] 后端已断路，明确标记失败并交由用户重试');
+      const circuitErr = '网络不可达或服务暂不可用';
+      selected.forEach((a) => {
+        newDialogues[a.id] = `「${a.name || a.id}」生成失败（${circuitErr}），请点重试按钮再试一次。`;
+        callResults[a.id] = { success: false, error: circuitErr, source: 'failed_circuit_open', collaboration: null, needRetry: true };
+        allErrors[a.id] = { agentName: a.name || a.id, error: circuitErr, needRetry: true };
+      });
+      hasErrors = true;
+      setInference(prev => prev ? { ...prev, agentDialogues: { ...newDialogues } } : { agentDialogues: newDialogues });
       setDebateRound(1);
-      setDebateConvergence({ converged: true, consensusScore: 0.7 });
+      setDebateConvergence({ converged: false, consensusScore: 0 });
     } else {
       try {
         // D2: 后端也注入澄清上下文，不再传 inference.userContext（可能是空），而是传合成后的 userContextFull
         const mergedContext = clarifiedHistoryText || inference?.userContext || '';
+
+        // ★ T1 修复：第一轮也做意图判断（之前只有 handleSupplementDebate 做过导致第一轮风格分流失效）
+        const qLow = String(question || '').toLowerCase();
+        const isAdviceIntent = /觉得|建议|怎么办|怎么做|支招|主意|推荐|选哪个|该选|帮我|给我|方案|意见|看法|说下|说说|分析|判断|到底|结果/.test(qLow) || /(建议|主意)/.test(qLow);
+        const firstReplyIntent = isAdviceIntent ? 'advice' : 'inquiry';
+
+        // ★ T7：currentCommit（落笔本心）注入辩论上下文
+        let safeCommitTxt = '';
+        try {
+          const raw = String(currentCommit || '').trim();
+          if (raw && raw.length >= 2 && raw.length <= 200) safeCommitTxt = raw;
+        } catch (_) { safeCommitTxt = ''; }
+
         // 内部单Agent独立计时（45s超时跳过单个），整体自然结束，不设外层race
-        const result = await generateDialoguesForAgents(question, selected, qType, onAgentComplete, onError, mergedContext, { round: 1, toolCallbacks });
+        const result = await generateDialoguesForAgents(question, selected, qType, onAgentComplete, onError, mergedContext, {
+          round: 1,
+          toolCallbacks,
+          intent: { decisionStructure: detectQuestionType(question) },
+          replyIntent: firstReplyIntent,
+          commitText: safeCommitTxt,
+        });
         if (result && result.blackboard) {
           debateBlackboardRef.current = result.blackboard;
           debateMentionQueueRef.current = result.mentionQueue || [];
@@ -2131,10 +2194,20 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
           setDebateConvergence({ converged: true, consensusScore: 0.7 });
         }
       } catch (e) {
-        console.warn('[handleConfirmAgents] 后端辩论异常，仅本次降级本地发言:', e.message);
-        localPresetDialogues();
+        // ★ T5：catch 到异常（ReferenceError 等）——不要本地填内容，明确标失败 + 打开重试
+        console.warn('[handleConfirmAgents] 后端辩论异常，标记失败交由用户重试:', e.message);
+        const errMsg = e?.message || '未知错误';
+        selected.forEach((a) => {
+          if (!newDialogues[a.id] || !callResults[a.id]?.success) {
+            newDialogues[a.id] = `「${a.name || a.id}」生成失败（${errMsg}），请点重试按钮再试一次。`;
+            callResults[a.id] = { success: false, error: errMsg, source: 'failed_exception', collaboration: null, needRetry: true };
+            allErrors[a.id] = { agentName: a.name || a.id, error: errMsg, needRetry: true };
+          }
+        });
+        hasErrors = true;
+        setInference(prev => prev ? { ...prev, agentDialogues: { ...newDialogues } } : { agentDialogues: newDialogues });
         setDebateRound(1);
-        setDebateConvergence({ converged: true, consensusScore: 0.7 });
+        setDebateConvergence({ converged: false, consensusScore: 0 });
       }
     }
 
@@ -2253,17 +2326,33 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       idx: index ?? 0,
     };
     setSelectedChoice(safeChoice);
-    setPhase('path_reveal');
-    setAwaitingUser(false);
+    // 赛博算命仪式 C：三变定局 step0：进入三忌三要勾选面板（而非直接到 path_reveal）
+    setPhase('sanbian');
+    setQinian(prev => ({ ...(prev||{}), sanBianStep: 0, sanJiChecked: [false,false,false], sanYaoChecked: [false,false,false] }));
+    setAwaitingUser(true);
     setFateContent(null);
-    setFateRevealed(false);  // 切到新路径时重置揭示状态
-
+    setFateRevealed(false);
+    // 三变之前，先把三变对象 + 逆卦 + 签语 + 符命 + 符文准备好（纯函数无IO，稳定）
+    try {
+      const q = String(userInput || '').trim() || safeChoice.label;
+      const c = cyberGua?.gua || (inference?.gua ? { id: 14, gua: inference.gua.gua, element: inference.gua.element } : { id: 14, gua: '大有', element: '火' });
+      const ags = Array.isArray(activeAgents) ? activeAgents.filter(a => a && a.role !== 'master') : [];
+      const sanBian = buildSanBian(q, c, ags);
+      const poemTr = buildSignPoemAndTranslate({ gua: c, topic: q, choice: safeChoice, core: sanBian?.core || '顺势而为', yongShen: cyberGua?.yongShenObj?.label || '本我', agents: ags });
+      const fs16 = buildFateSign16(q, c, safeChoice, sanBian?.core || '顺势而为');
+      const runeSvg = buildActionRuneSvg(fs16, c, safeChoice);
+      const niGuaTag = (() => {
+        const ni = (c.id != null) ? getGuaByIdx(63 - (c.id - 1)) : null;
+        return ni ? `逆卦·${ni.gua}（${ni.trigram || ''} ${ni.element || ''}行）` : '逆卦·未明';
+      })();
+      setCyberGua(prev => prev ? { ...prev, sanBian, poem: poemTr.poem, poemTranslate: poemTr.translate, core: sanBian?.core || '顺势而为', fateSign16: fs16, runeSvg, niGuaTag } : { sanBian, poem: poemTr.poem, poemTranslate: poemTr.translate, core: sanBian?.core || '顺势而为', fateSign16: fs16, runeSvg, niGuaTag });
+    } catch (e) { console.warn('[cyber ritual] prepare 失败', e.message); }
     setAgentDialogues(prev => {
       const realGua = inference?.gua;
       const realVerse = inference?.verse;
       const summary = realGua
-        ? `诸位所见,皆因视角不同。\n卦成${realGua.gua}（${realGua.element}行）,辞曰「${realVerse || '此中深意,待你细品'}」。\n择「${safeChoice.label}」之路,是你的本心所向,亦是天命所归。\n往后的路,且行且思。`
-        : `诸位所见,皆因视角不同。\n择「${safeChoice.label}」之路,是你的本心所向,亦是当下最合适的回响。\n卦已成,辞已立,往后路如何,且行且思。`;
+        ? `路将分，先做三变定局。\n三忌三要，两径抉择，皆在你手。\n卦成${realGua.gua}（${realGua.element}行），辞曰「${realVerse || '此中深意，待你细品'}」。\n择「${safeChoice.label}」之前，先把三枚铜钱压在纸上。`
+        : `路将分，先做三变定局。\n三忌三要，两径抉择，皆在你手。\n择「${safeChoice.label}」之前，先把本心落在纸上。`;
       return {
         ...prev,
         yan: summary,
@@ -2966,13 +3055,17 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       const agents = activeAgents || [];
       const nonMasterAgents = agents.filter(a => a.role !== 'master');
       switch (phase) {
+        case 'qinian_mind': return '立卦 · P1 起念数字';
+        case 'qinian_tou':   return '立卦 · P2 六投铜钱';
+        case 'zhuanggua':   return '立卦 · P3 装卦日志';
+        case 'yongshen':    return '立卦 · P4 用神校准';
         case 'casting': return '演 · 起卦 · 投三枚铜钱';
         case 'analyzing': return '演 · 理解问题';
         case 'summoning': return `演 · 召唤顾问 · ${nonMasterAgents.length} 位`;
         case 'clarify_loop': return `演 · 澄清中`;
         case 'yan_analyze': return '演 · 确证关键信息';
         case 'case_file_confirm': return '演 · 请确认结构化档案';
-        case 'agent_select': return '演 · 遴选智囊';
+        case 'agent_select': return '演 · 遴选智囊（按卦推合局）';
         case 'agent_debate': return activeAgentIdx >= 0 ? `${nonMasterAgents[activeAgentIdx]?.name || ''} 发言中 · ${activeAgentIdx + 1}/${nonMasterAgents.length}` : '诸智集结';
         case 'reflecting': return '演 · 反思汇聚';
         case 'summary': return '演 · 梳理总结';
@@ -2980,6 +3073,10 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
         case 'oracle_prompt': return '演 · 借天光否';
         case 'oracle': return oracleThrowing ? '演 · 落卦中' : (oracleResult ? `演 · 天机已现 · ${oracleResult.gua}` : '演 · 借天光否');
         case 'branch_select': return '请选择你的路径';
+        case 'sanbian': {
+          const s = qinianInput?.sanBianStep ?? 0;
+          return s === 0 ? '三变 · 一忌' : s === 1 ? '三变 · 二忌' : s === 2 ? '三变 · 三忌' : s === 3 ? '三变 · 一要' : s === 4 ? '三变 · 二要' : s === 5 ? '三变 · 三要' : '三变 · 两径抉择';
+        }
         case 'path_reveal': return '路径已定';
         case 'final': return '推演完成';
         default: return '';
@@ -2988,7 +3085,7 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       console.warn('[phaseLabel] 生成失败:', e);
       return '';
     }
-  }, [phase, activeAgentIdx, activeAgents, oracleThrowing, oracleResult, clarifyRound, MAX_CLARIFY_ROUNDS]);
+  }, [phase, activeAgentIdx, activeAgents, oracleThrowing, oracleResult, clarifyRound, MAX_CLARIFY_ROUNDS, qinianInput]);
 
   const historyCount = useMemo(() => {
     const h = agentDialogues?.history || {};
@@ -3033,6 +3130,14 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
     const delayMs = Math.min(5500, Math.max(2200, 1500 + Math.floor(textLen / 20) * 300));
 
     if (debateAutoTimerRef.current) clearTimeout(debateAutoTimerRef.current);
+    // ★ Q1 修复：起始仪式阶段（起念/投钱/装卦/用神/三变/立卦/择智/演问）
+    //         绝对不允许 autoPlay 自动推进，必须用户点击底部按钮手动推进
+    const LOCKED_AUTO_PLAY = new Set([
+      'input','qinian_mind','qinian_tou','zhuanggua','yongshen','sanbian',
+      'casting','oracle_prompt','oracle','yan_analyze','agent_select','case_file_confirm','clarify_loop',
+      'branch_select','path_reveal','committing','final','reflecting','summary'
+    ]);
+    if (LOCKED_AUTO_PLAY.has(phase)) return;
     debateAutoTimerRef.current = setTimeout(async () => {
       try {
         await handleUserAdvance({});
@@ -3045,6 +3150,402 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
       if (debateAutoTimerRef.current) clearTimeout(debateAutoTimerRef.current);
     };
   }, [debateAutoPlay, phase, awaitingUser, activeAgentIdx, activeAgents, agentDialogues, handleUserAdvance]);
+
+  // ============== 赛博算命仪式：流程节点处理函数 ==============
+  // R1: 起念数字（心念 1-100 数字 + 起卦按钮），进入 P2 六投铜钱
+  const handleSetMindNum = useCallback((n) => {
+    const num = Math.max(1, Math.min(100, parseInt(n,10) || Math.floor(Math.random()*99)+1));
+    setQinian({ mindNum: num });
+  }, [setQinian]);
+
+  const handleConfirmMindNum = useCallback(() => {
+    // ★ P4 修复：qinian_mind 阶段必须用户**显式点「确认落数」**才允许推进
+    //         双重锁：① phase 严格是 qinian_mind 才做事；② mindNum 已落数；③ 绝不允许 effect 间接触发 setPhase('qinian_tou') 走这里
+    if (phase !== 'qinian_mind') return;
+    if (!qinianInput?.mindNum) {
+      // 未落数就先补一个（但不自动推进，交给用户再点一次按钮）
+      setQinian({ mindNum: Math.floor(Math.random()*99)+1 });
+      return;
+    }
+    setPhase('qinian_tou');
+    setQinian(prev => ({ ...prev, sixThrows: [] }));
+  }, [phase, qinianInput, setQinian]);
+
+  // R2: 六次真投爻（用户点按钮/真实摇铜钱）
+  const handleCastOneCoin = useCallback(() => {
+    setQinian(prev => {
+      const t = (prev?.sixThrows && Array.isArray(prev.sixThrows)) ? [...prev.sixThrows] : [];
+      if (t.length >= 6) return prev;
+      const coin = Math.random() < 0.5 ? '字' : '背';
+      return { ...prev, sixThrows: [...t, coin] };
+    });
+  }, [setQinian]);
+
+  const handleResetSixThrows = useCallback(() => setQinian(prev => ({ ...prev, sixThrows: [] })), [setQinian]);
+
+  const handleConfirmSixThrows = useCallback(() => {
+    const throws = (qinianInput?.sixThrows && Array.isArray(qinianInput.sixThrows)) ? qinianInput.sixThrows : [];
+    if (throws.length !== 6) return;
+    const qStr = String(userInput || '此局').trim();
+    const seed = generateQinianSeed(qStr, qinianInput?.mindNum || 42, throws);
+    // ★ 根因修复：generateQinianSeed 返回 {seed,guaIdx,movingLine,yaoArray}，没有 .gua 属性！通过导出的 getGuaByIdx 拿卦对象
+    const allList = allGuaList();
+    const guaObj = getGuaByIdx(seed?.guaIdx || 1) || allList?.[0];
+    const signId = makeGuaSignId(guaObj?.id || guaObj?.idx || seed?.guaIdx || 1, seed?.movingLine || 1, qinianInput?.mindNum || 42, new Date());
+    const zLog = buildZhuangGuaLog(guaObj, seed?.movingLine || 1, seed?.yaoArray || [1,0,1,0,1,0], qStr, signId);
+    const yong = buildYongShenConfirm(qStr, guaObj, seed?.movingLine || 1);
+    const futie = buildFuTie(guaObj, qStr, signId);
+    // ★ D1：六投已定立刻 buildSanBian，生成 A/B 分岔路径（twoPaths）—— 后面 branch_select 阶段要用
+    let sanBian = null;
+    try { sanBian = buildSanBian(qStr, guaObj, []); } catch(e) { console.warn('[六投] buildSanBian 失败降级', e); }
+    setCyberGua({ signId, gua: guaObj, yaoArray: seed?.yaoArray || [], movingLine: seed?.movingLine || 1, zhuangGuaLog: zLog, yongShenObj: yong, fuTie: futie, sanBian });
+    // 注入 inference.gua（保证其他老逻辑仍能读到卦）
+    setInference(prev => ({ ...(prev||{}), gua: { gua: guaObj?.gua || guaObj?.name || '', trigram: guaObj?.trigram || '', element: guaObj?.element || guaObj?.wuxing || '', id: guaObj?.id || guaObj?.idx || seed?.guaIdx || 1, movingLine: seed?.movingLine || 1, verse: guaObj?.verse || prev?.verse }, verse: guaObj?.verse || prev?.verse }));
+    setPhase('zhuanggua');
+    setAwaitingUser(true);
+  }, [qinianInput, userInput]);
+
+  // R3: 装卦日志确认 → P4 用神校准
+  const handleConfirmZhuanggua = useCallback(() => setPhase('yongshen'), []);
+
+  const handleConfirmYongShen = useCallback((yongshenConfirmedLabel) => {
+    const cLabel = typeof yongshenConfirmedLabel === 'string' ? yongshenConfirmedLabel : (cyberGua?.yongShenObj?.label || '本我');
+    setQinian(prev => ({ ...prev, yongShenConfirmed: cLabel, sanBianStep: 0, sanJiChecked: [false,false,false], sanYaoChecked: [false,false,false] }));
+    setCyberGua(prev => prev && prev.yongShenObj ? { ...prev, yongShenObj: { ...prev.yongShenObj, confirmed: cLabel } } : prev);
+    // 按卦先算一次 agent 推荐（供 agent_select 页面展示"按卦推合局"）
+    try {
+      const question = String(userInput || '此局').trim();
+      // 从已有池子里拉候选（agent_select 之后 inference.agents 会被合成全量池）
+      const allAgentsForRec = (() => {
+        const customAgentsList = getCustomAgents() || [];
+        const marketAgentsGlobal = (() => { try { return getMarketAgents() || []; } catch (_) { return []; } })();
+        const arr = [
+          ...customAgentsList,
+          ...(inference?.agents || []),
+          ...(inference?.perspectivePool || []),
+          ...marketAgentsGlobal,
+        ];
+        const seenIds = new Set();
+        return arr.filter(a => {
+          if (!a || !a.id) return false;
+          if (seenIds.has(a.id)) return false;
+          seenIds.add(a.id); return true;
+        });
+      })();
+      if (cyberGua?.gua && allAgentsForRec.length > 0) {
+        const rec = recommendAgentsByGua(allAgentsForRec, question, cyberGua.gua, 3);
+        const ids = (rec?.topK || []).map(a => a?.id).filter(Boolean);
+        if (ids.length > 0) {
+          setCyberGua(prev => prev ? { ...prev, agentRecommendedIds: ids, agentRationale: rec?.rationale || '' } : prev);
+          // 预勾选：让用户基于合局推荐再手动增减
+          setSelectedAgentIds(prev => {
+            const next = new Set(prev);
+            ids.forEach(i => next.add(i));
+            return next;
+          });
+        }
+      }
+    } catch (e) { console.warn('[cyber ritual] agentRec 预推失败', e.message); }
+    // ★ 修复流程顺序：yongShen → sanbian（6 次下一变）→ casting → clarify_loop
+    //   绝对不许在这里自动 delay 推进到 casting/analyzing/clarify_loop（之前那样就是用户没点按钮自动跳）
+    setAwaitingUser(false);
+    setPhase('sanbian');
+  }, [cyberGua, userInput, inference]);
+
+  // R4: 跳过仪式（不想玩仪式直接进澄清）
+  const handleSkipQinian = useCallback(() => {
+    const qStr = String(userInput || '此局').trim();
+    setQinian(prev => ({ ...prev, mindNum: prev?.mindNum || Math.floor(Math.random()*99)+1, yongShenConfirmed: '跳过仪式', sanBianStep: 6, sanJiChecked: [true,true,true], sanYaoChecked: [true,true,true] }));
+    // 自动补卦：纯规则生成本地卦象，保证后续 inference.gua 有值
+    let seed = null;
+    let guaObj = null;
+    let signId = null;
+    let sanBian = null;
+    const allList = allGuaList();
+    try {
+      const mindN = Math.floor(Math.random()*99)+1;
+      seed = generateQinianSeed(qStr, mindN, Array.from({length:6}, () => Math.random()<0.5?'字':'背'));
+      // ★ 根因修复：generateQinianSeed 不返回 .gua，自己通过 getGuaByIdx 取卦对象
+      guaObj = getGuaByIdx(seed?.guaIdx || 1) || allList?.[0];
+      signId = makeGuaSignId(guaObj?.id || guaObj?.idx || seed?.guaIdx || 1, seed?.movingLine || 1, mindN, new Date());
+      sanBian = buildSanBian(qStr, guaObj, []);
+    } catch(e) {
+      console.warn('[skip qinian 补卦] 异常，使用第一卦兜底:', e);
+      try {
+        guaObj = allList?.[0];
+        seed = { seed: 'fallback', guaIdx: 1, movingLine: 1, yaoArray: [1,1,1,1,1,1] };
+        signId = makeGuaSignId(1, 1, 42, new Date());
+        sanBian = buildSanBian(qStr, guaObj, []);
+      } catch(fb) { console.warn('[skip qinian 终极兜底也失败]', fb); sanBian = null; }
+    }
+    if (seed && guaObj && signId) {
+      const zLog = (guaObj && seed.yaoArray) ? buildZhuangGuaLog(guaObj, seed.movingLine, seed.yaoArray, qStr, signId) : '';
+      const yong = (guaObj && seed.movingLine !== undefined) ? buildYongShenConfirm(qStr, guaObj, seed.movingLine) : null;
+      const futie = guaObj ? buildFuTie(guaObj, qStr, signId) : null;
+      setCyberGua(prev => prev ? { ...prev, ...seed, gua: guaObj, signId, zhuangGuaLog: zLog, yongShenObj: yong, fuTie: futie, sanBian } : { ...seed, gua: guaObj, signId, zhuangGuaLog: zLog, yongShenObj: yong, fuTie: futie, sanBian });
+      setInference(prev => ({ ...(prev||{}), gua: { gua: guaObj?.gua || guaObj?.name || '', trigram: guaObj?.trigram || '', element: guaObj?.element || guaObj?.wuxing || '', id: guaObj?.id || guaObj?.idx || seed?.guaIdx || 1, movingLine: seed.movingLine, verse: guaObj?.verse || prev?.verse }, verse: guaObj?.verse || prev?.verse }));
+    }
+    // 回到 casting → analyzing → summoning → clarify_loop（跳过仪式的用户不想等，展示时间比正常仪式稍短）
+    (async () => {
+      setAwaitingUser(false);
+      setPhase('casting');
+      await delay(1100);
+      setPhase('analyzing');
+      await delay(800);
+      setPhase('summoning');
+      await delay(800);
+      setPhase('clarify_loop');
+      // ── 生成演的首个追问（5W 本地兜底 + judgeContinueAsking 优先 + LLM 其次）──────────────────────
+      setAgentDialogues(prev => ({ ...prev, yan: '演 · 正在思索……' }));
+      const yanAgent = { id: 'yan', name: '演', stance: '澄清视角' };
+      const tL = QUESTION_TYPES[detectQuestionType(qStr)]?.label || '人生抉择';
+      const kws = _detectKeywordsLocal(qStr);
+      const opQ = _generate5WQuestions(qStr, tL, kws);
+      let firstJudge = { continueAsking: false, nextQuestion: '' };
+      try { firstJudge = await judgeContinueAsking(yanAgent, qStr, [], ''); }
+      catch(e) { console.warn('[skip 后 firstJudge 失败]', e.message); firstJudge = { continueAsking: true, nextQuestion: generateContextAwareClarify(qStr, [], 0) }; }
+      let yanText = ''; let source = 'preset';
+      const cacheKey = makeCacheKey('yan_clarify_first', { question: qStr, keywords: kws }, {});
+      const cached = getCached(cacheKey);
+      if (firstJudge?.continueAsking && firstJudge.nextQuestion) { yanText = firstJudge.nextQuestion; source = 'llm_judge'; }
+      else if (cached && !downgradeRef.current) { yanText = cached.text; source = cached.source || 'cache'; }
+      else if (downgradeRef.current) { yanText = opQ; source = 'local_5w'; }
+      else {
+        try {
+          if (isLlmAvailable()) {
+            setFloatTip('演 · 正在斟酌第一个问题……');
+            try {
+              const res = await streamYanChat({
+                message: `你是「演」，一位沉稳直指核心的引导者。用户的问题是：「${qStr}」\n\n请基于用户的原始问题，用自然、沉稳、直指核心的口吻，提出1个关键的追问，帮助用户说出真正想说的、藏在表层之下的真实情况。不要用5W模板，不要用编号，不要用【何事】【何时】这类标签，就用自然语言对话。只输出1个问题，不要解释，不要输出其他内容。`,
+                conversationId: yanConversationId
+              }, (_c, _f, convId) => setYanConversationId(convId));
+              if (res?.text && res.text.length > 5) {
+                yanText = res.text; source = 'llm';
+                setCached(cacheKey, { text: yanText, source });
+                if (res.conversationId) setYanConversationId(res.conversationId);
+              }
+            } catch(e) { console.warn('[skip 后 LLM 追问失败]', e); }
+          }
+        } catch(e) { console.warn('[skip 后演澄清整体] 失败降级', e); }
+      }
+      setFloatTip(null);
+      if (!yanText || yanText.length <= 5) { yanText = opQ || generateContextAwareClarify(qStr, [], 0); source = 'local_natural'; }
+      appendYanDialogue(yanText, source);
+      setYanQuestionRounds(prev => prev.length===0 ? [{question:yanText, userAnswer:'', questionBy:'演'}] : prev.map((r,i)=>i===0?{...r, question:yanText, questionBy:'演'}:r));
+      setAwaitingUser(true);
+    })().catch(e => {
+      console.warn('[skip qinian 流程] 异常:', e);
+      setPhase('clarify_loop');
+      const yanText = generateContextAwareClarify(qStr, [], 0);
+      appendYanDialogue(yanText, 'local_natural');
+      setYanQuestionRounds(prev => prev.length===0 ? [{question:yanText, userAnswer:'', questionBy:'演'}] : prev);
+      setAwaitingUser(true);
+    });
+  }, [userInput, appendYanDialogue, yanConversationId]);
+
+  // R5: 三变定局流程（sanbian 阶段分步处理）
+  const handleSanbianNext = useCallback(() => {
+    setQinian(prev => {
+      const step = Math.min(6, (prev?.sanBianStep ?? 0) + 1);
+      return { ...prev, sanBianStep: step };
+    });
+  }, [setQinian]);
+
+  const handleToggleSanJi = useCallback((idx) => {
+    setQinian(prev => {
+      const arr = Array.isArray(prev?.sanJiChecked) ? [...prev.sanJiChecked] : [false,false,false];
+      arr[idx] = !arr[idx];
+      return { ...prev, sanJiChecked: arr };
+    });
+  }, [setQinian]);
+
+  const handleToggleSanYao = useCallback((idx) => {
+    setQinian(prev => {
+      const arr = Array.isArray(prev?.sanYaoChecked) ? [...prev.sanYaoChecked] : [false,false,false];
+      arr[idx] = !arr[idx];
+      return { ...prev, sanYaoChecked: arr };
+    });
+  }, [setQinian]);
+
+  const buildFateContentFallback = useCallback((safeChoice) => {
+    try {
+      const q = String(userInput || '此局').trim();
+      const guaName = cyberGua?.gua?.gua || inference?.gua?.gua || safeChoice.gua || '大有';
+      const trigram = cyberGua?.gua?.trigram || inference?.gua?.trigram || safeChoice.icon || '☰';
+      const element = cyberGua?.gua?.element || inference?.gua?.element || safeChoice.element || '火';
+      const jinNang = (cyberGua?.sanBian?.threeYao || []).map((y,i)=>`三要 ${i+1}. ${y}`).slice(0,3);
+      const jinJi = (cyberGua?.sanBian?.threeJi || []).map((j,i)=>`✗ 忌 ${i+1}. ${j}`).slice(0,3);
+      const zhelu = cyberGua?.yanBreakDown && Array.isArray(cyberGua.yanBreakDown) ? cyberGua.yanBreakDown.slice(0,4) : ['Day 1: 先做最小一步', 'Day 3: 找人聊事实', 'Day 7: 复盘应验', 'Day 30: 检查习惯'];
+      const huiShuo = ['第7天问自己：做了没有？', '第30天问自己：变化有没有？', '第90天问自己：坚持了吗？'];
+      const explain = [
+        `【本次推演】问题：${q.slice(0,30)}${q.length>=30?'…':''}`,
+        cyberGua?.niGuaTag ? `【逆卦提示】${cyberGua.niGuaTag} —— 反着做就是错的，别骗自己。` : '',
+        cyberGua?.fuTie ? `【符贴】${cyberGua.fuTie}` : '',
+        `【择路】「${safeChoice.label}」`,
+        '', `【锦囊】`, ...jinNang.map(s=>`  ${s}`),
+        '', `【禁忌】`, ...jinJi.map(s=>`  ${s}`),
+        '', `【回顾】`, ...huiShuo,
+      ].filter(Boolean).join('\n');
+      const summary = `此卦得${guaName}（${element}行），你择「${safeChoice.label}」。谨记三忌三要，且行且验。${cyberGua?.fateSign16?` 符命 ${cyberGua.fateSign16}.`:''}`;
+      return {
+        error:false, errorMessage:'',
+        verse: cyberGua?.gua?.verse || inference?.verse || `一卦方成，万象在掌。`,
+        verseFull: `${trigram} · ${guaName}卦 · ${element}行`,
+        guaName, trigram, element,
+        summary,
+        choiceLabel: safeChoice.label,
+        keyPoints: jinNang.length?jinNang:[safeChoice.label,'顺势而为','且行且验'],
+        explanation: explain,
+        jinNang, jinJi, zhelu, huiShuo,
+        userQuestion: q, agentSnippets: [], consensusHint: cyberGua?.core || '', divergenceHint: cyberGua?.poemTranslate || '',
+        editable: true, source: 'cyber_ritual_local_fallback',
+        cyberSignId: cyberGua?.signId,
+        cyberPoem: cyberGua?.poem || [], cyberPoemTranslate: cyberGua?.poemTranslate || '',
+        cyberFateSign16: cyberGua?.fateSign16,
+        cyberRuneSvg: cyberGua?.runeSvg,
+        cyberNiGua: cyberGua?.niGuaTag,
+        cyberFuTie: cyberGua?.fuTie,
+        cyberZhuangGuaLog: cyberGua?.zhuangGuaLog,
+        cyberSanBianPick: cyberGua ? (cyberGua.sanBianPick || (qinianInput?.sanBianStep>=6?'path_A':'unknown')) : 'unknown',
+      };
+    } catch (e) {
+      console.warn('[buildFateContentFallback] 失败:', e);
+      return { error:true, errorMessage: String(e?.message||e), summary:'推演异常，请重试', verse:'无', explanation:'无', keyPoints:[], choiceLabel: safeChoice?.label || '择路', source: 'fatal_fallback' };
+    }
+  }, [cyberGua, inference, userInput, qinianInput]);
+
+  const buildFateContentAfterChoice = useCallback(async (safeChoice) => {
+    try {
+      const base = buildFateContentFallback(safeChoice);
+      if (!downgradeRef.current && isLlmAvailable()) {
+        try {
+          const personalized = await Promise.race([
+            generatePersonalizedCardContent({
+              question: userInput,
+              guaName: base.guaName,
+              choiceLabel: safeChoice.label,
+              agentDialogues: agentDialogues || {},
+              trigram: base.trigram,
+            }),
+            new Promise(resolve => setTimeout(() => resolve(null), 9000)),
+          ]);
+          if (personalized && typeof personalized === 'object' && personalized.verse) {
+            const next = { ...base, ...personalized, verse: personalized.verse, source: personalized.source || 'cyber_ritual_backend_augmented', summary: personalized.summary || base.summary };
+            setFateContent(next);
+            return;
+          }
+        } catch (e) { console.warn('[cyber fate backend] 失败，降级本地', e.message); }
+      }
+      setFateContent(base);
+    } catch (e) {
+      console.warn('[buildFateContentAfterChoice] 失败', e.message);
+      setFateContent(buildFateContentFallback(safeChoice));
+    }
+  }, [buildFateContentFallback, userInput, agentDialogues]);
+
+  const handleConfirmSanBian = useCallback((twoPathsPickKey) => {
+    const pickedKey = typeof twoPathsPickKey === 'string' ? twoPathsPickKey : null;
+    const sanBian = cyberGua?.sanBian;
+    const pickA = pickedKey === 'path_A' || pickedKey !== 'path_B';
+    const finalChoice = (() => {
+      if (!sanBian?.twoPaths) return selectedChoice;
+      const pLabel = pickA ? sanBian.twoPaths.A.label : sanBian.twoPaths.B.label;
+      const cBase = selectedChoice || { label: pLabel, icon: '☰', stance: '综合决策', idx: 0 };
+      if (String(cBase.label).includes(pLabel.slice(0,2)) || pLabel.includes(String(cBase.label).slice(0,2))) return cBase;
+      return { ...cBase, label: pLabel, stance: pickA ? (sanBian.twoPaths.A.standpoint||'顺势而为') : (sanBian.twoPaths.B.standpoint||'稳守当下'), icon: pickA ? '⚡' : '⚙' };
+    })();
+    setSelectedChoice(finalChoice);
+    setCyberGua(prev => prev ? {
+      ...prev,
+      sanBianPick: pickA ? 'path_A' : 'path_B',
+      sanJiChecked_: qinianInput?.sanJiChecked || [false,false,false],
+      sanYaoChecked_: qinianInput?.sanYaoChecked || [false,false,false],
+    } : null);
+    setAwaitingUser(false);
+
+    // ★ 正确的流程：sanbian 结束 → casting（展示卦盘 2.5 秒让用户看清楚是什么卦）→ analyzing（演在思考）→ summoning → clarify_loop + 生成演的首个追问
+    //   之前直接跳到 path_reveal 是错的（选分岔 branch_select 都还没做，不可能直接命签）
+    (async () => {
+      setPhase('casting');
+      await delay(2500);
+      setPhase('analyzing');
+
+      // ── 生成演的首个追问（5W 兜底 + judgeContinueAsking 优先 + LLM stream 其次）────────────────────────────────
+      setAgentDialogues(prev => ({ ...prev, yan: '演 · 正在斟酌第一个问题……' }));
+      const question = userInput || '此局';
+      const yanAgent = { id: 'yan', name: '演', stance: '澄清视角' };
+
+      // 先算一次 5W 本地兜底（永远能产出一个，不用怕 LLM 挂）
+      const typeLabel = QUESTION_TYPES[detectQuestionType(question)]?.label || '人生抉择';
+      const keywords = _detectKeywordsLocal(question);
+      const openingQuestion = _generate5WQuestions(question, typeLabel, keywords);
+
+      // 再问 judgeContinueAsking（是否应该追问 + 追问内容推荐）
+      let firstJudge = { continueAsking: false, nextQuestion: '' };
+      try { firstJudge = await judgeContinueAsking(yanAgent, question, [], ''); }
+      catch (e) {
+        console.warn('[handleConfirmSanBian] firstJudge 异常降级', e.message);
+        firstJudge = { continueAsking: true, nextQuestion: generateContextAwareClarify(question, [], 0) };
+      }
+
+      let yanText = '';
+      let source = 'preset';
+      const yanCacheKey = makeCacheKey('yan_clarify_first', { question, keywords }, {});
+      const cachedYan = getCached(yanCacheKey);
+
+      if (firstJudge?.continueAsking && firstJudge.nextQuestion) {
+        yanText = firstJudge.nextQuestion; source = 'llm_judge';
+      } else if (cachedYan && !downgradeRef.current) {
+        yanText = cachedYan.text; source = cachedYan.source || 'cache';
+      } else if (downgradeRef.current) {
+        yanText = openingQuestion; source = 'local_5w';
+      } else {
+        // 最后用 stream LLM 生成（网络慢没关系，用户现在在看 casting 卦盘，有耐心）
+        try {
+          const localMemories = recallRelevantMemories(question);
+          const localMemoryContext = formatMemoriesForPrompt(localMemories);
+          const fullQuestion = localMemoryContext ? `${question}\n\n用户过往相关信息:\n${localMemoryContext}` : question;
+          if (isLlmAvailable()) {
+            setFloatTip('演 · 正在斟酌第一个问题……');
+            try {
+              const result = await streamYanChat({
+                message: `你是「演」，一位沉稳直指核心的引导者。用户的问题是：「${fullQuestion}」\n\n请基于用户的原始问题，用自然、沉稳、直指核心的口吻，提出1个关键的追问，帮助用户说出真正想说的、藏在表层之下的真实情况。不要用5W模板，不要用编号，不要用【何事】【何时】这类标签，就用自然语言对话。只输出1个问题，不要解释，不要输出其他内容。`,
+                conversationId: yanConversationId
+              }, (_c, _f, convId) => setYanConversationId(convId));
+              if (result && result.text && result.text.length > 5) {
+                yanText = result.text; source = 'llm';
+                recordCost(fullQuestion.length + 300, result.text.length);
+                setCached(yanCacheKey, { text: yanText, source });
+                if (result.conversationId) setYanConversationId(result.conversationId);
+              }
+            } catch (e) { console.warn('[sanbian后演澄清LLM] 失败:', e); }
+          }
+        } catch (e) { console.warn('[sanbian后演澄清整体] 失败降级:', e); }
+      }
+      if (!yanText || yanText.length <= 5) { yanText = generateContextAwareClarify(question, [], 0); source = 'local_natural'; }
+      setFloatTip(null);
+
+      await delay(900);
+      setPhase('summoning');
+      await delay(1100);
+      setPhase('clarify_loop');
+      appendYanDialogue(yanText, source);
+      setYanQuestionRounds(prev => {
+        if (prev.length === 0) return [{ question: yanText, userAnswer: '', questionBy: '演' }];
+        return prev.map((r, i) => i === 0 ? { ...r, question: yanText, questionBy: '演' } : r);
+      });
+      setAwaitingUser(true);
+    })().catch(e => {
+      console.warn('[handleConfirmSanBian → casting → clarify_loop] 异常:', e);
+      // 出任何错直接落到 clarify_loop，并且给一个兜底追问
+      const q = userInput || '此局';
+      const yanText = generateContextAwareClarify(q, [], 0);
+      setPhase('clarify_loop');
+      appendYanDialogue(yanText, 'local_natural');
+      setYanQuestionRounds(prev => prev.length===0 ? [{question:yanText, userAnswer:'', questionBy:'演'}] : prev);
+      setAwaitingUser(true);
+    });
+  }, [cyberGua, selectedChoice, qinianInput, userInput, appendYanDialogue, yanConversationId]);
 
   return {
     navigate, phase, userInput, setUserInput, inputValue, setInputValue,
@@ -3065,5 +3566,11 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
     handleSaveToCollection, toolCallbacks,
     handleConfirmCaseFile, handleBackFromCaseFile,
     infoProgress, MAX_CLARIFY_ROUNDS, saveGameState,
+    // 赛博算命仪式：节点状态 & 节点处理器
+    qinianInput, setQinian, cyberGua,
+    handleSetMindNum, handleConfirmMindNum,
+    handleCastOneCoin, handleResetSixThrows, handleConfirmSixThrows,
+    handleConfirmZhuanggua, handleConfirmYongShen, handleSkipQinian,
+    handleSanbianNext, handleToggleSanJi, handleToggleSanYao, handleConfirmSanBian,
   };
 }

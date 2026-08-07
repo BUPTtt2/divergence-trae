@@ -564,9 +564,18 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
     const allAgents = [...presetAgents, ...customAgentsClean];
 
     // === T5：演推荐 / 演新维度 标记 ===
-    const recommendedSet = new Set(inference?.recommendedAgentIds || []);
+    // ★ P5 修复：后端 inference.recommendedIds（用户日志：recommendedIds: Array(5)）—— 之前字段名写错成 recommendedAgentIds，导致推荐永远是 0！
+    //         兼容两个字段：优先 recommendedIds，fallback 老的 recommendedAgentIds
+    const backendRecommendedIds = (inference?.recommendedIds && Array.isArray(inference.recommendedIds))
+      ? inference.recommendedIds
+      : (inference?.recommendedAgentIds || []);
+    const recommendedSet = new Set(backendRecommendedIds);
     const isRecommended = (agentId) => recommendedSet.has(agentId) ||
-      presetAgents.some(p => p.id === agentId && (p._origId && recommendedSet.has(p._origId)));
+      presetAgents.some(p => p.id === agentId && (p._origId && recommendedSet.has(p._origId))) ||
+      // 兼容市集 agent：marketId / originMarketId 命中推荐也算
+      String(agentId || '').length > 0 && (
+        presetAgents.some(p => (p.marketId === agentId || p.originMarketId === agentId) && recommendedSet.has(p.id))
+      );
     const isGeneratedAgent = (agent) => agent?.isGenerated || agent?.id?.startsWith('gen_') || String(agent?.id || '').includes('gen_');
 
     // === Q2-1 修复：市集智囊 ID 解析（市集ID → 订阅后真实ID） ===
@@ -747,11 +756,19 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
               )}
               {rec && !gen && (
                 <span style={{
-                  fontSize: '8px', color: '#C8A050', border: '1px solid #C8A05080',
-                  borderRadius: '2px', padding: '0 5px', letterSpacing: '0.1em',
+                  // ★ P5 修复：「演推荐」标签醒目化 —— 加背景渐变 + 金色描边 + 发光，字号改 9.5px，一眼能看到
+                  fontSize: '9.5px',
+                  fontWeight: 700,
+                  color: '#5C3A0E',
+                  background: 'linear-gradient(135deg, #F5D980 0%, #E8C670 50%, #D4A84A 100%)',
+                  border: '1px solid #F5D980',
+                  borderRadius: '3px',
+                  padding: '1px 7px',
+                  letterSpacing: '0.12em',
                   fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif',
                   flexShrink: 0,
-                }}>★ 演推荐</span>
+                  boxShadow: '0 0 10px rgba(245,217,128,0.60), inset 0 0 6px rgba(255,255,255,0.35)',
+                }}>★演推荐</span>
               )}
               {!gen && (
                 <span style={{
@@ -858,11 +875,19 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
               )}
               {rec && !gen && (
                 <span style={{
-                  fontSize: '8px', color: '#C8A050', border: '1px solid #C8A05080',
-                  borderRadius: '2px', padding: '0 5px', letterSpacing: '0.1em',
+                  // ★ P5 修复：「演推荐」标签醒目化 —— 加背景渐变 + 金色描边 + 发光，字号改 9.5px，一眼能看到
+                  fontSize: '9.5px',
+                  fontWeight: 700,
+                  color: '#5C3A0E',
+                  background: 'linear-gradient(135deg, #F5D980 0%, #E8C670 50%, #D4A84A 100%)',
+                  border: '1px solid #F5D980',
+                  borderRadius: '3px',
+                  padding: '1px 7px',
+                  letterSpacing: '0.12em',
                   fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif',
                   flexShrink: 0,
-                }}>★ 演推荐</span>
+                  boxShadow: '0 0 10px rgba(245,217,128,0.60), inset 0 0 6px rgba(255,255,255,0.35)',
+                }}>★演推荐</span>
               )}
               <span style={{
                 fontSize: '8px', color: srcColor, border: `1px solid ${srcColor}55`,
@@ -988,8 +1013,8 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             }}>
               <span>我 · 自建 / 订阅</span>
-              <span style={{ fontSize: '10px', color: '#8A7860', fontWeight: 400, letterSpacing: '0.05em' }}>
-                {sortedCustomAgents.length} 位 · {sortedCustomAgents.filter(a => a.isSubscribed).length} 订阅
+              <span style={{ fontSize: '9px', color: '#B09878', fontWeight: 400, letterSpacing: '0.05em' }}>
+                ★点击选用·共 {sortedCustomAgents.length} 位
               </span>
             </div>
             {sortedCustomAgents.length === 0 ? (
@@ -1074,7 +1099,22 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'space-between' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', minWidth: 0 }}>
                           <div style={{ color: color.main, fontSize: '13px', fontWeight: 600, fontFamily: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif' }}>{src.name}</div>
-                          {rec && <span style={{ fontSize: '8px', color: '#C8A050', border: '1px solid #C8A05080', borderRadius: '2px', padding: '0 5px', letterSpacing: '0.1em', fontFamily: '"Ma Shan Zheng", serif' }}>★演荐</span>}
+                          {rec && (
+                            <span style={{
+                              // ★ P5 修复：市集栏的「演推荐」标签也统一用醒目金色徽章
+                              fontSize: '9.5px',
+                              fontWeight: 700,
+                              color: '#5C3A0E',
+                              background: 'linear-gradient(135deg, #F5D980 0%, #E8C670 50%, #D4A84A 100%)',
+                              border: '1px solid #F5D980',
+                              borderRadius: '3px',
+                              padding: '1px 7px',
+                              letterSpacing: '0.12em',
+                              fontFamily: '"Ma Shan Zheng", serif',
+                              flexShrink: 0,
+                              boxShadow: '0 0 10px rgba(245,217,128,0.60), inset 0 0 6px rgba(255,255,255,0.35)',
+                            }}>★演推荐</span>
+                          )}
                           <span style={{ fontSize: '8px', color: '#A888C8', border: '1px solid #A888C855', borderRadius: '2px', padding: '0 4px', letterSpacing: '0.1em', fontFamily: '"Ma Shan Zheng", serif', flexShrink: 0 }}>市集</span>
                         </div>
                         {/* 订阅：独立 checkbox switch（点开关不触发选中 agent） */}
@@ -1139,12 +1179,32 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
               fontFamily: '"Noto Serif SC", "PingFang SC", "Ma Shan Zheng", serif',
               padding: '4px 0 4px 10px', borderLeft: '3px solid #D7A44A',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '6px',
             }}>
               <span>演 · 系统视角</span>
-              <span style={{ fontSize: '10px', color: '#8A7860', fontWeight: 400, letterSpacing: '0.05em' }}>
-                ★ 推荐 {recNative.length} · 共 {nativePool.length}
+              <span style={{ fontSize: '9px', color: '#B09860', fontWeight: 400, letterSpacing: '0.05em' }}>
+                {/* ★ P5 修复：之前只显示 recNative.length（系统池里命中的数量），现在加后端真实推的数量
+                     —— 这样用户就知道「演推荐」是动态的后端 analyze-v2 返回的，不是固定写死的 */}
+                后端推 {backendRecommendedIds.length} · 匹配 {recNative.length} · 共 {nativePool.length}
               </span>
             </div>
+            {/* ★ P5：加一行小字说明「演推荐是动态的，来自本轮分析，不是固定池子」—— 用户说「用字说一说」 */}
+            {backendRecommendedIds.length > 0 && (
+              <div style={{
+                marginTop: '-2px',
+                padding: '4px 8px',
+                fontSize: '9px',
+                color: '#B09860',
+                border: `1px dashed ${GLOW_COLOR || '#C8A850'}40`,
+                borderRadius: '3px',
+                fontFamily: '"Ma Shan Zheng", "Noto Serif SC", serif',
+                letterSpacing: '0.06em',
+                lineHeight: 1.5,
+              }}>
+                演曰：<span style={{ color: '#E8C670' }}>标 ★ 为本轮按你问题 维度×卦象 动态推荐，不是固定池子</span>，可直接选用。
+              </div>
+            )}
             <div style={{
               display: 'flex', flexDirection: 'column', gap: '8px',
               flex: 1, minHeight: 0,
@@ -1791,104 +1851,108 @@ function DialogueFrame({ color, name, stance, progress, stanceStrength = 0, show
           />
         ))}
 
-        {/* 顶部小标签 - 名字滴入 + 立场滑入 */}
+        {/* 顶部小标签 - 名字滴入 + 立场滑入
+             ★ P6 修复：之前每个 badge 都有一条竖线分隔，导致顶部有 N 条竖线太乱。现在改为「第一行：名字+立场+进度，只有一条分隔竖线」。
+                       另外 stanceStrength 默认是 2（90% 的 agent），显示成「立场强度 = 两格柱」用户觉得「而且都是 2」，所以只有 != 2 时才显示。 */}
         <div
           style={{
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
-            justifyContent: 'center',
-            gap: '14px',
-            marginBottom: '20px',
+            gap: '8px',
+            marginBottom: '18px',
             letterSpacing: '0.2em',
           }}
         >
-          <motion.span
-            initial={{ opacity: 0, y: -16, rotateZ: -8 }}
-            animate={{ opacity: 1, y: 0, rotateZ: 0 }}
-            transition={{ duration: 0.9, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            style={{
-              fontSize: '15px',
-              color: color.glow,
-              fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", "PingFang SC", serif',
-              fontWeight: 700,
-              textShadow: `0 0 12px ${color.glow}, 0 0 4px #000`,
-              paddingLeft: '0.3em',
-            }}
-          >
-            {name}
-            {isGenerated && (
-              <span style={{
-                fontSize: '8px', color: '#F0D890', border: '1px solid #F0D89055',
-                borderRadius: '2px', padding: '0 4px', letterSpacing: '0.1em',
-                marginLeft: '6px', verticalAlign: 'middle',
+          {/* 第一行：名字 + 立场 + 进度（只用一条竖线分隔，不重复） */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <motion.span
+              initial={{ opacity: 0, y: -16, rotateZ: -8 }}
+              animate={{ opacity: 1, y: 0, rotateZ: 0 }}
+              transition={{ duration: 0.9, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              style={{
+                fontSize: '15px',
+                color: color.glow,
                 fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", "PingFang SC", serif',
-              }}>演造</span>
-            )}
-          </motion.span>
-          {stance && (
-            <motion.span
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.7, delay: 0.5, ease: 'easeOut' }}
-              style={{
-                fontSize: '11px',
-                color: '#A09888',
-                fontFamily: '"Noto Serif SC", serif',
-                letterSpacing: '0.3em',
+                fontWeight: 700,
+                textShadow: `0 0 12px ${color.glow}, 0 0 4px #000`,
                 paddingLeft: '0.3em',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '14px',
               }}
             >
-              <span style={{ width: '1px', height: '12px', background: '#3A3530' }} />
-              {stance}
+              {name}
+              {isGenerated && (
+                <span style={{
+                  fontSize: '8px', color: '#F0D890', border: '1px solid #F0D89055',
+                  borderRadius: '2px', padding: '0 4px', letterSpacing: '0.1em',
+                  marginLeft: '6px', verticalAlign: 'middle',
+                  fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", "PingFang SC", serif',
+                }}>演造</span>
+              )}
             </motion.span>
-          )}
-          {progress && (
-            <motion.span
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.7, delay: 0.7, ease: 'easeOut' }}
-              style={{
-                fontSize: '11px',
-                color: '#6A6560',
-                fontFamily: '"Noto Serif SC", serif',
-                letterSpacing: '0.2em',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '14px',
-              }}
-            >
-              <span style={{ width: '1px', height: '12px', background: '#3A3530' }} />
-              {progress}
-            </motion.span>
-          )}
-          {/* 立场强度三段条 - 情绪态度可视化 */}
-          {stanceStrength > 0 && (
-            <motion.span
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.7, delay: 0.6, ease: 'easeOut' }}
-              style={{ display: 'flex', alignItems: 'center', gap: '14px' }}
-            >
-              <span style={{ width: '1px', height: '12px', background: '#3A3530' }} />
-              <span style={{ display: 'flex', gap: '3px', alignItems: 'flex-end' }} title={`立场强度 ${stanceStrength}/3`}>
-                {[1, 2, 3].map((n) => (
-                  <span
-                    key={n}
-                    style={{
-                      width: '3px',
-                      height: n === 1 ? '6px' : n === 2 ? '9px' : '12px',
-                      background: n <= stanceStrength ? color.glow : '#3A3530',
-                      borderRadius: '1px',
-                      boxShadow: n <= stanceStrength ? `0 0 4px ${color.glow}` : 'none',
-                    }}
-                  />
-                ))}
-              </span>
-            </motion.span>
-          )}
+            {stance && (
+              <>
+                <span style={{ width: '1px', height: '12px', background: '#3A3530' }} aria-hidden />
+                <motion.span
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.7, delay: 0.5, ease: 'easeOut' }}
+                  style={{
+                    fontSize: '11px',
+                    color: '#A09888',
+                    fontFamily: '"Noto Serif SC", serif',
+                    letterSpacing: '0.3em',
+                    paddingLeft: '0.3em',
+                  }}
+                >
+                  {stance}
+                </motion.span>
+              </>
+            )}
+            {progress && (
+              <>
+                <span style={{ width: '1px', height: '12px', background: '#3A3530' }} aria-hidden />
+                <motion.span
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.7, delay: 0.7, ease: 'easeOut' }}
+                  style={{
+                    fontSize: '11px',
+                    color: '#6A6560',
+                    fontFamily: '"Noto Serif SC", serif',
+                    letterSpacing: '0.2em',
+                  }}
+                >
+                  {progress}
+                </motion.span>
+              </>
+            )}
+            {/* ★ P6 修复：只有当 stanceStrength 不是默认 2 时才显示立场强度条
+                 否则 90% 的卡片显示「两格柱子」，用户说「而且都是 2」太重复
+                 同时加上竖线分隔（和前面的风格统一） */}
+            {stanceStrength > 0 && stanceStrength !== 2 && (
+              <>
+                <span style={{ width: '1px', height: '12px', background: '#3A3530' }} aria-hidden />
+                <motion.span
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.7, delay: 0.6, ease: 'easeOut' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '3px' }} title={`立场强度 ${stanceStrength}/3`}>
+                  {[1, 2, 3].map((n) => (
+                    <span
+                      key={n}
+                      style={{
+                        width: '3px',
+                        height: n === 1 ? '6px' : n === 2 ? '9px' : '12px',
+                        background: n <= stanceStrength ? color.glow : '#3A3530',
+                        borderRadius: '1px',
+                        boxShadow: n <= stanceStrength ? `0 0 4px ${color.glow}` : 'none',
+                      }}
+                    />
+                  ))}
+                </motion.span>
+              </>
+            )}
+          </div>
         </div>
 
         {/* 对话内容 — 强制 pointerEvents auto（外层是none防阻挡场景点击） */}
