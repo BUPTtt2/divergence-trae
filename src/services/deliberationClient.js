@@ -6,6 +6,7 @@
  */
 
 import { getCurrentUserIdSync } from './baseConfig.js';
+import { probeDeliberationHealth } from './deliberationHealth.js';
 
 const CLOG = {
   fetch: (m, p) => console.log(`[FETCH] ${m} ${p}`),
@@ -65,34 +66,14 @@ export function setRunMode(mode) {
   }
 }
 
-/**
- * 后端健康探测：极简版
- * （不再用 setTimeout/Promise.race，避免 HMR 或 polyfill 环境下的 lazyRetry 报错）
- * 只发一个真实请求，看是否能拿到 Response。
- */
 export async function probeBackend(timeoutMs = 3000) {
   if (RUN_MODE === 'LOCAL_FULL') return false;
-  const candidates = _cachedBase
-    ? [_cachedBase, ...BASE_CANDIDATES.filter(b => b !== _cachedBase)]
+  const bases = _cachedBase
+    ? [_cachedBase, ...BASE_CANDIDATES.filter((base) => base !== _cachedBase)]
     : BASE_CANDIDATES;
-
-  for (const base of candidates) {
-    try {
-      const url = `${base}/api/deliberation/start`;
-      // 这里只做一次 POST 尝试，不做超时控制（浏览器自身会在网络不可达时快速 reject）
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: 'probe', userId: 'probe' }),
-      });
-      if (resp && typeof resp.status === 'number') {
-        return true;
-      }
-    } catch (e) {
-      // 网络错误 / 拒绝连接：尝试下一个候选 base
-    }
-  }
-  return false;
+  const result = await probeDeliberationHealth({ bases, timeoutMs });
+  if (result.ok) _persistBase(result.base);
+  return result.ok;
 }
 
 /**
