@@ -23,8 +23,6 @@
  */
 
 import logger from './logger.js';
-import { callLLM } from './llmRouter.js';
-import * as agentEngine from './agentEngine.js';
 import {
   createCognitivePerturbationPlan,
   createLensImpactRecords,
@@ -33,7 +31,6 @@ import {
 // ============ 常量 ============
 
 const MAX_REPLAN = 1;
-const FORBIDDEN_ORACLE_VERDICT = /(?:吉|凶|可进|宜止|利动|不利守|时机未到|立即执行|批准执行|命运)/;
 const LOCKED_INVARIANTS = Object.freeze({
   evidenceLocked: true,
   riskLocked: true,
@@ -335,15 +332,14 @@ function matchTrigram(lines3) {
   return { name: '?', symbol: '?', perspective: 'unknown' };
 }
 
-// ============ 5. 审查镜头说明（LLM 只做可选白话转述） ============
+// ============ 5. 确定性审查镜头说明 ============
 
 /**
- * 调 LLM 将确定性审查说明转成白话（失败或出现裁决词则回退原说明）
+ * 只根据受控结构字段生成中性说明，不接收任何模型文本。
  * @param {Object} oracle mapToHexagram 结果
- * @param {string} question
- * @returns {Promise<string>} 卦辞文本
+ * @returns {string} 审查镜头文本
  */
-async function generateOracleText(oracle, question, callLLMFn = callLLM) {
+function buildReviewLensText(oracle) {
   const primaryName = `${oracle.primary.lower.name}${oracle.primary.upper.name}`;
   const changedName = `${oracle.changed.lower.name}${oracle.changed.upper.name}`;
   const dynamicStr = oracle.dynamics.length > 0
@@ -353,37 +349,76 @@ async function generateOracleText(oracle, question, callLLMFn = callLLM) {
     counts[line.knowledgeState] += 1;
     return counts;
   }, { verified: 0, unknown: 0, contested: 0 });
-  const fallback = `【${primaryName}】本轮审查镜头由${stateCounts.verified}项已验证、${stateCounts.unknown}项未知和${stateCounts.contested}项冲突构成。${dynamicStr}，备选镜头为${changedName}。请逐项补证并检查反转变量；事实、风险与审批边界保持不变。`;
+  return `【${primaryName}】本轮审查镜头由${stateCounts.verified}项已验证、${stateCounts.unknown}项未知和${stateCounts.contested}项冲突构成。${dynamicStr}，备选镜头为${changedName}。请逐项补证并检查反转变量；事实、风险与审批边界保持不变。`;
+}
 
-  try {
-    const result = await Promise.race([
-      callLLMFn(
-        [
-          {
-            role: 'system',
-            content: '你只负责把给定的审查镜头说明转成简洁白话。不得增加事实、行动建议、命运判断、风险结论或审批意见；不得使用吉凶、可进、宜止等裁决表达。',
-          },
-          {
-            role: 'user',
-            content: `问题主题：${String(question || '').slice(0, 120)}\n待转述说明：${fallback}`,
-          },
-        ],
-        { maxTokens: 200, temperature: 0.2 }
-      ),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000)),
-    ]);
+const BUSINESS_TOPIC_CATALOG = Object.freeze([
+  { key: 'supplier', label: '供应商', pattern: /供应商|供货|采购|供方/ },
+  { key: 'contract', label: '合同签约', pattern: /签约|合同|续约|协议/ },
+  { key: 'project', label: '项目方案', pattern: /项目|方案|计划/ },
+  { key: 'career', label: '职业选择', pattern: /工作|离职|跳槽|岗位|职业/ },
+  { key: 'investment', label: '投资方案', pattern: /投资|理财|股票|基金|资产/ },
+  { key: 'housing', label: '居住方案', pattern: /买房|卖房|租房|搬家|居住/ },
+  { key: 'education', label: '学习方案', pattern: /学习|课程|专业|升学|留学/ },
+  { key: 'relationship', label: '关系方案', pattern: /关系|婚姻|伴侣|家人|朋友/ },
+  { key: 'travel', label: '出行方案', pattern: /旅行|旅游|出行/ },
+]);
 
-    const paraphrase = typeof result === 'string' ? result.trim() : '';
-    if (paraphrase && !FORBIDDEN_ORACLE_VERDICT.test(paraphrase)) {
-      logger.info('[OracleText] LLM白话转述成功');
-      return paraphrase.includes('审查镜头') ? paraphrase : `本轮审查镜头：${paraphrase}`;
-    }
-    if (paraphrase) logger.warn('[OracleText] LLM转述含裁决词，改用规则说明');
-  } catch (e) {
-    logger.info(`[OracleText] LLM超时/失败，改用规则说明: ${e.message}`);
-  }
+function deriveBusinessTopic(question) {
+  const normalized = String(question || '').normalize('NFKC');
+  const matched = BUSINESS_TOPIC_CATALOG.find(({ pattern }) => pattern.test(normalized));
+  return matched
+    ? { key: matched.key, label: matched.label, provenance: 'derived-from-user-question' }
+    : { key: 'general', label: '当前方案', provenance: 'derived-from-user-question' };
+}
 
-  return fallback;
+/**
+ * 从用户原问题提取受控主题并生成业务选择；Lens 任务不会进入提交白名单。
+ */
+function buildControlledBusinessChoices(question) {
+  const topic = deriveBusinessTopic(question);
+
+  return [
+    {
+      id: 'business_advance',
+      label: `推进${topic.label}`,
+      color: '#E8B880',
+      glowColor: '#E8B880',
+      icon: '☰',
+      gua: '乾',
+      keyPoints: ['以已验证事实为基础', '先满足原有审批要求', '保留可撤回检查点'],
+      topic: { ...topic },
+      provenance: 'controlled-business-template',
+      generatedAdvice: null,
+      isDynamic: true,
+    },
+    {
+      id: 'business_pause',
+      label: `暂缓${topic.label}`,
+      color: '#A8C0E8',
+      glowColor: '#A8C0E8',
+      icon: '☵',
+      gua: '坎',
+      keyPoints: ['等待关键信息补齐', '继续监测原有风险', '达到复核条件后重评'],
+      topic: { ...topic },
+      provenance: 'controlled-business-template',
+      generatedAdvice: null,
+      isDynamic: true,
+    },
+    {
+      id: 'business_hold',
+      label: `维持${topic.label}现状`,
+      color: '#80C8A8',
+      glowColor: '#80C8A8',
+      icon: '☶',
+      gua: '艮',
+      keyPoints: ['延续当前业务安排', '记录事实与约束快照', '由用户决定后续变更'],
+      topic: { ...topic },
+      provenance: 'controlled-business-template',
+      generatedAdvice: null,
+      isDynamic: true,
+    },
+  ];
 }
 
 function disabledCognitivePlan(error) {
@@ -495,62 +530,12 @@ export async function reflect(session, dependencies = {}) {
     lensImpacts = [];
   }
 
-  oracle.text = await generateOracleText(
-    oracle,
-    session?.question || '',
-    dependencies.callLLMFn || callLLM,
-  );
+  oracle.text = buildReviewLensText(oracle);
 
-  // P1-1：基于智囊发现，LLM动态生成抉择选项（不再固定4个）
-  let dynamicChoices = [];
-  let masterSummaryText = '';
-  try {
-    const agentIds = Array.from(new Set(findings.map(f => f.agentId).filter(Boolean)));
-    const dialogueHistory = {};
-    findings.forEach(f => {
-      if (!f.agentId) return;
-      if (!dialogueHistory[f.agentId]) dialogueHistory[f.agentId] = [];
-      if (f.content) dialogueHistory[f.agentId].push(f.content);
-    });
-    const generateMasterSummary = dependencies.generateMasterSummaryFn || agentEngine.generateMasterSummary;
-    const ms = await generateMasterSummary(
-      session?.questionContext || session?.question || '',
-      agentIds,
-      dialogueHistory
-    );
-    const generatedSummary = JSON.stringify({ summary: ms?.summary || '', options: ms?.options || [] });
-    if (FORBIDDEN_ORACLE_VERDICT.test(generatedSummary)) {
-      logger.warn('[Reflector] 动态总结含裁决词，本轮不展示该生成内容', { sessionId: session?.id });
-    } else if (ms && Array.isArray(ms.options) && ms.options.length > 0) {
-      // 映射成前端Game.jsx需要的 {id,label,color,icon,gua,keyPoints} 格式
-      const palette = [
-        { color: '#E8B880', icon: '☰', gua: '大有' },
-        { color: '#E88080', icon: '☵', gua: '坎' },
-        { color: '#80C8A8', icon: '☶', gua: '艮' },
-        { color: '#D8A8C8', icon: '☴', gua: '巽' },
-        { color: '#A8C0E8', icon: '☳', gua: '解' },
-        { color: '#E8D080', icon: '☲', gua: '离' },
-      ];
-      dynamicChoices = ms.options.map((opt, idx) => {
-        const pick = palette[idx % palette.length];
-        return {
-          id: `dyn_${idx}_${Date.now().toString(36)}`,
-          label: String(opt.label || `选项${idx + 1}`).slice(0, 10),
-          color: pick.color,
-          glowColor: pick.color,
-          icon: opt.guaRecommendation ? (opt.guaRecommendation.slice(0, 1) || pick.icon) : pick.icon,
-          gua: opt.guaRecommendation || pick.gua,
-          keyPoints: Array.isArray(opt.keyPoints) ? opt.keyPoints.slice(0, 3) : [],
-          isDynamic: true,
-        };
-      });
-      masterSummaryText = ms.summary || '';
-      logger.info('[Reflector] 动态抉择选项生成', { sessionId: session?.id, count: dynamicChoices.length });
-    }
-  } catch (e) {
-    logger.warn('[Reflector] 动态选项生成失败（不阻塞立卦）', { sessionId: session?.id, error: e.message });
-    dynamicChoices = [];
-  }
+  // Lens 任务和用户最终选择保持分离；业务选项只使用原问题中的受控主题。
+  const businessTopic = deriveBusinessTopic(session?.question || '');
+  const dynamicChoices = buildControlledBusinessChoices(session?.question || '');
+  const masterSummaryText = `围绕“${businessTopic.label}”形成三条可提交业务路径；审查镜头不构成裁决，最终路径由你确认。`;
 
   session.oracle = oracle;
   session.cognitivePlan = cognitivePlan;

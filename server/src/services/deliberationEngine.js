@@ -625,7 +625,7 @@ export async function persistExecuteResult(sessionId, result, dependencies = {})
  * 组装 execute 响应
  */
 export function buildExecuteResponse(sessionId, result) {
-  const response = normalizeExecuteResponse({
+  return normalizeExecuteResponse({
     sessionId,
     state: result.session.state,
     findings: result.session.findings || [],
@@ -634,16 +634,13 @@ export function buildExecuteResponse(sessionId, result) {
     gaps: result.gaps,
     replanned: result.replanned,
     reason: result.reason,
-    // P1-1：动态抉择选项（替代前端 DEFAULT_CHOICES 固定4个）
+    // 受控业务选项；Lens 审查任务不得进入用户提交白名单。
     dynamicChoices: Array.isArray(result.session.dynamicChoices) ? result.session.dynamicChoices : [],
     masterSummary: result.session.masterSummary || '',
-    fallback: result.fallback === true,
-  });
-  return {
-    ...response,
     cognitivePlan: result.cognitivePlan ?? result.session.cognitivePlan ?? null,
     lensImpacts: result.lensImpacts ?? result.session.lensImpacts ?? [],
-  };
+    fallback: result.fallback === true,
+  });
 }
 
 /**
