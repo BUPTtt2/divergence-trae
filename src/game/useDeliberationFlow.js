@@ -10,7 +10,6 @@ import {
   getRunMode,
 } from '../services/deliberationClient';
 import { useDeliberationStream } from '../hooks/useDeliberationStream';
-import { ensureUserId } from '../services/baseConfig';
 import { _buildLocalChoices, _safeSetTimeout } from '../game/localEngine';
 import { createPendingActionRegistry } from './deliberationActions';
 import { sanitizeLLMText } from '../utils/helpers';
@@ -212,9 +211,8 @@ export function useDeliberationFlow(initialQuestion = "", textareaRef, onNavigat
       }
       LOG.mode(getRunMode());
 
-      const userId = ensureUserId();
       showFloatTip('演 · 起卦中……');
-      const session = await startDeliberation(q, userId);
+      const session = await startDeliberation(q);
       const sessionId = session?.sessionId || ('ls_' + Date.now().toString(36));
       setDeliberationSessionId(sessionId);
 
@@ -230,7 +228,7 @@ export function useDeliberationFlow(initialQuestion = "", textareaRef, onNavigat
         setYanMemories(session.memory);
       }
       try {
-        const mems = await getMemories(userId);
+        const mems = await getMemories();
         if (mems && mems.length > 0) {
           setYanMemories(prev => [...mems, ...(prev || [])].slice(0, 20));
         }

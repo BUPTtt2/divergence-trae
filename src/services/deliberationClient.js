@@ -5,8 +5,9 @@
  * 依据: docs/REAL_AGENT_ARCHITECTURE.md 6.3 节 / docs/REAL_AGENT_FEASIBILITY.md 第 4 节
  */
 
-import { getCurrentUserIdSync } from './baseConfig.js';
+import { getAccessToken, refreshAccessToken } from './auth.js';
 import { probeDeliberationHealth } from './deliberationHealth.js';
+import { openAuthenticatedSse } from './sseStream.js';
 import {
   createExecuteRequest,
   normalizeExecuteResponse,
@@ -100,6 +101,17 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
     });
   }
 
+  const accessToken = getAccessToken();
+  if (!accessToken) {
+    const error = new Error('AUTH_REQUIRED');
+    error.code = 'AUTH_REQUIRED';
+    error.status = 401;
+    throw error;
+  }
+  const headers = new Headers(init.headers || {});
+  headers.set('Authorization', `Bearer ${accessToken}`);
+  const authenticatedInit = { ...init, headers };
+
   // 已有缓存 base → 直接尝试（快路径）
   const candidates = _cachedBase
     ? [_cachedBase, ...BASE_CANDIDATES.filter(b => b !== _cachedBase)]
@@ -110,8 +122,8 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
     const base = candidates[i];
     const url = `${base}${path}`;
     try {
-      CLOG.fetch(init?.method || 'GET', path);
-      const resp = await fetch(url, init);
+      CLOG.fetch(authenticatedInit.method || 'GET', path);
+      const resp = await fetch(url, authenticatedInit);
       if (resp.ok) {
         // 记住第一个可用 base（加速后续请求）
         if (!_cachedBase || _cachedBase !== base) _persistBase(base);
@@ -137,7 +149,8 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
       }
       // 5xx：继续 fallback
     } catch (e) {
-      CLOG.error(init?.method, path, e);
+      CLOG.error(authenticatedInit.method, path, e);
+      if (e?.status >= 400 && e.status < 500) throw e;
       // 网络错误 / CORS / 拒绝连接：继续 fallback
       errors.push(`[${base || '/'}] ${e.message || 'NetworkError'}`);
     }
@@ -160,14 +173,13 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
  * 发起推演
  * POST /api/deliberation/start
  * @param {string} question
- * @param {string} userId
  * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
-export async function startDeliberation(question, userId) {
+export async function startDeliberation(question) {
   const resp = await _deliberationFetch('/api/deliberation/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, userId }),
+    body: JSON.stringify({ question }),
   });
   const data = await resp.json().catch(() => ({}));
   // LOCAL_FULL：如果返回内容是空 mock，就补一个明确的 state 给调用方识别
@@ -241,15 +253,11 @@ export async function getDeliberation(sessionId) {
 
 /**
  * 拉取历史记忆（long-term memory）
- * GET /api/deliberation/memories?userId=xxx
+ * GET /api/deliberation/memories
  */
-export async function getMemories(userId) {
+export async function getMemories() {
   try {
-    const resp = await _deliberationFetch(
-      `/api/deliberation/memories?userId=${encodeURIComponent(userId)}`,
-      {},
-      { throwOnError: false }
-    );
+    const resp = await _deliberationFetch('/api/deliberation/memories', {}, { throwOnError: false });
     const body = resp.json ? await resp.json().catch(() => ({})) : {};
     return Array.isArray(body?.memories) ? body.memories : [];
   } catch (e) {
@@ -260,15 +268,11 @@ export async function getMemories(userId) {
 
 /**
  * 获取用户自定义智囊（advisors）
- * GET /api/deliberation/advisors?userId=xxx
+ * GET /api/deliberation/advisors
  */
-export async function getAdvisors(userId) {
+export async function getAdvisors() {
   try {
-    const resp = await _deliberationFetch(
-      `/api/deliberation/advisors?userId=${encodeURIComponent(userId)}`,
-      {},
-      { throwOnError: false }
-    );
+    const resp = await _deliberationFetch('/api/deliberation/advisors', {}, { throwOnError: false });
     const body = resp.json ? await resp.json().catch(() => ({})) : {};
     return Array.isArray(body?.advisors) ? body.advisors : [];
   } catch (e) {
@@ -281,11 +285,11 @@ export async function getAdvisors(userId) {
  * 新建自定义智囊
  * POST /api/deliberation/advisors
  */
-export async function createAdvisor(advisor, userId) {
+export async function createAdvisor(advisor) {
   const resp = await _deliberationFetch('/api/deliberation/advisors', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ advisor, userId }),
+    body: JSON.stringify(advisor),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error || `创建智囊失败: ${resp.status}`);
@@ -296,11 +300,11 @@ export async function createAdvisor(advisor, userId) {
  * 更新自定义智囊
  * PUT /api/deliberation/advisors/:id
  */
-export async function updateAdvisor(id, patch, userId) {
+export async function updateAdvisor(id, patch) {
   const resp = await _deliberationFetch(`/api/deliberation/advisors/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ patch, userId }),
+    body: JSON.stringify(patch),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error || `更新智囊失败: ${resp.status}`);
@@ -311,11 +315,10 @@ export async function updateAdvisor(id, patch, userId) {
  * 删除自定义智囊
  * DELETE /api/deliberation/advisors/:id
  */
-export async function deleteAdvisor(id, userId) {
+export async function deleteAdvisor(id) {
   const resp = await _deliberationFetch(`/api/deliberation/advisors/${id}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId }),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error || `删除智囊失败: ${resp.status}`);
@@ -379,7 +382,8 @@ export async function resumeStream(sessionId) {
    带 LOCAL_FULL 短路：完全本地模式下，直接走 onOpen 然后不发任何事件。
 ============================================================ */
 export function subscribeDeliberationStream(sessionId, callbacks) {
-  const { onEvent, onAdvisorSpeak, onStateChange, onObservation, onError, onOpen, onClose } = callbacks || {};
+  const handlers = typeof callbacks === 'function' ? { onEvent: callbacks } : (callbacks || {});
+  const { onEvent, onAdvisorSpeak, onStateChange, onObservation, onError, onOpen, onClose } = handlers;
 
   // LOCAL_FULL：不连真实 SSE，立即给 onOpen + onClose 都发，避免逻辑挂住
   if (RUN_MODE === 'LOCAL_FULL') {
@@ -393,44 +397,65 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
   }
 
   let alive = true;
+  let activeStream = null;
+  let reconnectTimer = null;
+  let readyState = 0;
   const base = _cachedBase || BASE_CANDIDATES[0];
   const url = `${base}/api/deliberation/${sessionId}/events`;
-  let es;
-  try {
-    es = new EventSource(url, { withCredentials: false });
-  } catch (e) {
-    // EventSource 不支持同源构造失败，尝试 alt base
-    const altBase = BASE_CANDIDATES.find(b => b !== base) || BASE_CANDIDATES[0];
-    const altUrl = `${altBase}/api/deliberation/${sessionId}/events`;
-    es = new EventSource(altUrl, { withCredentials: false });
-  }
-  es.onopen = () => { if (alive) onOpen && onOpen(); };
-  es.onmessage = (ev) => {
-    if (!alive) return;
-    try {
-      const data = JSON.parse(ev.data || '{}');
-      onEvent && onEvent(data);
-      if (data?.type === 'advisor_speak' && onAdvisorSpeak) onAdvisorSpeak(data.payload || data);
-      if (data?.type === 'state_change' && onStateChange) onStateChange(data.payload || data);
-      if (data?.type === 'observation' && onObservation) onObservation(data.payload || data);
-      if (data?.type === 'error' && onError) onError(data.payload || data);
-    } catch (e) {
-      console.warn('[SSE] 解析事件失败:', ev.data, e);
-    }
+
+  const dispatch = (event) => {
+    onEvent?.(event);
+    const payload = event?.data || event?.payload || event;
+    if (event?.type === 'ADVISOR_SPEAK') onAdvisorSpeak?.(payload);
+    if (event?.type === 'STATE_CHANGE') onStateChange?.(payload);
+    if (event?.type === 'OBSERVATION') onObservation?.(payload);
+    if (event?.type === 'ERROR') onError?.(payload);
   };
-  es.onerror = (err) => {
+
+  const connect = (attempt = 0) => {
     if (!alive) return;
-    // 连接异常：自动关闭，交给上层 fallback
-    console.warn('[SSE] 连接异常，关闭流:', err);
-    onError && onError(err);
-    try { es.close(); } catch {}
-    onClose && onClose();
+    const token = getAccessToken();
+    activeStream = openAuthenticatedSse({
+      url,
+      token,
+      onEvent: dispatch,
+      onOpen: () => {
+        readyState = 1;
+        onOpen?.();
+      },
+      onError: async (error) => {
+        if (!alive) return;
+        if (error?.code === 'AUTH_REQUIRED') {
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) {
+            onError?.(error);
+            return;
+          }
+        } else if (error?.status === 404) {
+          onError?.(error);
+          return;
+        }
+      },
+      onClose: () => {
+        readyState = 2;
+        if (!alive) return;
+        if (attempt >= 3) {
+          onClose?.();
+          return;
+        }
+        const delay = Math.min(8_000, 1_000 * (2 ** attempt));
+        reconnectTimer = setTimeout(() => connect(attempt + 1), delay);
+      },
+    });
   };
+
+  connect();
   return {
-    get readyState() { return es.readyState; },
+    get readyState() { return readyState; },
     close() {
       alive = false;
-      try { es.close(); } catch {}
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      activeStream?.close();
     },
   };
 }
