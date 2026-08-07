@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/app.js';
+import * as memoryService from '../src/services/memoryService.js';
 
 async function withServer(run) {
   const server = app.listen(0);
@@ -12,11 +13,31 @@ async function withServer(run) {
   }
 }
 
+async function authenticatedSession(base) {
+  const authResponse = await fetch(`${base}/api/auth/anonymous`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  });
+  const auth = await authResponse.json();
+  const session = await memoryService.saveSession({
+    user_id: auth.user.id,
+    question: '契约测试',
+    state: 'WAIT',
+    round: 1,
+  });
+  return { sessionId: session.id, accessToken: auth.accessToken };
+}
+
 test('execute rejects the obsolete context-only payload before loading a session', async () => {
   await withServer(async (base) => {
-    const response = await fetch(`${base}/api/deliberation/missing-session/execute`, {
+    const auth = await authenticatedSession(base);
+    const response = await fetch(`${base}/api/deliberation/${auth.sessionId}/execute`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${auth.accessToken}`,
+      },
       body: JSON.stringify({ context: { round: 1 } }),
     });
 
@@ -27,9 +48,13 @@ test('execute rejects the obsolete context-only payload before loading a session
 
 test('execute rejects non-array agentIds at the HTTP boundary', async () => {
   await withServer(async (base) => {
-    const response = await fetch(`${base}/api/deliberation/missing-session/execute`, {
+    const auth = await authenticatedSession(base);
+    const response = await fetch(`${base}/api/deliberation/${auth.sessionId}/execute`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${auth.accessToken}`,
+      },
       body: JSON.stringify({ actionId: 'act_route_001', agentIds: 'fengyan' }),
     });
 

@@ -24,13 +24,13 @@
  *     GET  /:sessionId/resume        （注意：是 GET 恢复快照，与上面 pause/resume 不同语义）
  *   第四组 · 兜底 GET /:sessionId 读状态（黑名单过滤保留字）
  *
- * 参考 agent.js 范式: Router + asyncHandler + optionalAuth
+ * 参考 agent.js 范式: Router + asyncHandler；业务路由统一要求 verified principal
  * 依据: docs/REAL_AGENT_ARCHITECTURE.md 6.3 节
  */
 
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { requireOwnedDeliberation, requirePrincipal } from '../middleware/principal.js';
 import * as deliberationEngine from '../services/deliberationEngine.js';
 import * as memoryService from '../services/memoryService.js';
 import * as customAdvisorService from '../services/customAdvisorService.js';
@@ -61,7 +61,7 @@ function isReservedSegment(seg) {
  * GET /api/deliberation/health
  * 健康检查（也可用 /health，但这里再暴露一份方便 fallback 探活）
  */
-router.get('/health', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/health', asyncHandler(async (req, res) => {
   res.json({
     status: 'ok',
     service: 'yance-bagua-engine',
@@ -75,13 +75,9 @@ router.get('/health', optionalAuth, asyncHandler(async (req, res) => {
  */
 router.get(
   '/memories',
-  optionalAuth,
+  requirePrincipal,
   asyncHandler(async (req, res) => {
-    const userId = req.query.userId || req.userId;
-    if (!userId) {
-      return res.status(400).json({ error: '缺少 userId 参数' });
-    }
-    const memories = await memoryService.listMemories(userId, 10);
+    const memories = await memoryService.listMemories(req.principal.userId, 10);
     res.json({ memories });
   })
 );
@@ -92,13 +88,9 @@ router.get(
  */
 router.get(
   '/advisors',
-  optionalAuth,
+  requirePrincipal,
   asyncHandler(async (req, res) => {
-    const userId = req.query.userId || req.userId;
-    if (!userId) {
-      return res.status(400).json({ error: '缺少 userId 参数' });
-    }
-    const advisors = await customAdvisorService.listAdvisors(userId);
+    const advisors = await customAdvisorService.listAdvisors(req.principal.userId);
     res.json({ advisors });
   })
 );
@@ -110,13 +102,9 @@ router.get(
  */
 router.post(
   '/advisors',
-  optionalAuth,
+  requirePrincipal,
   asyncHandler(async (req, res) => {
-    const userId = req.body?.userId || req.userId;
-    if (!userId) {
-      return res.status(400).json({ error: '缺少 userId 参数' });
-    }
-    const advisor = await customAdvisorService.createAdvisor(userId, req.body || {});
+    const advisor = await customAdvisorService.createAdvisor(req.principal.userId, req.body || {});
     res.json(advisor);
   })
 );
@@ -128,14 +116,10 @@ router.post(
  */
 router.put(
   '/advisors/:id',
-  optionalAuth,
+  requirePrincipal,
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const userId = req.body?.userId || req.userId;
-    if (!userId) {
-      return res.status(400).json({ error: '缺少 userId 参数' });
-    }
-    const advisor = await customAdvisorService.updateAdvisor(id, userId, req.body || {});
+    const advisor = await customAdvisorService.updateAdvisor(id, req.principal.userId, req.body || {});
     if (!advisor) {
       return res.status(404).json({ error: '智囊不存在或无权修改' });
     }
@@ -150,14 +134,10 @@ router.put(
  */
 router.delete(
   '/advisors/:id',
-  optionalAuth,
+  requirePrincipal,
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const userId = req.body?.userId || req.userId;
-    if (!userId) {
-      return res.status(400).json({ error: '缺少 userId 参数' });
-    }
-    const ok = await customAdvisorService.deleteAdvisor(id, userId);
+    const ok = await customAdvisorService.deleteAdvisor(id, req.principal.userId);
     if (!ok) {
       return res.status(404).json({ error: '智囊不存在或无权删除' });
     }
@@ -172,10 +152,9 @@ router.delete(
  */
 router.post(
   '/start',
-  optionalAuth,
+  requirePrincipal,
   asyncHandler(async (req, res) => {
     const { question } = req.body || {};
-    const userId = req.body?.userId || req.userId;
 
     if (!question || typeof question !== 'string') {
       return res.status(400).json({ error: '缺少 question 参数' });
@@ -183,11 +162,7 @@ router.post(
     if (question.length > 500) {
       return res.status(400).json({ error: '问题过长，请控制在500字以内' });
     }
-    if (!userId) {
-      return res.status(400).json({ error: '缺少 userId 参数' });
-    }
-
-    const result = await deliberationEngine.start(question, userId);
+    const result = await deliberationEngine.start(question, req.principal.userId);
     res.json(result);
   })
 );
@@ -200,7 +175,7 @@ router.post(
  * GET /api/deliberation/:sessionId/events
  * SSE 端点 — 前端订阅推演事件流
  */
-router.get('/:sessionId/events', async (req, res, next) => {
+router.get('/:sessionId/events', requirePrincipal, requireOwnedDeliberation, async (req, res, next) => {
   const { sessionId } = req.params;
   if (isReservedSegment(sessionId)) { return next('route'); }
   if (!sessionId) {
@@ -212,7 +187,6 @@ router.get('/:sessionId/events', async (req, res, next) => {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
     'X-Accel-Buffering': 'no',
   });
 
@@ -254,7 +228,8 @@ router.get('/:sessionId/events', async (req, res, next) => {
  */
 router.get(
   '/:sessionId/clarify',
-  optionalAuth,
+  requirePrincipal,
+  requireOwnedDeliberation,
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -304,7 +279,8 @@ router.get(
  */
 router.post(
   '/:sessionId/answer',
-  optionalAuth,
+  requirePrincipal,
+  requireOwnedDeliberation,
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -321,7 +297,8 @@ router.post(
  */
 router.post(
   '/:sessionId/execute',
-  optionalAuth,
+  requirePrincipal,
+  requireOwnedDeliberation,
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -346,7 +323,8 @@ router.post(
  */
 router.post(
   '/:sessionId/commit',
-  optionalAuth,
+  requirePrincipal,
+  requireOwnedDeliberation,
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -364,7 +342,8 @@ router.post(
  */
 router.post(
   '/:sessionId/pause',
-  optionalAuth,
+  requirePrincipal,
+  requireOwnedDeliberation,
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -381,7 +360,8 @@ router.post(
  */
 router.post(
   '/:sessionId/resume',
-  optionalAuth,
+  requirePrincipal,
+  requireOwnedDeliberation,
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -400,7 +380,8 @@ router.post(
  */
 router.post(
   '/:sessionId/snapshot',
-  optionalAuth,
+  requirePrincipal,
+  requireOwnedDeliberation,
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -427,7 +408,8 @@ router.post(
  */
 router.get(
   '/:sessionId/resume',
-  optionalAuth,
+  requirePrincipal,
+  requireOwnedDeliberation,
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -452,7 +434,8 @@ router.get(
  */
 router.get(
   '/:sessionId',
-  optionalAuth,
+  requirePrincipal,
+  requireOwnedDeliberation,
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
 
