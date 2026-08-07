@@ -123,6 +123,19 @@ function mergeAnswersToContext(question, answers) {
   return text ? `${question} ${text}`.trim() : question;
 }
 
+function sessionNotFoundError() {
+  const error = new Error('SESSION_NOT_FOUND');
+  error.code = 'SESSION_NOT_FOUND';
+  return error;
+}
+
+export async function assertSessionOwner(sessionId, verifiedUserId) {
+  const userId = String(verifiedUserId || '').trim();
+  const session = userId ? await memoryService.getSession(sessionId) : null;
+  if (!session || session.user_id !== userId) throw sessionNotFoundError();
+  return session;
+}
+
 // ============ 主入口 ============
 
 /**
@@ -315,13 +328,10 @@ function _fallbackPlanResult(session, errorMsg = '') {
  * @param {Array} answers 用户回答数组
  * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
-export async function answer(sessionId, answers) {
+export async function answer(sessionId, answers, executionCtx = {}) {
   logger.info('[Deliberation] answer 收到', { sessionId, answerCount: Array.isArray(answers) ? answers.length : 0 });
 
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
-  }
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
 
   // round 从持久化的 plan.round 读取，+1 进入下一轮判定
   const prevRound = Number((session.plan && session.plan.round) || session.round) || 1;
@@ -377,10 +387,7 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
   const actionId = String(executionCtx.actionId || '').trim();
   logger.info('[Deliberation] execute 开始', { sessionId, agentIds, actionId });
 
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
-  }
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
 
   // === ★ P0 守卫：澄清未完成绝不允许启动 ReAct 循环（之前前端 SSE 抢跑 EXECUTE → DELIBERATE，就靠这一条后端双保险）
   const askUser = session.askUser || (session.plan && session.plan.askUser) || [];
@@ -612,16 +619,13 @@ function buildExecuteResponse(sessionId, result) {
  * @param {string} feedback 用户反馈
  * @returns {Promise<{sessionId, fateTicket, memoryUpdated}>}
  */
-export async function commit(sessionId, choice, feedback) {
+export async function commit(sessionId, choice, feedback, executionCtx = {}) {
   logger.info('[Deliberation] commit 收到', { sessionId, choice, feedback: (feedback || '').slice(0, 60) });
+
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
 
   eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'ORACLE', to: 'COMMIT', choice } });
   eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'commit', thought: `演·落印：用户选择「${choice}」` } });
-
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
-  }
 
   // 记录抉择（写入 session 供 consolidate 提取）
   try {
@@ -767,12 +771,8 @@ function generateFateTicket(session, choice, feedback) {
  * @param {string} sessionId
  * @returns {Promise<object|null>} 数据契约响应对象
  */
-export async function getState(sessionId) {
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    logger.warn('[Deliberation] getState 会话不存在', { sessionId });
-    return null;
-  }
+export async function getState(sessionId, executionCtx = {}) {
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
   return buildResponseFromSession(session);
 }
 
@@ -833,7 +833,7 @@ export async function selfTest() {
   }
 
   // 验证 getState 读回完整字段
-  const restored = await getState(result.sessionId);
+  const restored = await getState(result.sessionId, { userId });
   if (!restored || restored.sessionId !== result.sessionId) {
     throw new Error(`selfTest 失败：getState 读回异常 restored=${JSON.stringify(restored?.sessionId)}`);
   }
@@ -880,13 +880,10 @@ export async function selfTest() {
  * @param {string} reason 暂停原因（user_disconnected/user_paused/system）
  * @returns {Promise<{sessionId, paused, reason, previousState}>}
  */
-export async function pause(sessionId, reason = 'user_paused') {
+export async function pause(sessionId, reason = 'user_paused', executionCtx = {}) {
   logger.info('[Deliberation] pause', { sessionId, reason });
 
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
-  }
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
 
   // 终态不可暂停
   const terminalStates = [STATES.COMMIT, STATES.FAILED];
@@ -927,13 +924,10 @@ export async function pause(sessionId, reason = 'user_paused') {
  * @param {string} sessionId
  * @returns {Promise<{sessionId, resumed, state, previousState, canContinue}>}
  */
-export async function resume(sessionId) {
+export async function resume(sessionId, executionCtx = {}) {
   logger.info('[Deliberation] resume', { sessionId });
 
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
-  }
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
 
   if (session.state !== STATES.PAUSED) {
     logger.info('[Deliberation] resume 跳过（非暂停态）', { sessionId, state: session.state });

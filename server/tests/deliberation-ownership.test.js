@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import app from '../src/app.js';
 import * as memoryService from '../src/services/memoryService.js';
+import { query } from '../src/services/db.js';
 
 async function withServer(run) {
   const server = app.listen(0);
@@ -128,5 +129,63 @@ test('event stream authenticates before sending CONNECTED', async () => {
     controller.abort();
     const text = new TextDecoder().decode(first.value);
     assert.match(text, /"type":"CONNECTED"/);
+  });
+});
+
+test('memories and custom advisors are scoped to the signed principal', async () => {
+  await withServer(async (base) => {
+    const owner = await createAnonymous(base);
+    const intruder = await createAnonymous(base);
+    await query({
+      table: 'user_memory',
+      action: 'insert',
+      data: {
+        id: `memory_${Date.now()}`,
+        user_id: owner.user.id,
+        content: '仅属于 owner 的记忆',
+        memory_type: 'preference',
+        importance: 5,
+      },
+    });
+
+    const ownerMemories = await jsonRequest(base, '/api/deliberation/memories?userId=forged', {
+      token: owner.accessToken,
+    });
+    const intruderMemories = await jsonRequest(base, `/api/deliberation/memories?userId=${owner.user.id}`, {
+      token: intruder.accessToken,
+    });
+    assert.equal(ownerMemories.body.memories.some((item) => item.content === '仅属于 owner 的记忆'), true);
+    assert.equal(intruderMemories.body.memories.some((item) => item.content === '仅属于 owner 的记忆'), false);
+
+    const created = await jsonRequest(base, '/api/deliberation/advisors', {
+      method: 'POST',
+      token: owner.accessToken,
+      body: {
+        name: '隔离测试智囊',
+        persona: '只为 owner 服务',
+        perspective: 'risk',
+        userId: intruder.user.id,
+      },
+    });
+    assert.equal(created.status, 200);
+    assert.equal(created.body.user_id, owner.user.id);
+
+    const intruderList = await jsonRequest(base, `/api/deliberation/advisors?userId=${owner.user.id}`, {
+      token: intruder.accessToken,
+    });
+    assert.equal(intruderList.body.advisors.some((item) => item.id === created.body.id), false);
+
+    const update = await jsonRequest(base, `/api/deliberation/advisors/${created.body.id}`, {
+      method: 'PUT',
+      token: intruder.accessToken,
+      body: { name: '越权修改', userId: owner.user.id },
+    });
+    const remove = await jsonRequest(base, `/api/deliberation/advisors/${created.body.id}`, {
+      method: 'DELETE',
+      token: intruder.accessToken,
+      body: { userId: owner.user.id },
+    });
+    assert.equal(update.status, 404);
+    assert.equal(remove.status, 404);
   });
 });

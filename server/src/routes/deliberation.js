@@ -210,7 +210,9 @@ router.get('/:sessionId/events', requirePrincipal, requireOwnedDeliberation, asy
     if (!paused) {
       paused = true;
       setTimeout(() => {
-        deliberationEngine.pause(sessionId, 'user_disconnected').catch(() => {});
+        deliberationEngine.pause(sessionId, 'user_disconnected', {
+          userId: req.principal.userId,
+        }).catch(() => {});
       }, 5000);
     }
   });
@@ -234,7 +236,7 @@ router.get(
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
-    const session = await deliberationEngine.getState(sessionId);
+    const session = await deliberationEngine.getState(sessionId, { userId: req.principal.userId });
     if (!session) return res.status(404).json({ error: `会话不存在: ${sessionId}` });
 
     const st = session.state || {};
@@ -286,7 +288,9 @@ router.post(
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
     const { answers } = req.body || {};
-    const result = await deliberationEngine.answer(sessionId, answers || []);
+    const result = await deliberationEngine.answer(sessionId, answers || [], {
+      userId: req.principal.userId,
+    });
     res.json(result);
   })
 );
@@ -331,7 +335,9 @@ router.post(
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
     const { choice, feedback } = req.body || {};
     if (!choice) return res.status(400).json({ error: '缺少 choice 参数' });
-    const result = await deliberationEngine.commit(sessionId, choice, feedback || '');
+    const result = await deliberationEngine.commit(sessionId, choice, feedback || '', {
+      userId: req.principal.userId,
+    });
     res.json(result);
   })
 );
@@ -349,7 +355,9 @@ router.post(
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
     const { reason } = req.body || {};
-    const result = await deliberationEngine.pause(sessionId, reason || 'user_paused');
+    const result = await deliberationEngine.pause(sessionId, reason || 'user_paused', {
+      userId: req.principal.userId,
+    });
     res.json(result);
   })
 );
@@ -366,7 +374,7 @@ router.post(
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
-    const result = await deliberationEngine.resume(sessionId);
+    const result = await deliberationEngine.resume(sessionId, { userId: req.principal.userId });
     if (result.state === 'FAILED') {
       return res.status(410).json({ error: result.reason || '暂停超时', ...result });
     }
@@ -387,7 +395,7 @@ router.post(
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
     const { phase, inference, activeAgents, selectedAgentIds, agentDialogues } = req.body || {};
-    const session = await deliberationEngine.getState(sessionId);
+    const session = await deliberationEngine.getState(sessionId, { userId: req.principal.userId });
     if (!session) return res.status(404).json({ error: `会话不存在: ${sessionId}` });
     session.snapshot = {
       phase,
@@ -414,7 +422,7 @@ router.get(
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
-    const session = await deliberationEngine.getState(sessionId);
+    const session = await deliberationEngine.getState(sessionId, { userId: req.principal.userId });
     if (!session) return res.status(404).json({ error: `会话不存在: ${sessionId}` });
     if (session.snapshot) {
       res.json({ snapshot: session.snapshot, session });
@@ -447,7 +455,7 @@ router.get(
       return res.status(400).json({ error: '缺少 sessionId 参数' });
     }
 
-    const session = await deliberationEngine.getState(sessionId);
+    const session = await deliberationEngine.getState(sessionId, { userId: req.principal.userId });
     if (!session) {
       return res.status(404).json({ error: `会话不存在: ${sessionId}` });
     }
