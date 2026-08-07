@@ -5,7 +5,7 @@
  *   1. aggregateFindings: 聚合智囊发现 → 按 perspective 分组，提炼立场/强度
  *   2. detectConflicts: 矛盾检测 → 同维度立场对立 / 跨维度对立
  *   3. checkCoverage: 维度覆盖检查 → 找出 plan.dimensions 中无 finding 的维度
- *   4. mapToHexagram: 立卦 → 维度强弱映射八卦阴阳爻 → 主卦/变卦/互卦
+ *   4. mapToHexagram: 立卦 → 已验证/未知/冲突映射六爻 → 主卦/变卦/互卦
  *   5. reflect: 总入口 → 决定 重规划/补维度/立卦
  *
  * 状态流转:
@@ -25,10 +25,21 @@
 import logger from './logger.js';
 import { callLLM } from './llmRouter.js';
 import * as agentEngine from './agentEngine.js';
+import {
+  createCognitivePerturbationPlan,
+  createLensImpactRecords,
+} from './cognitivePerturbationService.js';
 
 // ============ 常量 ============
 
 const MAX_REPLAN = 1;
+const FORBIDDEN_ORACLE_VERDICT = /(?:吉|凶|可进|宜止|利动|不利守|时机未到|立即执行|批准执行|命运)/;
+const LOCKED_INVARIANTS = Object.freeze({
+  evidenceLocked: true,
+  riskLocked: true,
+  approvalLocked: true,
+  userDecisionLocked: true,
+});
 
 // 八卦维度映射（对齐 REAL_AGENT_ARCHITECTURE.md 5.2 节）
 const PERSPECTIVE_TO_TRIGRAM = {
@@ -194,27 +205,29 @@ export function checkCoverage(dimensions, findings) {
 // ============ 4. 立卦 ============
 
 /**
- * 根据各维度强弱生成主卦/变卦/互卦
+ * 根据各维度的知识状态生成主卦/变卦/互卦
  *
- * 算法（简化版，确定性映射，非随机起卦）:
+ * 算法（确定性映射，非随机起卦）:
  *   - 从 plan.dimensions 取最多6个维度，按顺序对应6爻（初爻→上爻）
- *   - 每维度 avgIntensity:
- *       > 0.6  → 阳爻 (1)
- *       < 0.4  → 阴爻 (0)
- *       0.4-0.6 → 动爻（阳变阴或阴变阳，记为动）
+ *   - 已验证且稳定的事实 → 阳爻 (1)
+ *   - 未验证、缺失或两可的信息 → 阴爻 (0)
+ *   - 同一维度的冲突 → 动爻（只表示反转变量）
  *   - 主卦: 6 爻组合
  *   - 变卦: 动爻阴阳互换后的 6 爻
  *   - 互卦: 取主卦 2,3,4 爻为下卦，3,4,5 爻为上卦
  *
  * @param {Object} aggregated aggregateFindings 的结果
  * @param {Array} dimensions plan.dimensions
+ * @param {Object} knowledgeContext conflicts/gaps
  * @returns {Object} { primary: {lines, trigrams}, changed: {...}, mutual: {...}, dynamics: [动爻位] }
  */
-export function mapToHexagram(aggregated, dimensions) {
+export function mapToHexagram(aggregated, dimensions, knowledgeContext = {}) {
   const safeDims = Array.isArray(dimensions) ? dimensions.slice(0, 6) : [];
-  const { byPerspective } = aggregated;
+  const byPerspective = aggregated?.byPerspective || {};
+  const conflicts = Array.isArray(knowledgeContext.conflicts) ? knowledgeContext.conflicts : [];
+  const gaps = Array.isArray(knowledgeContext.gaps) ? knowledgeContext.gaps : [];
 
-  // 生成6爻（不足6个维度时用默认值0.5）
+  // 生成6爻：已验证事实=阳，未知/缺失=阴，冲突=动爻。
   const lines = []; // 0=阴 1=阳
   const dynamics = []; // 动爻位置（0-5）
   const lineMeta = []; // 每爻的维度信息
@@ -223,20 +236,20 @@ export function mapToHexagram(aggregated, dimensions) {
     const dim = safeDims[i];
     const perspective = dim?.perspective || `pos_${i}`;
     const data = byPerspective[perspective];
-    const intensity = data ? data.avgIntensity : 0.5;
-
-    let isYang;
-    if (intensity > 0.6) {
-      isYang = true;
-    } else if (intensity < 0.4) {
-      isYang = false;
-    } else {
-      // 中间区 → 动爻：强度偏高取阳动，偏低取阴动
-      isYang = intensity >= 0.5;
-      dynamics.push(i);
-    }
+    const knowledgeState = resolveKnowledgeState(perspective, data, conflicts, gaps);
+    const isDynamic = knowledgeState === 'contested';
+    // 冲突只表示可能反转，以爻位奇偶稳定选择当前爻，不使用立场或强度裁决。
+    const isYang = knowledgeState === 'verified' || (isDynamic && i % 2 === 0);
+    if (isDynamic) dynamics.push(i);
     lines.push(isYang ? 1 : 0);
-    lineMeta.push({ position: i, perspective, intensity, isYang, isDynamic: dynamics.includes(i) });
+    lineMeta.push({
+      position: i,
+      perspective,
+      knowledgeState,
+      isYang,
+      isDynamic,
+      findingCount: Array.isArray(data?.findings) ? data.findings.length : 0,
+    });
   }
 
   // 主卦：下卦（初二三）+ 上卦（四五上）
@@ -255,7 +268,7 @@ export function mapToHexagram(aggregated, dimensions) {
     changed: changed.lines.join(''),
     mutual: mutual.lines.join(''),
     dynamics,
-    lineMeta: lineMeta.map((m) => `${m.perspective}:${m.intensity.toFixed(2)}(${m.isYang ? '阳' : '阴'}${m.isDynamic ? '动' : ''})`),
+    lineMeta: lineMeta.map((m) => `${m.perspective}:${m.knowledgeState}(${m.isYang ? '阳' : '阴'}${m.isDynamic ? '动' : ''})`),
   });
 
   return {
@@ -265,6 +278,31 @@ export function mapToHexagram(aggregated, dimensions) {
     dynamics,
     lineMeta,
   };
+}
+
+function conflictCoversPerspective(conflict, perspective) {
+  if (!conflict || !perspective) return false;
+  if (Array.isArray(conflict.perspectives) && conflict.perspectives.includes(perspective)) return true;
+  const value = String(conflict.perspective || '');
+  return value === perspective || value.split(/\s+vs\s+|[,/]/).map((part) => part.trim()).includes(perspective);
+}
+
+function isVerifiedFinding(finding) {
+  return finding?.evidenceStatus === 'accepted'
+    || finding?.evidenceStatus === 'verified'
+    || finding?.status === 'accepted'
+    || finding?.verified === true
+    || finding?.evidence?.accepted === true;
+}
+
+function resolveKnowledgeState(perspective, data, conflicts, gaps) {
+  if (conflicts.some((conflict) => conflictCoversPerspective(conflict, perspective))) return 'contested';
+  if (gaps.some((gap) => gap?.perspective === perspective)) return 'unknown';
+
+  const findings = Array.isArray(data?.findings) ? data.findings.filter(Boolean) : [];
+  if (findings.length === 0) return 'unknown';
+  if (findings.some((finding) => finding.evidenceStatus === 'contested')) return 'contested';
+  return findings.every(isVerifiedFinding) ? 'verified' : 'unknown';
 }
 
 /**
@@ -297,88 +335,66 @@ function matchTrigram(lines3) {
   return { name: '?', symbol: '?', perspective: 'unknown' };
 }
 
-// ============ 5. LLM 卦辞生成（可选增强） ============
+// ============ 5. 审查镜头说明（LLM 只做可选白话转述） ============
 
 /**
- * 调 LLM 生成卦辞与建议（失败降级为聚合摘要）
+ * 调 LLM 将确定性审查说明转成白话（失败或出现裁决词则回退原说明）
  * @param {Object} oracle mapToHexagram 结果
- * @param {Object} aggregated
  * @param {string} question
  * @returns {Promise<string>} 卦辞文本
  */
-async function generateOracleText(oracle, aggregated, question) {
-  const dimSummary = Object.entries(aggregated.byPerspective)
-    .map(([p, d]) => `${p}(${d.overallStance},${d.avgIntensity.toFixed(2)})`)
-    .join(' ');
-
+async function generateOracleText(oracle, question, callLLMFn = callLLM) {
   const primaryName = `${oracle.primary.lower.name}${oracle.primary.upper.name}`;
   const changedName = `${oracle.changed.lower.name}${oracle.changed.upper.name}`;
   const dynamicStr = oracle.dynamics.length > 0
     ? `${oracle.dynamics.map((i) => i + 1).join('、')}爻动`
     : '无动爻';
-
-  const stances = Object.entries(aggregated.byPerspective);
-  const posCount = stances.filter(([, d]) => d.overallStance === 'positive').length;
-  const negCount = stances.filter(([, d]) => d.overallStance === 'negative').length;
-  const allFindings = stances.map(([p, d]) => {
-    const findingTexts = d.findings.map(f => f.content || f.text || '').filter(Boolean).slice(0, 2);
-    return `${p}(${d.overallStance === 'positive' ? '吉' : d.overallStance === 'negative' ? '凶' : '平'}): ${findingTexts.join('；')}`;
-  }).join(' | ');
+  const stateCounts = oracle.lineMeta.reduce((counts, line) => {
+    counts[line.knowledgeState] += 1;
+    return counts;
+  }, { verified: 0, unknown: 0, contested: 0 });
+  const fallback = `【${primaryName}】本轮审查镜头由${stateCounts.verified}项已验证、${stateCounts.unknown}项未知和${stateCounts.contested}项冲突构成。${dynamicStr}，备选镜头为${changedName}。请逐项补证并检查反转变量；事实、风险与审批边界保持不变。`;
 
   try {
     const result = await Promise.race([
-      callLLM(
+      callLLMFn(
         [
           {
             role: 'system',
-            content: `你是「演」的卦象解读。用文言八卦风格解读卦象，赛博算命感。
-格式要求：
-1. 开头用"【${primaryName}卦】"
-2. 简述各维度吉凶（2-3句）
-3. 核心判断（1-2句，如"此卦利动不利守"或"时机未到"）
-4. 一句卦辞总结（仿周易风格，7-14字）
-5. 结尾用"⚠️"标注注意事项
-字数控制在80-120字。`,
+            content: '你只负责把给定的审查镜头说明转成简洁白话。不得增加事实、行动建议、命运判断、风险结论或审批意见；不得使用吉凶、可进、宜止等裁决表达。',
           },
           {
             role: 'user',
-            content: `问题：${question}
-主卦：${primaryName}（${dynamicStr}）
-变卦：${changedName}
-维度分析：${dimSummary}
-吉凶统计：吉${posCount}/凶${negCount}
-智囊发现：${allFindings}
-
-请解读此卦。`,
+            content: `问题主题：${String(question || '').slice(0, 120)}\n待转述说明：${fallback}`,
           },
         ],
-        { maxTokens: 200, temperature: 0.8 }
+        { maxTokens: 200, temperature: 0.2 }
       ),
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000)),
     ]);
 
-    if (result && result.trim()) {
-      logger.info(`[OracleText] LLM生成成功`);
-      return result.trim();
+    const paraphrase = typeof result === 'string' ? result.trim() : '';
+    if (paraphrase && !FORBIDDEN_ORACLE_VERDICT.test(paraphrase)) {
+      logger.info('[OracleText] LLM白话转述成功');
+      return paraphrase.includes('审查镜头') ? paraphrase : `本轮审查镜头：${paraphrase}`;
     }
+    if (paraphrase) logger.warn('[OracleText] LLM转述含裁决词，改用规则说明');
   } catch (e) {
-    logger.info(`[OracleText] LLM超时/失败, 降级模板: ${e.message}`);
+    logger.info(`[OracleText] LLM超时/失败，改用规则说明: ${e.message}`);
   }
 
-  // 降级：规则生成
-  let interpretation;
-  if (posCount > negCount) {
-    interpretation = '诸象偏吉，机不可失，然需防盛极而衰。';
-  } else if (negCount > posCount) {
-    interpretation = '诸象偏凶，宜守不宜进，静待时机。';
-  } else {
-    interpretation = '吉凶参半，需权衡利弊，顺势而为。';
-  }
-  const advice = oracle.dynamics.length > 0
-    ? `动爻在${oracle.dynamics.map((i) => i + 1).join('、')}位，变机已现，${posCount >= negCount ? '可进' : '宜止'}。`
-    : '无动爻，局势稳定，从长计议。';
+  return fallback;
+}
 
-  return `${primaryName}·${dynamicStr}。${interpretation}${advice}`;
+function disabledCognitivePlan(error) {
+  return {
+    status: 'disabled',
+    reason: 'lens-unavailable',
+    message: '本轮未进行认知扰动',
+    detail: String(error?.message || 'unknown').slice(0, 120),
+    reviewTasks: [],
+    invariants: { ...LOCKED_INVARIANTS },
+  };
 }
 
 // ============ 6. 总入口 ============
@@ -390,12 +406,12 @@ async function generateOracleText(oracle, aggregated, question) {
  *   1. 聚合 findings
  *   2. 矛盾检测 → 有矛盾且可重规划 → state=PLAN
  *   3. 覆盖检查 → 有缺口且可重规划 → 补维度, state=EXECUTE
- *   4. 立卦 + 生成卦辞 → state=ORACLE
+ *   4. 立卦 + 生成认知扰动计划 + 中性说明 → state=ORACLE
  *
  * @param {object} session 推演会话（需含 plan.dimensions, findings, replan_count）
  * @returns {Promise<{session, oracle, conflicts, gaps, aggregated, replanned}>}
  */
-export async function reflect(session) {
+export async function reflect(session, dependencies = {}) {
   logger.info('[Reflector] reflect 开始', {
     sessionId: session?.id,
     findingsCount: (session?.findings || []).length,
@@ -455,10 +471,35 @@ export async function reflect(session) {
   }
 
   // 4. 立卦
-  const oracle = mapToHexagram(aggregated, dimensions);
-  oracle.text = await generateOracleText(oracle, aggregated, session?.question || '');
+  const oracle = mapToHexagram(aggregated, dimensions, { conflicts, gaps });
   oracle.conflicts = conflicts;
   oracle.gaps = gaps;
+
+  const createPlan = dependencies.createCognitivePerturbationPlanFn || createCognitivePerturbationPlan;
+  const createImpacts = dependencies.createLensImpactRecordsFn || createLensImpactRecords;
+  let cognitivePlan;
+  let lensImpacts;
+  try {
+    cognitivePlan = createPlan({
+      oracle,
+      findings,
+      conflicts,
+      gaps,
+      dimensions,
+      sessionSeed: session?.sessionSeed ?? session?.seed ?? session?.id,
+    });
+    lensImpacts = createImpacts(cognitivePlan, findings);
+  } catch (error) {
+    logger.warn('[Reflector] Lens 失败，不阻断基础推演', { sessionId: session?.id, error: error.message });
+    cognitivePlan = disabledCognitivePlan(error);
+    lensImpacts = [];
+  }
+
+  oracle.text = await generateOracleText(
+    oracle,
+    session?.question || '',
+    dependencies.callLLMFn || callLLM,
+  );
 
   // P1-1：基于智囊发现，LLM动态生成抉择选项（不再固定4个）
   let dynamicChoices = [];
@@ -471,12 +512,16 @@ export async function reflect(session) {
       if (!dialogueHistory[f.agentId]) dialogueHistory[f.agentId] = [];
       if (f.content) dialogueHistory[f.agentId].push(f.content);
     });
-    const ms = await agentEngine.generateMasterSummary(
+    const generateMasterSummary = dependencies.generateMasterSummaryFn || agentEngine.generateMasterSummary;
+    const ms = await generateMasterSummary(
       session?.questionContext || session?.question || '',
       agentIds,
       dialogueHistory
     );
-    if (ms && Array.isArray(ms.options) && ms.options.length > 0) {
+    const generatedSummary = JSON.stringify({ summary: ms?.summary || '', options: ms?.options || [] });
+    if (FORBIDDEN_ORACLE_VERDICT.test(generatedSummary)) {
+      logger.warn('[Reflector] 动态总结含裁决词，本轮不展示该生成内容', { sessionId: session?.id });
+    } else if (ms && Array.isArray(ms.options) && ms.options.length > 0) {
       // 映射成前端Game.jsx需要的 {id,label,color,icon,gua,keyPoints} 格式
       const palette = [
         { color: '#E8B880', icon: '☰', gua: '大有' },
@@ -508,6 +553,8 @@ export async function reflect(session) {
   }
 
   session.oracle = oracle;
+  session.cognitivePlan = cognitivePlan;
+  session.lensImpacts = lensImpacts;
   session.dynamicChoices = dynamicChoices;
   session.masterSummary = masterSummaryText;
   session.state = 'ORACLE';
@@ -526,6 +573,8 @@ export async function reflect(session) {
     conflicts,
     gaps,
     aggregated,
+    cognitivePlan,
+    lensImpacts,
     replanned: false,
     reason: '立卦完成',
   };

@@ -100,13 +100,27 @@ function dropUndefined(data) {
 
 /**
  * 保存/更新推演会话（L1 工作记忆载体）
- * @param {object} session { id?, user_id, question, plan, state, tool_results, findings, oracle, memory_used, replan_count }
+ * @param {object} session { id?, user_id, question, plan, state, tool_results, findings, oracle, cognitivePlan, lensImpacts, memory_used, replan_count }
  * @returns {Promise<object>} 带 id 的 session
  */
 export async function saveSession(session) {
   const id = session.id || `sess_${generateUUID()}`;
   const existing = await getSession(id);
-  const data = dropUndefined({
+  const data = toSessionPersistenceData(session);
+
+  if (existing) {
+    await query({ table: SESSIONS_TABLE, action: 'update', id, data });
+    logger.info('会话已更新', { sessionId: id, state: data.state });
+  } else {
+    data.id = id;
+    await query({ table: SESSIONS_TABLE, action: 'insert', data });
+    logger.info('会话已创建', { sessionId: id, state: data.state, userId: data.user_id });
+  }
+  return { ...session, id };
+}
+
+export function toSessionPersistenceData(session = {}) {
+  return dropUndefined({
     user_id: session.user_id,
     question: session.question,
     question_context: session.question_context ?? session.questionContext,
@@ -120,20 +134,12 @@ export async function saveSession(session) {
     oracle: session.oracle,
     dynamic_choices: session.dynamic_choices ?? session.dynamicChoices,
     master_summary: session.master_summary ?? session.masterSummary,
+    cognitive_plan: session.cognitive_plan ?? session.cognitivePlan,
+    lens_impacts: session.lens_impacts ?? session.lensImpacts,
     memory_used: session.memory_used,
     commit_result: session.commit_result,
     replan_count: session.replan_count ?? 0,
   });
-
-  if (existing) {
-    await query({ table: SESSIONS_TABLE, action: 'update', id, data });
-    logger.info('会话已更新', { sessionId: id, state: data.state });
-  } else {
-    data.id = id;
-    await query({ table: SESSIONS_TABLE, action: 'insert', data });
-    logger.info('会话已创建', { sessionId: id, state: data.state, userId: data.user_id });
-  }
-  return { ...session, id };
 }
 
 /**

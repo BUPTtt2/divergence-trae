@@ -86,7 +86,7 @@ function buildResponse(plannedSession, plan, askUser, openingLine, round, memory
  * @param {object} session
  * @returns {object} 数据契约响应
  */
-function buildResponseFromSession(session) {
+export function buildResponseFromSession(session) {
   const plan = session && session.plan ? session.plan : { dimensions: [], toolProbes: [], askUser: [], minFindings: 3 };
   const memoryUsed = Array.isArray(session && session.memory_used) ? session.memory_used : [];
   const askUser = Array.isArray(plan.askUser) && plan.askUser.length > 0
@@ -110,6 +110,10 @@ function buildResponseFromSession(session) {
     dynamicChoices: Array.isArray(session?.dynamic_choices) ? session.dynamic_choices : [],
     masterSummary: session?.master_summary || '',
     oracle: session?.oracle || null,
+    cognitivePlan: session?.cognitive_plan ?? session?.cognitivePlan ?? null,
+    lensImpacts: Array.isArray(session?.lens_impacts)
+      ? session.lens_impacts
+      : (Array.isArray(session?.lensImpacts) ? session.lensImpacts : []),
     commitResult: session?.commit_result || null,
   };
 }
@@ -584,14 +588,17 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
 /**
  * 持久化 execute + reflect 结果
  */
-async function persistExecuteResult(sessionId, result) {
+export async function persistExecuteResult(sessionId, result, dependencies = {}) {
   try {
+    const updateSessionState = dependencies.updateSessionStateFn || memoryService.updateSessionState;
     const patch = {
       findings: result.session.findings || [],
       oracle: result.session.oracle || null,
       conflicts: result.conflicts || [],
       gaps: result.gaps || [],
       replan_count: result.session.replan_count ?? 0,
+      cognitive_plan: result.cognitivePlan ?? result.session.cognitivePlan ?? null,
+      lens_impacts: result.lensImpacts ?? result.session.lensImpacts ?? [],
     };
     // P1-1：持久化动态抉择选项和全局总结（下次恢复推演时不丢失）
     if (result.session.dynamicChoices) patch.dynamic_choices = result.session.dynamicChoices;
@@ -599,12 +606,14 @@ async function persistExecuteResult(sessionId, result) {
     if (result.session.plan) {
       patch.plan = result.session.plan;
     }
-    await memoryService.updateSessionState(sessionId, result.session.state, patch);
+    await updateSessionState(sessionId, result.session.state, patch);
     logger.info('[Deliberation] execute 持久化完成', {
       sessionId,
       state: result.session.state,
       findingsCount: patch.findings.length,
       hasOracle: !!patch.oracle,
+      hasCognitivePlan: !!patch.cognitive_plan,
+      lensImpactCount: patch.lens_impacts.length,
       hasDynamicChoices: Array.isArray(patch.dynamic_choices) && patch.dynamic_choices.length > 0,
     });
   } catch (e) {
@@ -615,8 +624,8 @@ async function persistExecuteResult(sessionId, result) {
 /**
  * 组装 execute 响应
  */
-function buildExecuteResponse(sessionId, result) {
-  return normalizeExecuteResponse({
+export function buildExecuteResponse(sessionId, result) {
+  const response = normalizeExecuteResponse({
     sessionId,
     state: result.session.state,
     findings: result.session.findings || [],
@@ -630,6 +639,11 @@ function buildExecuteResponse(sessionId, result) {
     masterSummary: result.session.masterSummary || '',
     fallback: result.fallback === true,
   });
+  return {
+    ...response,
+    cognitivePlan: result.cognitivePlan ?? result.session.cognitivePlan ?? null,
+    lensImpacts: result.lensImpacts ?? result.session.lensImpacts ?? [],
+  };
 }
 
 /**

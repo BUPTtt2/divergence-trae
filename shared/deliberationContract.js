@@ -51,6 +51,8 @@ export function normalizeExecuteResponse(input = {}) {
     reason: String(input.reason || ''),
     dynamicChoices: Array.isArray(input.dynamicChoices) ? input.dynamicChoices : [],
     masterSummary: String(input.masterSummary || ''),
+    cognitivePlan: input.cognitivePlan || null,
+    lensImpacts: Array.isArray(input.lensImpacts) ? input.lensImpacts : [],
     fallback: input.fallback === true,
     clarifyRequired: input.clarifyRequired === true,
     askUser: Array.isArray(input.askUser) ? input.askUser : [],

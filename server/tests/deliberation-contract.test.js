@@ -23,12 +23,17 @@ test('execute response always exposes one stable shape', () => {
     findings: [],
     dynamicChoices: [],
     masterSummary: '',
+    cognitivePlan: { lensId: 1, reviewTasks: [] },
+    lensImpacts: [{ taskId: 'lens-task-1', outcome: 'no-change' }],
   });
 
   assert.deepEqual(Object.keys(response).sort(), [
-    'askUser', 'clarifyRequired', 'conflicts', 'dynamicChoices', 'fallback', 'findings',
+    'askUser', 'clarifyRequired', 'cognitivePlan', 'conflicts', 'dynamicChoices', 'fallback', 'findings',
     'gaps', 'masterSummary', 'oracle', 'reason', 'replanned', 'sessionId', 'state',
+    'lensImpacts',
   ].sort());
+  assert.equal(response.cognitivePlan.lensId, 1);
+  assert.equal(response.lensImpacts[0].taskId, 'lens-task-1');
 });
 
 test('execute response preserves a server-requested clarification', () => {
