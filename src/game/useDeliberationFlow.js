@@ -12,6 +12,7 @@ import {
 import { useDeliberationStream } from '../hooks/useDeliberationStream';
 import { ensureUserId } from '../services/baseConfig';
 import { _buildLocalChoices, _safeSetTimeout } from '../game/localEngine';
+import { createPendingActionRegistry } from './deliberationActions';
 import { sanitizeLLMText } from '../utils/helpers';
 import tracker from '../services/tracker';
 
@@ -95,6 +96,7 @@ export function useDeliberationFlow(initialQuestion = "", textareaRef, onNavigat
   const stageTimersRef = useRef([]);
   const prevPhaseRef = useRef(phase);
   const clarifyActiveRef = useRef(false);
+  const pendingActionIdsRef = useRef(createPendingActionRegistry());
 
   const clearTimers = useCallback(() => {
     stageTimersRef.current.forEach(t => clearTimeout(t));
@@ -313,6 +315,7 @@ export function useDeliberationFlow(initialQuestion = "", textareaRef, onNavigat
 
   const handleRestart = useCallback(() => {
     clearTimers();
+    pendingActionIdsRef.current.clear();
     setPhase(PHASE.IDLE);
     setShowInput(true);
     setShowQuestion(false);
@@ -492,12 +495,22 @@ export function useDeliberationFlow(initialQuestion = "", textareaRef, onNavigat
       }
 
       if (deliberationSessionId) {
+        const actionKey = `execute-r${debateRound}`;
         const result = await executeDeliberation(deliberationSessionId, {
-          context: userInput,
-          round: debateRound,
+          actionId: pendingActionIdsRef.current.get(deliberationSessionId, actionKey),
+          agentIds: Array.from(selectedAgentIds),
         });
+        pendingActionIdsRef.current.complete(deliberationSessionId, actionKey);
+        setDeliberationFindings(result.findings);
+        setDeliberationOracle(result.oracle);
         setInference(result);
-        setPhase(PHASE.DEBATE);
+        if (result.clarifyRequired) {
+          clarifyActiveRef.current = true;
+          setAwaitingAnswers(result.askUser);
+          setPhase(PHASE.CLARIFY);
+        } else {
+          setPhase(PHASE.DEBATE);
+        }
         setAwaitingUser(true);
         showFloatTip('推演已恢复');
       }
@@ -505,7 +518,7 @@ export function useDeliberationFlow(initialQuestion = "", textareaRef, onNavigat
       LOG.error('handleRejectRetry', e);
       showFloatTip('重试失败，请重新开始');
     }
-  }, [deliberationSessionId, userInput, debateRound, showFloatTip]);
+  }, [deliberationSessionId, debateRound, selectedAgentIds, showFloatTip]);
 
   const handleExecuteDebate = useCallback(async () => {
     if (!deliberationSessionId) {
@@ -516,18 +529,21 @@ export function useDeliberationFlow(initialQuestion = "", textareaRef, onNavigat
       showFloatTip('演 · 诸智发言中……');
       setToolCallState({ agentId: null, tools: [], currentTool: null, results: [], status: 'idle' });
 
+      const actionKey = `execute-r${debateRound}`;
       const result = await executeDeliberation(deliberationSessionId, {
-        context: userInput,
-        round: debateRound,
+        actionId: pendingActionIdsRef.current.get(deliberationSessionId, actionKey),
+        agentIds: Array.from(selectedAgentIds),
       });
+      pendingActionIdsRef.current.complete(deliberationSessionId, actionKey);
 
-      if (result?.blackboard) {
-        setDebateBlackboard(result.blackboard);
-        setDebateMentionQueue(result.mentionQueue || []);
-        setDebateConvergence(result.convergence || null);
-      }
-
+      setDeliberationFindings(result.findings);
+      setDeliberationOracle(result.oracle);
       setInference(result);
+      if (result.clarifyRequired) {
+        clarifyActiveRef.current = true;
+        setAwaitingAnswers(result.askUser);
+        setPhase(PHASE.CLARIFY);
+      }
       setAwaitingUser(true);
       showFloatTip(null);
     } catch (e) {
@@ -536,7 +552,7 @@ export function useDeliberationFlow(initialQuestion = "", textareaRef, onNavigat
       showFloatTip('推演执行失败，请重试');
       setStreamError(e.message);
     }
-  }, [deliberationSessionId, userInput, debateRound, showFloatTip]);
+  }, [deliberationSessionId, debateRound, selectedAgentIds, showFloatTip]);
 
   const handleCommitChoice = useCallback(async (choice) => {
     if (!deliberationSessionId) return;

@@ -7,6 +7,10 @@
 
 import { getCurrentUserIdSync } from './baseConfig.js';
 import { probeDeliberationHealth } from './deliberationHealth.js';
+import {
+  createExecuteRequest,
+  normalizeExecuteResponse,
+} from '../../shared/deliberationContract.js';
 
 const CLOG = {
   fetch: (m, p) => console.log(`[FETCH] ${m} ${p}`),
@@ -195,17 +199,18 @@ export async function answerDeliberation(sessionId, answers) {
  * 执行智囊发言 / 推演循环
  * POST /api/deliberation/:sessionId/execute
  */
-export async function executeDeliberation(sessionId, context) {
+export async function executeDeliberation(sessionId, command) {
+  const payload = createExecuteRequest(command);
   const resp = await _deliberationFetch(`/api/deliberation/${sessionId}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ context }),
+    body: JSON.stringify(payload),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     throw new Error(data.error || `execute 失败: ${resp.status}`);
   }
-  return data;
+  return normalizeExecuteResponse(data);
 }
 
 /**
