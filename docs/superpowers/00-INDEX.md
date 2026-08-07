@@ -36,6 +36,8 @@
 - Stage 03 计划：[工具与证据网关实施计划](计划/03-工具与证据网关实施计划.md)
 - Stage 04 设计：[Sandbox 唯一 Agent 主链](规格/04-Sandbox唯一Agent主链设计.md)
 - Stage 04 计划：[Sandbox 唯一 Agent 主链实施计划](计划/04-Sandbox唯一Agent主链实施计划.md)
+- Stage 05 设计：[Agent 事件协议与活推演阵](规格/05-Agent事件协议与活推演阵设计.md)
+- Stage 05 计划：[Agent 事件协议与活推演阵实施计划](计划/05-Agent事件协议与活推演阵实施计划.md)
 
 ## 04 · Stage 01 完成证据
 
