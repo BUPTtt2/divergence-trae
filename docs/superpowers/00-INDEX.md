@@ -7,7 +7,7 @@
 - 当前 `/sandbox` 不是生产级 Multi-Agent，用户主链仍是 `useGameFlow.js` 旧轨。
 - 目标是“东方仪式语言 + 可验证 Agent Runtime + 决策账本 + 结果校准”。
 - 不先增加新动画、智囊数量或外围页面。
-- 当前执行阶段：**01 已完成；下一步是 02 · 身份与 Session 隔离设计**。
+- 当前执行阶段：**02 · 身份与 Session 隔离设计已形成，等待产品负责人确认后实施**。
 
 ## 01 · 权威设计
 
@@ -19,7 +19,7 @@
 | 编号 | 阶段 | 独立退出条件 | 状态 |
 |---:|---|---|---|
 | 01 | Runtime 与前后端契约 | AgentRunner、探活、execute 契约和测试全部可信 | 完成（2026-08-07） |
-| 02 | 身份与 Session 隔离 | 所有 Session/Event/Memory 操作验证真实 owner | 待设计 |
+| 02 | 身份与 Session 隔离 | 所有 Session/Event/Memory 操作验证真实 owner | 设计待确认 |
 | 03 | Tool/Evidence Gateway | mock 不进入证据链，工具有权限、来源和时间 | 02 完成后设计 |
 | 04 | `/sandbox` 唯一 Agent 主链 | 后端 Session 驱动业务，旧轨只作为可回滚版本 | 03 完成后设计 |
 | 05 | Agent Event 与活推演阵 | 动画只消费真实事件，支持断线重放和减弱动画 | 04 完成后设计 |
@@ -30,6 +30,7 @@
 ## 03 · 当前实施计划
 
 - [01 · Runtime 与前后端契约可信基线](plans/01-2026-08-07-runtime-contract-baseline.md)
+- Stage 02 设计：[Agent Runtime 身份与 Session 隔离](specs/2026-08-07-agent-runtime-identity-session-isolation-design.md)
 
 ## 04 · Stage 01 完成证据
 
