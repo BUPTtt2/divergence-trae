@@ -33,11 +33,11 @@
 
 ## 04 · Stage 01 完成证据
 
-1. 后端：`cd server && npm test`，16/16 通过；原 4 条 Smoke 现为 4/4。
+1. 后端：`cd server && npm test`，17/17 通过；原 4 条 Smoke 现为 4/4；补测发现并修复 `AnimationAgent.timelineFor()` 的旧语法错误。
 2. 前端：动作 ID 单测 2/2；`npm run build` 通过，Vite 转换 1062 个模块。
 3. 契约：旧 `{context}`、旧响应字段和错误 `eventStore.append` 的定向扫描均为 0。
 4. 边界：`Game.jsx`、`useGameFlow.js`、`components/board/`、`theme/` 均未被本阶段改动。
-5. Lint：Stage 01 定向文件 0 error、22 条继承 warning；全仓 0 error、508 条历史 warning，`npm run lint` 因全仓 warning 存量仍返回 1。
+5. Lint：Stage 01 与 `AnimationAgent` 定向文件 0 error；全仓仍有 1 个归档脚本 `scripts/legacy/13-qfix.mjs` 的历史语法错误和 506 条 warning，不把全仓 lint 宣称为通过。
 6. 审计：额外发现并修复 AuditAgent 无法订阅 EventBus、告警事件格式错误、审计事件未持久化。
 7. 限制：`useDeliberationFlow.js` 仍无调用方；Stage 01 只建立可信 Runtime/契约基线，不代表生产就绪。
 
