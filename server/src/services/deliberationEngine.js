@@ -31,6 +31,7 @@ import { evaluateSession } from './evalPipeline.js';
 import { withRetry, withTimeout } from './retryHelper.js';
 import * as reactLoop from './reactLoop.js';
 import * as eventStore from './eventStore.js';
+import { normalizeExecuteResponse } from '../../../shared/deliberationContract.js';
 // 系统级 Agent（生产级 4 Agent）
 import AuditAgentSingleton from '../agents/system/AuditAgent.js';
 const _auditAttached = (() => { try { AuditAgentSingleton.ensureAttached(); } catch (e) { logger.warn('[DeliberationEngine] audit attach fail', e.message); } return true; })();
@@ -369,10 +370,12 @@ export async function answer(sessionId, answers) {
  *
  * @param {string} sessionId
  * @param {Array} agentIds 指定调用的智囊ID（可选，作为 ReAct 候选池）
+ * @param {{actionId?:string,userId?:string|null}} executionCtx 稳定动作与调用者上下文
  * @returns {Promise<{sessionId, state, findings, oracle, conflicts, gaps, replanned}>}
  */
-export async function execute(sessionId, agentIds) {
-  logger.info('[Deliberation] execute 开始', { sessionId, agentIds });
+export async function execute(sessionId, agentIds, executionCtx = {}) {
+  const actionId = String(executionCtx.actionId || '').trim();
+  logger.info('[Deliberation] execute 开始', { sessionId, agentIds, actionId });
 
   const session = await memoryService.getSession(sessionId);
   if (!session) {
@@ -388,9 +391,9 @@ export async function execute(sessionId, agentIds) {
     logger.warn('[Deliberation] execute 被拒绝：仍在澄清阶段，需先 answerDeliberation 完成追问', { sessionId, state: session.state, askUserCount: askUser.length });
     const resp = buildResponseFromSession(session);
     resp.clarifyRequired = true;
-    resp.state = STATES.WAIT;
+    resp.state = 'CLARIFY';
     resp.askUser = askUser;
-    return resp;
+    return normalizeExecuteResponse(resp);
   }
 
   const question = session.questionContext || session.question || '';
@@ -460,6 +463,7 @@ export async function execute(sessionId, agentIds) {
     toolResults: Array.isArray(session.tool_results) ? session.tool_results : [],
     dialogue: [],
     llmCallCount: 0,
+    actionId,
   };
 
   // 3. emit 进入 DELIBERATE（Event Sourcing：事件追加为真相）
@@ -530,7 +534,7 @@ export async function execute(sessionId, agentIds) {
       );
     }
     // 递归 execute（传空 agentIds 让 agentRouter 基于新维度推荐智囊，replan_count 已+1 不会无限）
-    return execute(sessionId, []);
+    return execute(sessionId, [], executionCtx);
   }
 
   // emit 反思结果
@@ -583,7 +587,7 @@ async function persistExecuteResult(sessionId, result) {
  * 组装 execute 响应
  */
 function buildExecuteResponse(sessionId, result) {
-  return {
+  return normalizeExecuteResponse({
     sessionId,
     state: result.session.state,
     findings: result.session.findings || [],
@@ -595,7 +599,8 @@ function buildExecuteResponse(sessionId, result) {
     // P1-1：动态抉择选项（替代前端 DEFAULT_CHOICES 固定4个）
     dynamicChoices: Array.isArray(result.session.dynamicChoices) ? result.session.dynamicChoices : [],
     masterSummary: result.session.masterSummary || '',
-  };
+    fallback: result.fallback === true,
+  });
 }
 
 /**

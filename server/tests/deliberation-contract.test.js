@@ -26,7 +26,20 @@ test('execute response always exposes one stable shape', () => {
   });
 
   assert.deepEqual(Object.keys(response).sort(), [
-    'conflicts', 'dynamicChoices', 'fallback', 'findings', 'gaps', 'masterSummary',
-    'oracle', 'reason', 'replanned', 'sessionId', 'state',
+    'askUser', 'clarifyRequired', 'conflicts', 'dynamicChoices', 'fallback', 'findings',
+    'gaps', 'masterSummary', 'oracle', 'reason', 'replanned', 'sessionId', 'state',
   ].sort());
+});
+
+test('execute response preserves a server-requested clarification', () => {
+  const askUser = [{ question: '你的时间边界是什么？', reason: '约束决策范围' }];
+  const response = normalizeExecuteResponse({
+    sessionId: 'sess_clarify',
+    state: 'CLARIFY',
+    clarifyRequired: true,
+    askUser,
+  });
+
+  assert.equal(response.clarifyRequired, true);
+  assert.deepEqual(response.askUser, askUser);
 });

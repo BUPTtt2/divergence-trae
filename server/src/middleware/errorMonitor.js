@@ -87,13 +87,14 @@ export function checkLLMErrorRate() {
 export function startErrorMonitor() {
   if (monitorStarted) return;
   monitorStarted = true;
-  setInterval(() => {
+  const monitor = setInterval(() => {
     try {
       checkLLMErrorRate();
     } catch (e) {
       console.warn('[errorMonitor] 检查失败:', e.message);
     }
   }, WINDOW_MS);
+  monitor.unref?.();
   console.log('[errorMonitor] 已启动，每 5 分钟检查 LLM 错误率');
 }
 

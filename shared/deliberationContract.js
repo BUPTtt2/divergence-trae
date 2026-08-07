@@ -41,5 +41,7 @@ export function normalizeExecuteResponse(input = {}) {
     dynamicChoices: Array.isArray(input.dynamicChoices) ? input.dynamicChoices : [],
     masterSummary: String(input.masterSummary || ''),
     fallback: input.fallback === true,
+    clarifyRequired: input.clarifyRequired === true,
+    askUser: Array.isArray(input.askUser) ? input.askUser : [],
   };
 }

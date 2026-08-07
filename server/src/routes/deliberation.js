@@ -35,6 +35,10 @@ import * as deliberationEngine from '../services/deliberationEngine.js';
 import * as memoryService from '../services/memoryService.js';
 import * as customAdvisorService from '../services/customAdvisorService.js';
 import eventBus from '../services/eventBus.js';
+import {
+  normalizeExecuteResponse,
+  parseExecuteRequest,
+} from '../../../shared/deliberationContract.js';
 
 const router = Router();
 
@@ -322,9 +326,17 @@ router.post(
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
-    const { agentIds } = req.body || {};
-    const result = await deliberationEngine.execute(sessionId, agentIds || []);
-    res.json(result);
+    let command;
+    try {
+      command = parseExecuteRequest(req.body);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+    const result = await deliberationEngine.execute(sessionId, command.agentIds, {
+      actionId: command.actionId,
+      userId: req.userId || null,
+    });
+    res.json(normalizeExecuteResponse(result));
   })
 );
 
