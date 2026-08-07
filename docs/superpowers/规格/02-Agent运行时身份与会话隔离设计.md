@@ -1,8 +1,8 @@
 # Stage 02 · Agent Runtime 身份与 Session 隔离设计
 
 > 日期：2026-08-07
-> 状态：待产品负责人审阅
-> 上游：[Sandbox 生产级 Multi-Agent 系统设计与现状审计](2026-08-07-sandbox-production-multi-agent-system-design.md)
+> 状态：已确认，进入实施
+> 上游：[Sandbox 生产级 Multi-Agent 系统设计与现状审计](00-Sandbox生产级多Agent系统设计与现状审计.md)
 > 范围：`/api/auth` 与 `/api/deliberation` 的身份、Session、Event、Memory、Custom Advisor 所有权；不迁移 `/sandbox` 主链，不改动画，不接外部身份供应商。
 
 ## 1. 要解决的生产阻断

@@ -7,11 +7,11 @@
 - 当前 `/sandbox` 不是生产级 Multi-Agent，用户主链仍是 `useGameFlow.js` 旧轨。
 - 目标是“东方仪式语言 + 可验证 Agent Runtime + 决策账本 + 结果校准”。
 - 不先增加新动画、智囊数量或外围页面。
-- 当前执行阶段：**02 · 身份与 Session 隔离设计已形成，等待产品负责人确认后实施**。
+- 当前执行阶段：**02 · 身份与 Session 隔离已确认，进入实施**。
 
 ## 01 · 权威设计
 
-- [Sandbox 生产级 Multi-Agent 系统设计与现状审计](specs/2026-08-07-sandbox-production-multi-agent-system-design.md)
+- [Sandbox 生产级 Multi-Agent 系统设计与现状审计](规格/00-Sandbox生产级多Agent系统设计与现状审计.md)
 - 需要查产品定位、完整状态机、Agent Contract、动画协议、M3 标准或止损条件时再读。
 
 ## 02 · 编号实施路线
@@ -19,7 +19,7 @@
 | 编号 | 阶段 | 独立退出条件 | 状态 |
 |---:|---|---|---|
 | 01 | Runtime 与前后端契约 | AgentRunner、探活、execute 契约和测试全部可信 | 完成（2026-08-07） |
-| 02 | 身份与 Session 隔离 | 所有 Session/Event/Memory 操作验证真实 owner | 设计待确认 |
+| 02 | 身份与 Session 隔离 | 所有 Session/Event/Memory 操作验证真实 owner | 实施中 |
 | 03 | Tool/Evidence Gateway | mock 不进入证据链，工具有权限、来源和时间 | 02 完成后设计 |
 | 04 | `/sandbox` 唯一 Agent 主链 | 后端 Session 驱动业务，旧轨只作为可回滚版本 | 03 完成后设计 |
 | 05 | Agent Event 与活推演阵 | 动画只消费真实事件，支持断线重放和减弱动画 | 04 完成后设计 |
@@ -29,8 +29,8 @@
 
 ## 03 · 当前实施计划
 
-- [01 · Runtime 与前后端契约可信基线](plans/01-2026-08-07-runtime-contract-baseline.md)
-- Stage 02 设计：[Agent Runtime 身份与 Session 隔离](specs/2026-08-07-agent-runtime-identity-session-isolation-design.md)
+- [01 · Runtime 与前后端契约可信基线](计划/01-运行时与前后端契约可信基线实施计划.md)
+- Stage 02 设计：[Agent Runtime 身份与 Session 隔离](规格/02-Agent运行时身份与会话隔离设计.md)
 
 ## 04 · Stage 01 完成证据
 
