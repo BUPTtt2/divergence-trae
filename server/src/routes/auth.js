@@ -1,6 +1,8 @@
 import express from 'express';
 import { query } from '../services/db.js';
 import { generateUUID } from '../utils/id.js';
+import { issueTokenPair, verifyToken } from '../services/authTokenService.js';
+import { hashPassword, verifyPassword } from '../services/passwordService.js';
 
 const router = express.Router();
 
@@ -35,14 +37,30 @@ function publicUser(u) {
   };
 }
 
+function tokenPairFor(user) {
+  return issueTokenPair({
+    userId: user.id,
+    kind: user.anonymous ? 'anonymous' : 'registered',
+  });
+}
+
+function handleAuthError(res, error) {
+  if (error?.code === 'AUTH_NOT_CONFIGURED') {
+    return res.status(503).json({ error: 'AUTH_NOT_CONFIGURED' });
+  }
+  return res.status(500).json({ error: '认证服务异常' });
+}
+
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, nickname } = req.body;
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const nickname = String(req.body?.nickname || '').trim();
     if (!email || !password) {
       return res.status(400).json({ error: '邮箱和密码必填' });
     }
-    if (password.length < 8) {
-      return res.status(400).json({ error: '密码至少8位' });
+    if (password.length < 8 || password.length > 200) {
+      return res.status(400).json({ error: '密码长度必须为8-200字符' });
     }
 
     const existing = await query({
@@ -59,6 +77,8 @@ router.post('/register', async (req, res) => {
     const id = generateUUID();
     const now = new Date().toISOString();
     const today = now.split('T')[0];
+    const resolvedNickname = nickname || generateNickname();
+    const passwordHash = await hashPassword(password);
 
     await query({
       table: 'users',
@@ -67,8 +87,8 @@ router.post('/register', async (req, res) => {
         id,
         anonymous: false,
         email,
-        password_hash: password,
-        nickname: nickname || generateNickname(),
+        password_hash: passwordHash,
+        nickname: resolvedNickname,
         avatar: randomPick(AVATARS),
         color: randomPick(COLORS),
         created_at: now,
@@ -83,20 +103,18 @@ router.post('/register', async (req, res) => {
 
     const user = { id, anonymous: false, email };
     res.status(201).json({
-      user: publicUser({ id, anonymous: 0, email, nickname: nickname || generateNickname(), created_at: now }),
-      accessToken: `local-${id}`,
-      refreshToken: `refresh-${id}`,
-      expiresIn: 900,
-      refreshTokenExpiresIn: 2592000,
+      user: publicUser({ id, anonymous: 0, email, nickname: resolvedNickname, created_at: now }),
+      ...tokenPairFor(user),
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    handleAuthError(res, e);
   }
 });
 
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
     if (!email || !password) {
       return res.status(400).json({ error: '邮箱和密码必填' });
     }
@@ -104,15 +122,18 @@ router.post('/login', async (req, res) => {
     const result = await query({
       table: 'users',
       action: 'select',
-      filter: { email, anonymous: 0 },
+      filter: { email },
       queryOptions: { limit: 1 },
     });
 
-    if (result.rows.length === 0) {
+    if (result.rows.length === 0 || result.rows[0].anonymous) {
       return res.status(401).json({ error: '邮箱或密码错误' });
     }
 
     const user = result.rows[0];
+    if (!(await verifyPassword(password, user.password_hash))) {
+      return res.status(401).json({ error: '邮箱或密码错误' });
+    }
 
     const today = new Date().toISOString().split('T')[0];
     await query({
@@ -124,13 +145,10 @@ router.post('/login', async (req, res) => {
 
     res.json({
       user: publicUser({ ...user, last_login_date: today }),
-      accessToken: `local-${user.id}`,
-      refreshToken: `refresh-${user.id}`,
-      expiresIn: 900,
-      refreshTokenExpiresIn: 2592000,
+      ...tokenPairFor(user),
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    handleAuthError(res, e);
   }
 });
 
@@ -162,15 +180,10 @@ router.post('/anonymous', async (req, res) => {
       },
     });
 
-    res.status(201).json({
-      user: publicUser({ id, anonymous: 1, nickname, avatar, color, created_at: now }),
-      accessToken: `local-${id}`,
-      refreshToken: `refresh-${id}`,
-      expiresIn: 900,
-      refreshTokenExpiresIn: 2592000,
-    });
+    const user = { id, anonymous: true, nickname, avatar, color, created_at: now };
+    res.status(201).json({ user: publicUser(user), ...tokenPairFor(user) });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    handleAuthError(res, e);
   }
 });
 
@@ -181,38 +194,33 @@ router.post('/refresh', async (req, res) => {
       return res.status(400).json({ error: 'refreshToken 必填' });
     }
 
-    const userId = refreshToken.replace('refresh-', '');
+    let claims;
+    try {
+      claims = verifyToken(refreshToken, 'refresh');
+    } catch (error) {
+      if (error?.code === 'AUTH_NOT_CONFIGURED') {
+        return res.status(503).json({ error: 'AUTH_NOT_CONFIGURED' });
+      }
+      return res.status(401).json({ error: 'AUTH_REQUIRED' });
+    }
 
     const result = await query({
       table: 'users',
       action: 'select',
-      filter: { id: userId },
+      filter: { id: claims.sub },
       queryOptions: { limit: 1 },
     });
 
-    if (result.rows.length === 0) {
-      // 根本性修复：不存在的用户（匿名/本地 token / DB 为空）不再返回 401。
-      // 本工具所有业务端点都走 optionalAuth，接受任意 local-<id> 标识，无真实鉴权。
-      // 之前这里对"查不到的用户"直接 401，导致前端 /api/auth/refresh 连环 401，
-      // 产生"后端不可达"的假象并触发本地沙盘降级。
-      // 现在：按 token 里的 id 直接签发一个新鲜 local token，让链路继续。
-      const anonymousId = userId || 'anon_' + Date.now().toString(36);
-      return res.json({
-        accessToken: `local-${anonymousId}`,
-        expiresIn: 900,
-        user: null,
-      });
-    }
+    if (result.rows.length === 0) return res.status(401).json({ error: 'AUTH_REQUIRED' });
 
     const user = result.rows[0];
 
     res.json({
-      accessToken: `local-${user.id}`,
-      expiresIn: 900,
       user: publicUser(user),
+      ...tokenPairFor(user),
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    handleAuthError(res, e);
   }
 });
 
@@ -224,26 +232,29 @@ router.get('/me', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(200).json({ user: null });
+      return res.status(401).json({ error: 'AUTH_REQUIRED' });
     }
 
-    const token = authHeader.replace('Bearer ', '');
-    const userId = token.replace('local-', '');
+    const token = authHeader.slice('Bearer '.length).trim();
+    const claims = verifyToken(token, 'access');
 
     const result = await query({
       table: 'users',
       action: 'select',
-      filter: { id: userId },
+      filter: { id: claims.sub },
       queryOptions: { limit: 1 },
     });
 
     if (result.rows.length === 0) {
-      return res.status(200).json({ user: null });
+      return res.status(401).json({ error: 'AUTH_REQUIRED' });
     }
 
     res.json({ user: publicUser(result.rows[0]) });
   } catch (e) {
-    res.status(200).json({ user: null });
+    if (e?.code === 'AUTH_NOT_CONFIGURED') {
+      return res.status(503).json({ error: 'AUTH_NOT_CONFIGURED' });
+    }
+    res.status(401).json({ error: 'AUTH_REQUIRED' });
   }
 });
 
