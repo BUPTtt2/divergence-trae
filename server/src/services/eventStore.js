@@ -17,6 +17,21 @@ import logger from './logger.js';
 const EVENTS_TABLE = 'deliberation_events';
 const SNAPSHOTS_TABLE = 'deliberation_snapshots';
 
+export const AGENT_EVENT_SCHEMA_VERSION = 1;
+export const AGENT_EVENT_VISIBILITIES = Object.freeze(['public', 'summary', 'internal']);
+export const AGENT_DOMAIN_EVENT_TYPES = Object.freeze([
+  'PLAN_CREATED', 'PLAN_REVISED', 'UNKNOWN_IDENTIFIED',
+  'AGENT_ASSIGNED', 'AGENT_STARTED', 'AGENT_COMPLETED', 'AGENT_FAILED',
+  'TOOL_STARTED', 'EVIDENCE_ACCEPTED', 'EVIDENCE_REJECTED', 'ACTION_FAILED',
+  'CLAIM_CHALLENGED', 'CONSENSUS_FORMED', 'AUDIT_FAILED',
+  'APPROVAL_REQUIRED', 'DECISION_COMMITTED', 'SESSION_COMPLETED',
+]);
+
+const INTERNAL_BY_DEFAULT = new Set(['THOUGHT', 'ACTION', 'REACT_THINK', 'REACT_ACT', 'REACT_OBSERVE', 'AUDIT_EVENT']);
+const SUMMARY_BY_DEFAULT = new Set(['OBSERVATION', 'ERROR', 'AUDIT_ALERT']);
+const appendQueues = new Map();
+const MAX_SEQUENCE_RETRIES = 5;
+
 // 每多少个事件写一次快照（平衡恢复速度与写入开销）
 const SNAPSHOT_INTERVAL = 10;
 
@@ -29,21 +44,73 @@ const SNAPSHOT_INTERVAL = 10;
  * @param {string|null} actor
  * @returns {Promise<object>} 完整事件对象
  */
-export async function appendEvent(sessionId, type, data = {}, actor = null) {
-  const id = generateUUID();
-  const timestamp = new Date().toISOString();
-  await query({
-    table: EVENTS_TABLE,
-    action: 'insert',
-    data: {
-      id,
-      session_id: sessionId,
-      type,
-      payload: JSON.stringify(data),
-      actor,
-    },
+export async function appendEvent(sessionId, type, data = {}, actor = null, metadata = {}) {
+  if (!sessionId || !type) throw new TypeError('appendEvent requires sessionId and type');
+  const previous = appendQueues.get(sessionId) || Promise.resolve();
+  const operation = previous.catch(() => {}).then(async () => {
+    const eventId = metadata.eventId || generateUUID();
+    const createdAt = metadata.createdAt || new Date().toISOString();
+    const visibility = normalizeVisibility(metadata.visibility, type);
+    for (let attempt = 0; attempt < MAX_SEQUENCE_RETRIES; attempt += 1) {
+      const latest = await query({
+        table: EVENTS_TABLE,
+        action: 'select',
+        filter: { session_id: sessionId },
+        queryOptions: { orderBy: 'sequence:desc', limit: 1 },
+      });
+      const sequence = Number(latest.rows?.[0]?.sequence || 0) + 1;
+      const event = withLegacyAliases({
+        eventId,
+        sessionId,
+        sequence,
+        type,
+        actorId: metadata.actorId || actor || 'system',
+        ...(metadata.taskId ? { taskId: metadata.taskId } : {}),
+        ...(metadata.causationId ? { causationId: metadata.causationId } : {}),
+        correlationId: metadata.correlationId || data?.correlationId || `corr_${eventId}`,
+        payload: data && typeof data === 'object' ? data : {},
+        visibility,
+        createdAt,
+        schemaVersion: AGENT_EVENT_SCHEMA_VERSION,
+      });
+      try {
+        await query({
+          table: EVENTS_TABLE,
+          action: 'insert',
+          data: {
+            id: event.eventId,
+            session_id: event.sessionId,
+            sequence: event.sequence,
+            type: event.type,
+            payload: JSON.stringify(event.payload),
+            actor: event.actorId,
+            actor_id: event.actorId,
+            task_id: event.taskId || null,
+            causation_id: event.causationId || null,
+            correlation_id: event.correlationId,
+            visibility: event.visibility,
+            schema_version: event.schemaVersion,
+            created_at: event.createdAt,
+          },
+        });
+        return event;
+      } catch (error) {
+        if (!isSequenceConflict(error) || attempt === MAX_SEQUENCE_RETRIES - 1) throw error;
+        await new Promise((resolve) => setTimeout(resolve, (2 ** attempt) + Math.floor(Math.random() * 5)));
+      }
+    }
+    throw new Error('Agent event sequence allocation exhausted');
   });
-  return { id, sessionId, type, data, actor, timestamp };
+  appendQueues.set(sessionId, operation);
+  try {
+    return await operation;
+  } finally {
+    if (appendQueues.get(sessionId) === operation) appendQueues.delete(sessionId);
+  }
+}
+
+export function isSequenceConflict(error) {
+  return error?.code === '23505' && error?.constraint === 'idx_events_session_sequence';
 }
 
 /**
@@ -52,29 +119,73 @@ export async function appendEvent(sessionId, type, data = {}, actor = null) {
  * @param {string|null} afterTimestamp 只读此时间之后的事件
  * @returns {Promise<Array>}
  */
-export async function getEvents(sessionId, afterTimestamp = null) {
+export async function getEvents(sessionId, options = {}) {
+  const normalizedOptions = typeof options === 'string' ? { afterTimestamp: options } : (options || {});
+  const hasSequenceCursor = Number.isFinite(Number(normalizedOptions.afterSequence));
+  const afterSequence = hasSequenceCursor ? Number(normalizedOptions.afterSequence) : null;
   const result = await query({
     table: EVENTS_TABLE,
     action: 'select',
     filter: { session_id: sessionId },
-    queryOptions: { orderBy: 'created_at:asc', limit: 200 },
+    queryOptions: {
+      orderBy: hasSequenceCursor ? 'sequence:asc' : 'sequence:desc',
+      limit: Math.min(Number(normalizedOptions.limit || 200), 200),
+      ...(hasSequenceCursor ? { greaterThan: { sequence: afterSequence } } : {}),
+    },
   });
-  let events = result.rows || [];
-  if (afterTimestamp) {
-    const after = new Date(afterTimestamp).getTime();
+  let events = (result.rows || [])
+    .map((row, index) => rowToAgentEvent(row, index + 1))
+    .sort((left, right) => left.sequence - right.sequence);
+  if (normalizedOptions.afterTimestamp) {
+    const after = new Date(normalizedOptions.afterTimestamp).getTime();
     events = events.filter((e) => {
-      const t = new Date(e.created_at).getTime();
+      const t = new Date(e.createdAt).getTime();
       return t > after;
     });
   }
-  return events.map((row) => ({
-    id: row.id,
-    type: row.type,
+  if (hasSequenceCursor) events = events.filter((event) => event.sequence > afterSequence);
+  if (normalizedOptions.browserVisibleOnly) events = events.filter(isBrowserVisibleEvent);
+  return events;
+}
+
+export function isBrowserVisibleEvent(event) {
+  return event?.visibility === 'public' || event?.visibility === 'summary';
+}
+
+function normalizeVisibility(visibility, type) {
+  if (AGENT_EVENT_VISIBILITIES.includes(visibility)) return visibility;
+  if (INTERNAL_BY_DEFAULT.has(type)) return 'internal';
+  if (SUMMARY_BY_DEFAULT.has(type)) return 'summary';
+  return 'public';
+}
+
+function rowToAgentEvent(row, fallbackSequence) {
+  const eventId = row.id || row.event_id;
+  const payload = typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : (row.payload || {});
+  return withLegacyAliases({
+    eventId,
     sessionId: row.session_id,
-    data: typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : (row.payload || {}),
-    actor: row.actor,
-    timestamp: row.created_at,
-  }));
+    sequence: Number(row.sequence || fallbackSequence),
+    type: row.type,
+    actorId: row.actor_id || row.actor || 'system',
+    ...(row.task_id ? { taskId: row.task_id } : {}),
+    ...(row.causation_id ? { causationId: row.causation_id } : {}),
+    correlationId: row.correlation_id || payload.correlationId || `corr_${eventId}`,
+    payload,
+    visibility: normalizeVisibility(row.visibility, row.type),
+    createdAt: row.created_at || new Date().toISOString(),
+    schemaVersion: Number(row.schema_version || AGENT_EVENT_SCHEMA_VERSION),
+  });
+}
+
+export function withLegacyAliases(event) {
+  Object.defineProperties(event, {
+    id: { enumerable: false, get: () => event.eventId },
+    data: { enumerable: false, get: () => event.payload },
+    actor: { enumerable: false, get: () => event.actorId },
+    timestamp: { enumerable: false, get: () => event.createdAt },
+  });
+  return event;
 }
 
 /**

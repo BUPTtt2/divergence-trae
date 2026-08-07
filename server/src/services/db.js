@@ -139,6 +139,12 @@ function memSelect(table, filter = {}, options = {}) {
     }
   }
 
+  for (const [key, value] of Object.entries(options.greaterThan || {})) {
+    if (value !== undefined && value !== null) {
+      rows = rows.filter((record) => record[key] > value);
+    }
+  }
+
   // 排序
   if (options.orderBy) {
     const [field, dir] = options.orderBy.split(':');
@@ -230,10 +236,13 @@ export async function query(options) {
     if (action === 'select') {
       const filterKeys = filter ? Object.keys(filter).filter((k) => filter[k] !== undefined && filter[k] !== null) : [];
       if (!filterKeys.every(validFieldName)) throw new Error('非法字段名');
-      const where = filterKeys.length > 0
-        ? 'WHERE ' + filterKeys.map((k, i) => `${k} = $${i + 1}`).join(' AND ')
-        : '';
-      const params = filterKeys.map((k) => filter[k]);
+      const greaterThan = queryOptions?.greaterThan || {};
+      const greaterKeys = Object.keys(greaterThan).filter((key) => greaterThan[key] !== undefined && greaterThan[key] !== null);
+      if (!greaterKeys.every(validFieldName)) throw new Error('非法范围字段名');
+      const clauses = filterKeys.map((key, index) => `${key} = $${index + 1}`);
+      greaterKeys.forEach((key, index) => clauses.push(`${key} > $${filterKeys.length + index + 1}`));
+      const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+      const params = [...filterKeys.map((key) => filter[key]), ...greaterKeys.map((key) => greaterThan[key])];
       let sql = `SELECT * FROM ${table} ${where}`;
       if (queryOptions?.orderBy) {
         const [field, dir] = queryOptions.orderBy.split(':');

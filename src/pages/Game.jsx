@@ -4,6 +4,7 @@ import Board from '../components/board/GameBoard';
 import ChoiceHud from '../components/board/ChoiceHud';
 import AgentDialogueOverlay from '../components/board/AgentDialogueOverlay';
 import ProcessStepper from '../components/board/ProcessStepper';
+import LiveArenaOverlay from '../components/board/LiveArenaOverlay';
 import FateCardPanel from '../components/fate/FateCardPanel';
 import ConfirmedInfoPanel from '../components/yan/ConfirmedInfoPanel';
 import CaseFilePanel from '../components/yan/CaseFilePanel';
@@ -424,6 +425,7 @@ export default function Game() {
     historyCount, mentionMessages, setFloatTip, setInference,
     backendError, streamError, handleRejectRetry,
     commitPending,
+    arenaProjection,
     caseFile, yanQuestionRounds, progress, memoryLayers, mirrorReview,
     debateAutoPlay, setDebateAutoPlay, handleSkipToSummary,
     handleRestart, handleStart, handleUserAdvance, handleSkipClarify, handleConfirmAgents,
@@ -480,6 +482,7 @@ export default function Game() {
         </div>
 
         <ProcessStepper phase={phase} />
+        <LiveArenaOverlay projection={arenaProjection} />
 
         {/* ★ 赛博算命感：全局扫描线 + 数据流 + 全息边框（所有阶段都有，视觉加强）*/}
         <div className="cyber-crt-scanlines" />

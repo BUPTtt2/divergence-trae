@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/app.js';
 import * as memoryService from '../src/services/memoryService.js';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 async function withServer(run) {
   const server = app.listen(0);
@@ -61,4 +63,10 @@ test('execute rejects non-array agentIds at the HTTP boundary', async () => {
     assert.equal(response.status, 400);
     assert.match((await response.json()).error, /agentIds/);
   });
+});
+
+test('SSE disconnect only closes transport and never pauses the business session', () => {
+  const routePath = fileURLToPath(new URL('../src/routes/deliberation.js', import.meta.url));
+  const source = fs.readFileSync(routePath, 'utf8');
+  assert.doesNotMatch(source, /pause\(sessionId,\s*['"]user_disconnected['"]/);
 });

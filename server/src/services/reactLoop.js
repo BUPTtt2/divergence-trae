@@ -26,7 +26,7 @@ import { withRetry, withTimeout } from './retryHelper.js';
 import { classifyLLMError } from './errorTypes.js';
 import logger from './logger.js';
 import eventBus from './eventBus.js';
-import { appendEvent } from './eventStore.js';
+import { evidenceDomainEvent } from './agentEventSemantics.js';
 import * as memoryService from './memoryService.js';
 
 const MAX_ROUNDS = 4;
@@ -228,7 +228,7 @@ export async function runReActLoop(sessionId, state) {
   const toolSignature = (args) => {
     try {
       return `${args?.tool || 'unknown'}:${JSON.stringify(args?.params || {}).slice(0, 160)}`;
-    } catch (_) { return String(args?.tool); }
+    } catch { return String(args?.tool); }
   };
   const observationIsEmptyish = (obs) => {
     if (!obs) return true;
@@ -282,8 +282,22 @@ export async function runReActLoop(sessionId, state) {
     const action = parseThinkAction(thinkText);
 
     // 记录 Think 事件
-    await appendEvent(sessionId, 'REACT_THINK', { thought: action.reason, round }, 'yan');
-    eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: `react_think_r${round}`, thought: action.reason, action: action.type, round } });
+    await eventBus.emit(sessionId, {
+      type: 'REACT_THINK',
+      data: { thought: action.reason, round },
+      actor: 'yan',
+      correlationId: state.actionId,
+      taskId: `react_round_${round}`,
+      visibility: 'internal',
+    });
+    await eventBus.emit(sessionId, {
+      type: 'AGENT_STARTED',
+      data: { agentId: 'yan', agentName: '演', taskId: `react_round_${round}`, label: `第 ${round} 轮推演` },
+      actor: 'yan',
+      correlationId: state.actionId,
+      taskId: `react_round_${round}`,
+      visibility: 'public',
+    });
 
     logger.info('[ReAct] Think 完成', { sessionId, round, action: action.type, reason: action.reason });
 
@@ -294,8 +308,14 @@ export async function runReActLoop(sessionId, state) {
     }
 
     // === Act ===
-    await appendEvent(sessionId, 'REACT_ACT', { action: action.type, args: action.args, round }, 'yan');
-    eventBus.emit(sessionId, { type: 'ACTION', data: { tool: action.type, args: action.args, round } });
+    await eventBus.emit(sessionId, {
+      type: 'REACT_ACT',
+      data: { action: action.type, args: action.args, round },
+      actor: 'yan',
+      correlationId: state.actionId,
+      taskId: `react_round_${round}`,
+      visibility: 'internal',
+    });
 
     let observation = '';
 
@@ -323,6 +343,14 @@ export async function runReActLoop(sessionId, state) {
             consecutiveSameTool = 1;
           }
           if (action.type === 'output') break;
+          await eventBus.emit(sessionId, {
+            type: 'TOOL_STARTED',
+            data: { tool, purpose: action.reason || '查证推演所需事实' },
+            actor: 'yan',
+            correlationId: state.actionId,
+            taskId: `react_round_${round}`,
+            visibility: 'public',
+          });
           const gatewayResult = await withTimeout(
             () => executeEvidenceTool(tool, params || {}, {
               sessionId,
@@ -346,6 +374,13 @@ export async function runReActLoop(sessionId, state) {
             summary: observation,
             error: gatewayResult.error || null,
           });
+          const evidenceEvent = evidenceDomainEvent(tool, gatewayResult);
+          await eventBus.emit(sessionId, {
+            ...evidenceEvent,
+            actor: 'tool_gateway',
+            correlationId: state.actionId,
+            taskId: `react_round_${round}`,
+          });
           break;
         }
 
@@ -366,6 +401,14 @@ export async function runReActLoop(sessionId, state) {
             const batch = agents.slice(i, i + BATCH);
             const results = await Promise.allSettled(
               batch.map(async (agent) => {
+                await eventBus.emit(sessionId, {
+                  type: 'AGENT_STARTED',
+                  data: { agentId: agent.id, agentName: agent.name, taskId: `react_round_${round}` },
+                  actor: agent.id,
+                  correlationId: state.actionId,
+                  taskId: `react_round_${round}`,
+                  visibility: 'public',
+                });
                 const text = await withRetry(
                   () => withTimeout(
                     () => generateAgentDialogue(
@@ -395,16 +438,21 @@ export async function runReActLoop(sessionId, state) {
                 state.findings.push(finding);
 
                 // 记录事件 + 推送 SSE
-                await appendEvent(sessionId, 'ADVISOR_SPEAK', {
-                  agentId: agent.id,
-                  agentName: agent.name,
-                  content,
-                  stance: agent.stance,
-                  perspective: agent.perspective,
-                }, agent.id);
-                eventBus.emit(sessionId, {
+                await eventBus.emit(sessionId, {
                   type: 'ADVISOR_SPEAK',
-                  data: { agentId: agent.id, agentName: agent.name, content, stance: agent.stance || '' },
+                  data: { agentId: agent.id, agentName: agent.name, content, stance: agent.stance || '', perspective: agent.perspective || '' },
+                  actor: agent.id,
+                  correlationId: state.actionId,
+                  taskId: `react_round_${round}`,
+                  visibility: 'public',
+                });
+                await eventBus.emit(sessionId, {
+                  type: 'AGENT_COMPLETED',
+                  data: { agentId: agent.id, agentName: agent.name, taskId: `react_round_${round}` },
+                  actor: agent.id,
+                  correlationId: state.actionId,
+                  taskId: `react_round_${round}`,
+                  visibility: 'public',
                 });
 
                 return content;
@@ -426,8 +474,15 @@ export async function runReActLoop(sessionId, state) {
 
         case 'ask_user': {
           const questions = action.args.questions || [];
-          await appendEvent(sessionId, 'CLARIFY_ASKED', { questions }, 'yan');
-          eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'CLARIFY', thought: '演·追问' } });
+          await eventBus.emit(sessionId, { type: 'CLARIFY_ASKED', data: { questions }, actor: 'yan', correlationId: state.actionId, visibility: 'internal' });
+          for (const [index, question] of questions.entries()) {
+            await eventBus.emit(sessionId, {
+              type: 'UNKNOWN_IDENTIFIED',
+              data: { taskId: `clarify_${round}_${index + 1}`, question: question.question || question, reason: question.reason || '完成推演需要此信息' },
+              actor: 'yan', correlationId: state.actionId, visibility: 'summary',
+            });
+          }
+          await eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'CLARIFY', thought: '演·追问' }, actor: 'yan', correlationId: state.actionId, visibility: 'public' });
           logger.info('[ReAct] 演决定追问', { sessionId, round, questionCount: questions.length });
           return { state: 'CLARIFY', askUser: questions };
         }
@@ -443,6 +498,11 @@ export async function runReActLoop(sessionId, state) {
     } catch (err) {
       logger.error('[ReAct] Act 失败', { sessionId, round, action: action.type, error: err.message });
       observation = `行动失败：${err.message}`;
+      await eventBus.emit(sessionId, {
+        type: 'ACTION_FAILED',
+        data: { action: action.type, reason: err.message },
+        actor: 'yan', correlationId: state.actionId, taskId: `react_round_${round}`, visibility: 'summary',
+      });
     }
 
     // ===== P0 空观察结果连续 2 次 → 强制停止搜索（避免降级后反复空跑、日志刷屏）
@@ -458,16 +518,14 @@ export async function runReActLoop(sessionId, state) {
     }
     // 若当前轮已强制 output → 写入 observation 后跳出 for（避免再跑下一轮）
     if (action.type === 'output') {
-      await appendEvent(sessionId, 'REACT_OBSERVE', { observation, round }, 'yan');
-      eventBus.emit(sessionId, { type: 'OBSERVATION', data: { summary: observation, round, earlyBreak: true } });
+      await eventBus.emit(sessionId, { type: 'REACT_OBSERVE', data: { observation, round, earlyBreak: true }, actor: 'yan', correlationId: state.actionId, visibility: 'internal' });
       if (!state.dialogue) state.dialogue = [];
       state.dialogue.push({ role: 'observe', content: observation, round });
       break;
     }
 
     // === Observe ===
-    await appendEvent(sessionId, 'REACT_OBSERVE', { observation, round }, 'yan');
-    eventBus.emit(sessionId, { type: 'OBSERVATION', data: { summary: observation, round } });
+    await eventBus.emit(sessionId, { type: 'REACT_OBSERVE', data: { observation, round }, actor: 'yan', correlationId: state.actionId, visibility: 'internal' });
 
     if (!state.dialogue) state.dialogue = [];
     state.dialogue.push({ role: 'observe', content: observation, round });

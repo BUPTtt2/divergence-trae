@@ -29,7 +29,7 @@ import logger from './logger.js';
 import eventBus from './eventBus.js';
 import { evaluateSession } from './evalPipeline.js';
 import * as reactLoop from './reactLoop.js';
-import * as eventStore from './eventStore.js';
+import { commitDomainEvents, reflectionDomainEvents } from './agentEventSemantics.js';
 import { normalizeExecuteResponse } from '../../../shared/deliberationContract.js';
 // 系统级 Agent（生产级 4 Agent）
 import AuditAgentSingleton from '../agents/system/AuditAgent.js';
@@ -95,12 +95,22 @@ function buildResponseFromSession(session) {
   return {
     sessionId: session && session.id,
     state: session && session.state,
+    question: session && session.question,
     askUser,
     plan,
     round: (plan && plan.round) || (session && session.round) || 1,
+    replanCount: Number(session?.replan_count || 0),
     maxRound: MAX_ROUND,
     openingLine: (plan && plan.openingLine) || (session && session.openingLine) || '',
     memory: memoryUsed.map((m) => ({ content: m.content, type: m.memory_type })),
+    toolResults: Array.isArray(session?.tool_results) ? session.tool_results : [],
+    findings: Array.isArray(session?.findings) ? session.findings : [],
+    conflicts: Array.isArray(session?.conflicts) ? session.conflicts : [],
+    gaps: Array.isArray(session?.gaps) ? session.gaps : [],
+    dynamicChoices: Array.isArray(session?.dynamic_choices) ? session.dynamic_choices : [],
+    masterSummary: session?.master_summary || '',
+    oracle: session?.oracle || null,
+    commitResult: session?.commit_result || null,
   };
 }
 
@@ -481,8 +491,7 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
   };
 
   // 3. emit 进入 DELIBERATE（Event Sourcing：事件追加为真相）
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'EXECUTE', to: 'DELIBERATE', thought: '演·ReAct 推演开始' } });
-  await eventStore.appendEvent(sessionId, 'STATE_CHANGE', { from: 'EXECUTE', to: 'DELIBERATE' }, 'yan');
+  await eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'EXECUTE', to: 'DELIBERATE', thought: '演·ReAct 推演开始' }, actor: 'yan', correlationId: actionId, visibility: 'public' });
 
   // 4. 运行 ReAct 循环（Think→Act→Observe，演自主决策 tool_call/advisor_call/ask_user/output）
   const reactResult = await reactLoop.runReActLoop(sessionId, reactState);
@@ -497,7 +506,6 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
       findings: session.findings,
       tool_results: session.tool_results,
     });
-    await eventStore.appendEvent(sessionId, 'CLARIFY_ASKED', { questions: reactResult.askUser }, 'yan');
     logger.info('[Deliberation] execute 演追问，返回 CLARIFY', {
       sessionId,
       askUserCount: reactResult.askUser.length,
@@ -534,6 +542,9 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
       type: 'THOUGHT',
       data: { step: 'replan', thought: `演·重规划：${result.reason}，重新析度召智` },
     });
+    for (const domainEvent of reflectionDomainEvents(result)) {
+      await eventBus.emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
+    }
     // 持久化当前 session（含 replan_count 和补维度）
     await memoryService.saveSession(result.session);
     // state='PLAN'：先重新 plan（planner 会读 session 已有 findings 重新规划）
@@ -558,6 +569,15 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
   // 6. 持久化
   await persistExecuteResult(sessionId, result);
 
+  const reflectionProjection = {
+    ...result,
+    dynamicChoices: result.session?.dynamicChoices || [],
+    masterSummary: result.session?.masterSummary || '',
+  };
+  for (const domainEvent of reflectionDomainEvents(reflectionProjection)) {
+    await eventBus.emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
+  }
+
   return buildExecuteResponse(sessionId, result);
 }
 
@@ -569,6 +589,8 @@ async function persistExecuteResult(sessionId, result) {
     const patch = {
       findings: result.session.findings || [],
       oracle: result.session.oracle || null,
+      conflicts: result.conflicts || [],
+      gaps: result.gaps || [],
       replan_count: result.session.replan_count ?? 0,
     };
     // P1-1：持久化动态抉择选项和全局总结（下次恢复推演时不丢失）
@@ -682,7 +704,13 @@ async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
   }
   const authoritativeChoice = String(selected.id || selected.label);
 
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'ORACLE', to: 'COMMIT', choice: authoritativeChoice } });
+  const [decisionEvent, completedEvent] = commitDomainEvents({
+    choice: authoritativeChoice,
+    summary: session.master_summary || session.masterSummary || '',
+  });
+  await eventBus.emit(sessionId, { ...decisionEvent, actor: 'user', correlationId: actionId, visibility: 'public' });
+
+  await eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'ORACLE', to: 'COMMIT', choice: authoritativeChoice }, actor: 'yan', correlationId: actionId, visibility: 'public' });
   eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'commit', thought: `演·落印：用户选择「${authoritativeChoice}」` } });
 
   // 记录抉择（写入 session 供 consolidate 提取）
@@ -775,8 +803,8 @@ async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
     findings: session.findings || [],
     commit_result: commitResult,
   });
-  await eventStore.appendEvent(sessionId, 'STATE_CHANGE', { from: 'COMMIT', to: 'COMPLETE' }, 'yan');
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'COMMIT', to: 'COMPLETE' } });
+  await eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'COMMIT', to: 'COMPLETE' }, actor: 'yan', correlationId: actionId, visibility: 'public' });
+  await eventBus.emit(sessionId, { ...completedEvent, actor: 'yan', correlationId: actionId, visibility: 'public' });
 
   eventBus.emit(sessionId, {
     type: 'OBSERVATION',

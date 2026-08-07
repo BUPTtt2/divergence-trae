@@ -12,7 +12,7 @@
  *   6) eventStore：每次开始/成功/失败都 append AGENT_RUN 事件
  */
 import crypto from 'node:crypto';
-import { appendEvent } from '../services/eventStore.js';
+import eventBus from '../services/eventBus.js';
 import logger from '../services/logger.js';
 import { withRetry, withTimeout } from '../services/retryHelper.js';
 import BaseAgent from './BaseAgent.js';
@@ -78,11 +78,12 @@ export async function run(agent, baseCtx) {
   // 1) 幂等缓存
   const cached = idempotencyCache.get(correlationId);
   if (cached && cached.expiresTs > now) {
-    await appendEvent(baseCtx.sessionId, 'AGENT_RUN_CACHE_HIT', {
+    await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_COMPLETED', data: {
       agentId: agent.id,
       correlationId,
       actionId,
-    }, agent.id);
+      cacheHit: true,
+    }, actor: agent.id, correlationId, taskId: actionId, visibility: 'summary' });
     return { ok: true, output: cached.output, meta: { ...cached.meta, cacheHit: true }, correlationId };
   }
   if (cached) idempotencyCache.delete(correlationId);
@@ -111,11 +112,12 @@ async function executeAgentRun(agent, baseCtx, { actionId, correlationId, round,
   // 2) 熔断
   if (_isCircuitOpen(agent.id, now)) {
     const err = Object.assign(new Error(`[AgentRunner] ${agent.id} 熔断中，拒绝调用`), { type: 'CIRCUIT_OPEN' });
-    await appendEvent(baseCtx.sessionId, 'AGENT_RUN_CIRCUIT_OPEN', {
+    await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_FAILED', data: {
       agentId: agent.id,
       correlationId,
       actionId,
-    }, agent.id);
+      reason: 'CIRCUIT_OPEN',
+    }, actor: agent.id, correlationId, taskId: actionId, visibility: 'summary' });
     throw err;
   }
 
@@ -132,13 +134,14 @@ async function executeAgentRun(agent, baseCtx, { actionId, correlationId, round,
     blackboard: { ...(baseCtx.blackboard || {}) }
   };
 
-  await appendEvent(baseCtx.sessionId, 'AGENT_RUN_START', {
+  await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_STARTED', data: {
     agentId: agent.id,
+    agentName: agent.name,
     correlationId,
     actionId,
     timeoutMs: agent.timeoutMs,
     retries: agent.retries,
-  }, agent.id);
+  }, actor: agent.id, correlationId, taskId: actionId, visibility: 'public' });
 
   let result;
   try {
@@ -150,22 +153,24 @@ async function executeAgentRun(agent, baseCtx, { actionId, correlationId, round,
     if (result.ok) {
       idempotencyCache.set(correlationId, { output: result.output, meta: result.meta, expiresTs: Date.now() + IDEMPOTENCY_TTL });
     }
-    await appendEvent(baseCtx.sessionId, 'AGENT_RUN_OK', {
+    await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_COMPLETED', data: {
       agentId: agent.id,
+      agentName: agent.name,
       correlationId,
       actionId,
       latencyMs: result.meta?.latencyMs,
-    }, agent.id);
+    }, actor: agent.id, correlationId, taskId: actionId, visibility: 'public' });
     return { ...result, correlationId };
   } catch (err) {
     _recordFail(agent.id);
-    await appendEvent(baseCtx.sessionId, 'AGENT_RUN_FAIL', {
+    await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_FAILED', data: {
       agentId: agent.id,
+      agentName: agent.name,
       correlationId,
       actionId,
       errType: err?.type || String(err?.name || 'Error'),
       errMsg: (err?.message || String(err)).slice(0, 200),
-    }, agent.id);
+    }, actor: agent.id, correlationId, taskId: actionId, visibility: 'summary' });
     logger.error(`[AgentRunner] ${agent.id} 失败: ${err?.type || ''} ${err?.message || err}`);
     throw err;
   } finally {

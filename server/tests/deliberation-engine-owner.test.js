@@ -33,11 +33,25 @@ test('engine rejects a non-owner before every session read or mutation', async (
 });
 
 test('engine allows the verified owner to read the session', async () => {
-  const session = await ownedSession();
+  const session = await ownedSession({
+    tool_results: [{ ok: true, evidence: { id: 'ev_restore', summary: '可恢复证据', accepted: true } }],
+    findings: [{ agentId: 'risk', content: '风险可控' }],
+    conflicts: [{ reason: '成本假设冲突' }],
+    dynamic_choices: [{ id: 'trial', label: '先试行' }],
+    master_summary: '形成可逆路径',
+    replan_count: 2,
+  });
   const restored = await engine.getState(session.id, { userId: 'engine_owner_a' });
 
   assert.equal(restored.sessionId, session.id);
   assert.equal(restored.state, 'WAIT');
+  assert.equal(restored.question, '是否换工作');
+  assert.equal(restored.toolResults[0].evidence.id, 'ev_restore');
+  assert.equal(restored.findings[0].agentId, 'risk');
+  assert.equal(restored.conflicts[0].reason, '成本假设冲突');
+  assert.equal(restored.dynamicChoices[0].id, 'trial');
+  assert.equal(restored.masterSummary, '形成可逆路径');
+  assert.equal(restored.replanCount, 2);
 });
 
 test('commit reaches backend COMPLETE before the client can render final', async () => {

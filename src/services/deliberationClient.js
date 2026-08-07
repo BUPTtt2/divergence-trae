@@ -5,9 +5,17 @@
  * 依据: docs/REAL_AGENT_ARCHITECTURE.md 6.3 节 / docs/REAL_AGENT_FEASIBILITY.md 第 4 节
  */
 
-import { getAccessToken, refreshAccessToken } from './auth.js';
+import { anonymousLogin, getAccessToken, refreshAccessToken } from './auth.js';
+import { recoverAccessToken } from './authRecovery.js';
+import { API_BASE_URL } from './baseConfig.js';
+import { buildDeliberationBases } from './deliberationBase.js';
 import { probeDeliberationHealth } from './deliberationHealth.js';
-import { openAuthenticatedSse } from './sseStream.js';
+import {
+  advanceSseCursor,
+  openAuthenticatedSse,
+  readStoredSseCursor,
+  writeStoredSseCursor,
+} from './sseStream.js';
 import {
   createCommitRequest,
   createExecuteRequest,
@@ -26,9 +34,10 @@ const CLOG = {
 ============================================================ */
 const FORCED_BASE = import.meta.env.VITE_DELIBERATION_API_BASE || null;
 const CACHE_KEY = 'deliberation_base_cache';
-const BASE_CANDIDATES = FORCED_BASE
-  ? [FORCED_BASE]
-  : ['', 'http://localhost:3001'];
+const BASE_CANDIDATES = buildDeliberationBases({
+  explicitBase: FORCED_BASE,
+  apiBase: API_BASE_URL,
+});
 
 let _cachedBase = (() => {
   try {
@@ -37,6 +46,20 @@ let _cachedBase = (() => {
   } catch {}
   return null;
 })();
+
+let _authRecoveryPromise = null;
+
+function recoverDeliberationAuthentication() {
+  if (!_authRecoveryPromise) {
+    _authRecoveryPromise = recoverAccessToken({
+      refresh: refreshAccessToken,
+      anonymous: anonymousLogin,
+    }).finally(() => {
+      _authRecoveryPromise = null;
+    });
+  }
+  return _authRecoveryPromise;
+}
 
 function _persistBase(b) {
   _cachedBase = b;
@@ -102,16 +125,19 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
     });
   }
 
-  const accessToken = getAccessToken();
+  let accessToken = getAccessToken();
   if (!accessToken) {
-    const error = new Error('AUTH_REQUIRED');
-    error.code = 'AUTH_REQUIRED';
-    error.status = 401;
-    throw error;
+    accessToken = await recoverDeliberationAuthentication();
+    if (!accessToken) {
+      const error = new Error('AUTH_REQUIRED');
+      error.code = 'AUTH_REQUIRED';
+      error.status = 401;
+      throw error;
+    }
   }
   const headers = new Headers(init.headers || {});
   headers.set('Authorization', `Bearer ${accessToken}`);
-  const authenticatedInit = { ...init, headers };
+  let authenticatedInit = { ...init, headers };
 
   // 已有缓存 base → 直接尝试（快路径）
   const candidates = _cachedBase
@@ -124,7 +150,16 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
     const url = `${base}${path}`;
     try {
       CLOG.fetch(authenticatedInit.method || 'GET', path);
-      const resp = await fetch(url, authenticatedInit);
+      let resp = await fetch(url, authenticatedInit);
+      if (resp.status === 401) {
+        const recoveredToken = await recoverDeliberationAuthentication();
+        if (recoveredToken) {
+          const retryHeaders = new Headers(init.headers || {});
+          retryHeaders.set('Authorization', `Bearer ${recoveredToken}`);
+          authenticatedInit = { ...init, headers: retryHeaders };
+          resp = await fetch(url, authenticatedInit);
+        }
+      }
       if (resp.ok) {
         // 记住第一个可用 base（加速后续请求）
         if (!_cachedBase || _cachedBase !== base) _persistBase(base);
@@ -402,10 +437,14 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
   let activeStream = null;
   let reconnectTimer = null;
   let readyState = 0;
+  let lastSequence = Number(handlers.afterSequence || 0);
+  try { lastSequence = Math.max(lastSequence, readStoredSseCursor(localStorage, sessionId)); } catch {}
   const base = _cachedBase || BASE_CANDIDATES[0];
   const url = `${base}/api/deliberation/${sessionId}/events`;
 
   const dispatch = (event) => {
+    lastSequence = advanceSseCursor(lastSequence, event);
+    try { writeStoredSseCursor(localStorage, sessionId, lastSequence); } catch {}
     onEvent?.(event);
     const payload = event?.data || event?.payload || event;
     if (event?.type === 'ADVISOR_SPEAK') onAdvisorSpeak?.(payload);
@@ -420,6 +459,7 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
     activeStream = openAuthenticatedSse({
       url,
       token,
+      afterSequence: lastSequence,
       onEvent: dispatch,
       onOpen: () => {
         readyState = 1;
@@ -428,8 +468,8 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
       onError: async (error) => {
         if (!alive) return;
         if (error?.code === 'AUTH_REQUIRED') {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
+          const recoveredToken = await recoverDeliberationAuthentication();
+          if (!recoveredToken) {
             onError?.(error);
             return;
           }

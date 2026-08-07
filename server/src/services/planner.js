@@ -24,6 +24,7 @@ import { evaluate as evaluateAutonomy } from './autonomyGate.js';
 import * as agentEngine from './agentEngine.js';
 import logger from './logger.js';
 import eventBus from './eventBus.js';
+import { evidenceDomainEvent, planDomainEvents } from './agentEventSemantics.js';
 import { withRetry } from './retryHelper.js';
 
 // ============ 常量 ============
@@ -677,12 +678,29 @@ export async function plan(session) {
           data: { insight: r.summary, tool: r.tool },
         });
       }
+      const evidenceEvent = evidenceDomainEvent(r.tool, r);
+      await eventBus.emit(session.id, {
+        ...evidenceEvent,
+        actor: 'tool_gateway',
+        correlationId: `plan_${session.id}_${session.round}`,
+        taskId: 'planner_evidence',
+      });
     }
   }
 
   // 7.6 LLM 驱动演分析文本（v3.0 零预设：失败抛错，不降级模板）
   const analysis = await generateYanAnalysis(question, questionType, dimensions, toolResults, memories);
   deliberationPlan.analysis = analysis;
+
+  const planCorrelationId = `plan_${session.id}_${session.round}`;
+  for (const domainEvent of planDomainEvents(deliberationPlan, askUser)) {
+    await eventBus.emit(session.id, {
+      ...domainEvent,
+      actor: 'planner',
+      correlationId: planCorrelationId,
+      taskId: domainEvent.data?.taskId,
+    });
+  }
 
   // 映射 L3 记忆为前端契约的 [{content, type}]
   const memoryForClient = memories.map((m) => ({ content: m.content, type: m.memory_type }));

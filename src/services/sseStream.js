@@ -6,6 +6,10 @@ export function parseSseFrames(buffer) {
   const errors = [];
 
   for (const frame of frames) {
+    const lastEventId = frame
+      .split('\n')
+      .find((line) => line.startsWith('id:'))
+      ?.slice(3).trim();
     const data = frame
       .split('\n')
       .filter((line) => line.startsWith('data:'))
@@ -13,13 +17,38 @@ export function parseSseFrames(buffer) {
       .join('\n');
     if (!data) continue;
     try {
-      events.push(JSON.parse(data));
+      const event = JSON.parse(data);
+      events.push(lastEventId ? { ...event, lastEventId } : event);
     } catch {
       errors.push(new Error('SSE_INVALID_JSON'));
     }
   }
 
   return { events, errors, remainder };
+}
+
+export function advanceSseCursor(current, event) {
+  const candidate = Number(event?.sequence || event?.lastEventId || 0);
+  return Number.isFinite(candidate) && candidate > Number(current || 0)
+    ? candidate
+    : Number(current || 0);
+}
+
+function cursorKey(sessionId) {
+  return `yance:sse-cursor:${sessionId}`;
+}
+
+export function readStoredSseCursor(storage, sessionId) {
+  if (!storage || !sessionId) return 0;
+  const value = Number(storage.getItem(cursorKey(sessionId)) || 0);
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+export function writeStoredSseCursor(storage, sessionId, sequence) {
+  const current = readStoredSseCursor(storage, sessionId);
+  const next = Math.max(current, Number(sequence || 0));
+  if (storage && sessionId) storage.setItem(cursorKey(sessionId), String(next));
+  return next;
 }
 
 export function openAuthenticatedSse({
@@ -30,6 +59,7 @@ export function openAuthenticatedSse({
   onError,
   onOpen,
   onClose,
+  afterSequence = 0,
 }) {
   const controller = new AbortController();
   let readyState = 0;
@@ -41,12 +71,14 @@ export function openAuthenticatedSse({
         error.code = 'AUTH_REQUIRED';
         throw error;
       }
+      const headers = {
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${token}`,
+      };
+      if (Number(afterSequence) > 0) headers['Last-Event-ID'] = String(afterSequence);
       const response = await fetchImpl(url, {
         method: 'GET',
-        headers: {
-          Accept: 'text/event-stream',
-          Authorization: `Bearer ${token}`,
-        },
+        headers,
         cache: 'no-store',
         signal: controller.signal,
       });
@@ -72,7 +104,7 @@ export function openAuthenticatedSse({
         parsed.errors.forEach((error) => onError?.(error));
       }
     } catch (error) {
-      if (!controller.signal.aborted) onError?.(error);
+      if (!controller.signal.aborted) await onError?.(error);
     } finally {
       readyState = 2;
       onClose?.();
@@ -89,4 +121,10 @@ export function openAuthenticatedSse({
   };
 }
 
-export default { parseSseFrames, openAuthenticatedSse };
+export default {
+  parseSseFrames,
+  advanceSseCursor,
+  readStoredSseCursor,
+  writeStoredSseCursor,
+  openAuthenticatedSse,
+};

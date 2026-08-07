@@ -5,12 +5,15 @@ import {
   executeDeliberation,
   commitDeliberation,
   getMemories,
+  getDeliberation,
   saveSnapshot,
   probeBackend,
   setRunMode,
 } from '../services/deliberationClient';
 import { useDeliberationStream } from '../hooks/useDeliberationStream';
 import { createPendingActionRegistry } from './deliberationActions';
+import { applyAgentEvent, applyTransportEvent, createArenaProjection, projectSessionSnapshot } from './agentEventProjection';
+import { readStoredSseCursor } from '../services/sseStream';
 import { adaptFateTicket, mapServerStateToInternalPhase } from './sandboxRuntime';
 import tracker from '../services/tracker';
 
@@ -60,6 +63,7 @@ function internalPhaseForServerState(state) {
 }
 
 const MAX_DEBATE_ROUNDS = 3;
+const ACTIVE_SESSION_KEY = 'yance_active_deliberation_session';
 
 export function useDeliberationFlow(initialQuestion = "") {
   const [phase, setPhase] = useState(PHASE.IDLE);
@@ -108,6 +112,7 @@ export function useDeliberationFlow(initialQuestion = "") {
   const [fateRevealed, setFateRevealed] = useState(false);
   const [yanQuestionRounds, setYanQuestionRounds] = useState([]);
   const [commitPending, setCommitPending] = useState(false);
+  const [arenaProjection, setArenaProjection] = useState(createArenaProjection);
 
   const _addDebugLog = useCallback((msg) => {
     setDebugLogs(prev => {
@@ -183,7 +188,52 @@ export function useDeliberationFlow(initialQuestion = "") {
     tracker.track('phase_enter', { phase: 'input' });
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    let savedSessionId = null;
+    try { savedSessionId = sessionStorage.getItem(ACTIVE_SESSION_KEY); } catch {}
+    if (!savedSessionId) return undefined;
+
+    getDeliberation(savedSessionId).then((response) => {
+      const session = response?.session;
+      if (cancelled || !session?.sessionId) return;
+      let cursor = 0;
+      try { cursor = readStoredSseCursor(localStorage, savedSessionId); } catch {}
+      setArenaProjection(projectSessionSnapshot(session, { lastSequence: cursor }));
+      setDeliberationSessionId(savedSessionId);
+      setUserInput(session.question || '已恢复的推演');
+      setInputValue(session.question || '');
+      setShowInput(false);
+      setShowQuestion(true);
+      setPhase(internalPhaseForServerState(session.state));
+      setInference(session);
+      const agents = Array.isArray(session.plan?.agents) ? session.plan.agents : [];
+      setPlannedAgents(agents);
+      setSelectedAgentIds(new Set(agents.map((agent) => agent.id).filter(Boolean)));
+      setAwaitingAnswers(Array.isArray(session.askUser) ? session.askUser : []);
+      setAwaitingUser(['WAIT', 'ORACLE', 'COMPLETE'].includes(session.state));
+      setChoices(Array.isArray(session.dynamicChoices) ? session.dynamicChoices : []);
+      setDeliberationOracle(session.oracle || null);
+      setDeliberationFindings(session.findings || null);
+      setDeliberationCommitResult(session.commitResult || null);
+      if (session.commitResult?.fateTicket) setFateContent(adaptFateTicket(session.commitResult.fateTicket));
+    }).catch(() => {
+      try { sessionStorage.removeItem(ACTIVE_SESSION_KEY); } catch {}
+    });
+
+    return () => { cancelled = true; };
+  }, []);
+
   useDeliberationStream(deliberationSessionId, {
+    onEvent: (event) => {
+      if (event?.type === 'CONNECTED' || event?.type === 'REPLAY_COMPLETE') {
+        setArenaProjection((previous) => applyTransportEvent(previous, event));
+        return;
+      }
+      setArenaProjection((previous) => applyAgentEvent(previous, event, {
+        replay: previous.transport.replaying,
+      }));
+    },
     onThought: (data) => {
       setAgentDialogues(prev => ({
         ...prev,
@@ -263,6 +313,7 @@ export function useDeliberationFlow(initialQuestion = "") {
       }
       const sessionId = session.sessionId;
       setDeliberationSessionId(sessionId);
+      try { sessionStorage.setItem(ACTIVE_SESSION_KEY, sessionId); } catch {}
 
       setInference(session);
       const sessionAgents = Array.isArray(session?.plan?.agents) ? session.plan.agents : [];
@@ -377,6 +428,8 @@ export function useDeliberationFlow(initialQuestion = "") {
     setFateRevealed(false);
     setYanQuestionRounds([]);
     setCommitPending(false);
+    setArenaProjection(createArenaProjection());
+    try { sessionStorage.removeItem(ACTIVE_SESSION_KEY); } catch {}
     commitInFlightRef.current = false;
     lastFailedActionRef.current = null;
   }, [clearTimers]);
@@ -872,6 +925,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     setDebateAutoPlay,
     fateRevealed,
     commitPending,
+    arenaProjection,
     MAX_CLARIFY_ROUNDS: 2,
     handleUserAdvance,
     handleSkipClarify,

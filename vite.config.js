@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react'
 import fs from 'fs'
 import path from 'path'
 
+const devProxyTarget = process.env.VITE_DEV_PROXY_TARGET || 'http://localhost:3001'
+
 // 自定义插件：构建后复制 index.html 为 200.html（surge SPA 路由支持）
 function spaFallbackPlugin() {
   return {
@@ -33,7 +35,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: devProxyTarget,
         changeOrigin: true,
         secure: false,
         bypass(req) {
@@ -44,12 +46,12 @@ export default defineConfig({
       },
       // 健康检查、tracker、yan stream、agent tree 等非 /api 前缀端点
       '/health': {
-        target: 'http://localhost:3001',
+        target: devProxyTarget,
         changeOrigin: true,
         secure: false,
       },
       '/track': {
-        target: 'http://localhost:3001',
+        target: devProxyTarget,
         changeOrigin: true,
         secure: false,
       },

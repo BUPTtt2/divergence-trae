@@ -115,6 +115,8 @@ export async function saveSession(session) {
     state: session.state || 'PLAN',
     tool_results: session.tool_results,
     findings: session.findings,
+    conflicts: session.conflicts,
+    gaps: session.gaps,
     oracle: session.oracle,
     dynamic_choices: session.dynamic_choices ?? session.dynamicChoices,
     master_summary: session.master_summary ?? session.masterSummary,

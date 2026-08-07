@@ -191,10 +191,12 @@ router.get('/:sessionId/events', requirePrincipal, requireOwnedDeliberation, asy
   });
 
   // 发送初始连接确认
-  res.write(`data: ${JSON.stringify({ type: 'CONNECTED', sessionId, timestamp: new Date().toISOString() })}\n\n`);
+  const requestedCursor = req.get('Last-Event-ID') || req.query.afterSequence || '0';
+  const afterSequence = /^\d+$/.test(String(requestedCursor)) ? Number(requestedCursor) : 0;
+  res.write(`data: ${JSON.stringify({ type: 'CONNECTED', sessionId, afterSequence, timestamp: new Date().toISOString() })}\n\n`);
 
   try {
-    await eventBus.subscribe(sessionId, res);
+    await eventBus.subscribe(sessionId, res, { afterSequence });
   } catch {
     // subscribe 失败通常只是回放历史失败，但连接继续可用
   }
@@ -203,18 +205,9 @@ router.get('/:sessionId/events', requirePrincipal, requireOwnedDeliberation, asy
     try { res.write(`: heartbeat\n\n`); } catch {}
   }, 30000);
 
-  let paused = false;
-  req.on('close', async () => {
+  req.on('close', () => {
     clearInterval(heartbeat);
     try { eventBus.unsubscribe(sessionId, res); } catch {}
-    if (!paused) {
-      paused = true;
-      setTimeout(() => {
-        deliberationEngine.pause(sessionId, 'user_disconnected', {
-          userId: req.principal.userId,
-        }).catch(() => {});
-      }, 5000);
-    }
   });
 });
 
