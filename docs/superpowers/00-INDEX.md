@@ -7,7 +7,7 @@
 - 当前 `/sandbox` 不是生产级 Multi-Agent，用户主链仍是 `useGameFlow.js` 旧轨。
 - 目标是“东方仪式语言 + 可验证 Agent Runtime + 决策账本 + 结果校准”。
 - 不先增加新动画、智囊数量或外围页面。
-- 当前执行阶段：**02 · 身份与 Session 隔离已确认，进入实施**。
+- 当前执行阶段：**02 已完成；下一步是 03 · Tool/Evidence Gateway 设计**。
 
 ## 01 · 权威设计
 
@@ -19,7 +19,7 @@
 | 编号 | 阶段 | 独立退出条件 | 状态 |
 |---:|---|---|---|
 | 01 | Runtime 与前后端契约 | AgentRunner、探活、execute 契约和测试全部可信 | 完成（2026-08-07） |
-| 02 | 身份与 Session 隔离 | 所有 Session/Event/Memory 操作验证真实 owner | 实施中 |
+| 02 | 身份与 Session 隔离 | 所有 Session/Event/Memory 操作验证真实 owner | 完成（2026-08-07） |
 | 03 | Tool/Evidence Gateway | mock 不进入证据链，工具有权限、来源和时间 | 02 完成后设计 |
 | 04 | `/sandbox` 唯一 Agent 主链 | 后端 Session 驱动业务，旧轨只作为可回滚版本 | 03 完成后设计 |
 | 05 | Agent Event 与活推演阵 | 动画只消费真实事件，支持断线重放和减弱动画 | 04 完成后设计 |
@@ -31,6 +31,7 @@
 
 - [01 · Runtime 与前后端契约可信基线](计划/01-运行时与前后端契约可信基线实施计划.md)
 - Stage 02 设计：[Agent Runtime 身份与 Session 隔离](规格/02-Agent运行时身份与会话隔离设计.md)
+- Stage 02 计划：[身份与会话隔离实施计划](计划/02-身份与会话隔离实施计划.md)
 
 ## 04 · Stage 01 完成证据
 
@@ -42,7 +43,19 @@
 6. 审计：额外发现并修复 AuditAgent 无法订阅 EventBus、告警事件格式错误、审计事件未持久化。
 7. 限制：`useDeliberationFlow.js` 仍无调用方；Stage 01 只建立可信 Runtime/契约基线，不代表生产就绪。
 
-## 05 · 阅读规则
+## 05 · Stage 02 完成证据
+
+1. 身份：access/refresh token 使用 HMAC-SHA256 签名并校验 `sub/type/exp/jti`；旧 `local-*` 和 `refresh-*` 字符串不能建立 Runtime 身份。
+2. 密码：注册使用 scrypt hash；登录真实校验密码；历史明文格式不会被静默接受。
+3. HTTP 隔离：`/api/deliberation` 的 Session、Event、Memory、Custom Advisor 均从 verified principal 取 owner；body/query 自报 `userId` 无效。
+4. Engine 隔离：`answer/execute/commit/pause/resume/getState` 在服务层再次校验 owner，内部调用不能绕过 HTTP guard。
+5. 事件流：SSE 在发送 `CONNECTED` 前完成认证和 owner 校验；前端使用带 Authorization 的 fetch stream，不把 token 放入 URL。
+6. 测试：后端 `29/29`，前端动作与 SSE 单测 `4/4`；Vite build 转换 1063 个模块并成功产出。
+7. 静态检查：Stage 02 定向文件 0 error、20 warning；Deliberation 路由的 `optionalAuth`、自报 `userId`、SSE 通配 CORS 扫描均为 0。
+8. 边界：未修改 `Game.jsx`、`useGameFlow.js`、`components/board/` 或主题；未部署生产。
+9. 限制：CloudBase 仍为 `dbMode: memory`；没有 refresh 撤销、外部 OIDC/MFA；旧业务路由仍有 legacy 身份，Stage 02 只保证新 Agent Runtime 边界。
+
+## 06 · 阅读规则
 
 1. 做 01 阶段：读本索引 + 01 计划；遇到架构判断再查总设计第 3、4、6、15、16 节。
 2. 不跨阶段顺手重构。
