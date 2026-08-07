@@ -7,7 +7,7 @@
 - 当前 `/sandbox` 不是生产级 Multi-Agent，用户主链仍是 `useGameFlow.js` 旧轨。
 - 目标是“东方仪式语言 + 可验证 Agent Runtime + 决策账本 + 结果校准”。
 - 不先增加新动画、智囊数量或外围页面。
-- 当前执行阶段：**01 · Runtime 与前后端契约可信基线**。
+- 当前执行阶段：**01 已完成；下一步是 02 · 身份与 Session 隔离设计**。
 
 ## 01 · 权威设计
 
@@ -18,8 +18,8 @@
 
 | 编号 | 阶段 | 独立退出条件 | 状态 |
 |---:|---|---|---|
-| 01 | Runtime 与前后端契约 | AgentRunner、探活、execute 契约和测试全部可信 | 已形成计划 |
-| 02 | 身份与 Session 隔离 | 所有 Session/Event/Memory 操作验证真实 owner | 01 完成后设计 |
+| 01 | Runtime 与前后端契约 | AgentRunner、探活、execute 契约和测试全部可信 | 完成（2026-08-07） |
+| 02 | 身份与 Session 隔离 | 所有 Session/Event/Memory 操作验证真实 owner | 待设计 |
 | 03 | Tool/Evidence Gateway | mock 不进入证据链，工具有权限、来源和时间 | 02 完成后设计 |
 | 04 | `/sandbox` 唯一 Agent 主链 | 后端 Session 驱动业务，旧轨只作为可回滚版本 | 03 完成后设计 |
 | 05 | Agent Event 与活推演阵 | 动画只消费真实事件，支持断线重放和减弱动画 | 04 完成后设计 |
@@ -31,15 +31,15 @@
 
 - [01 · Runtime 与前后端契约可信基线](plans/01-2026-08-07-runtime-contract-baseline.md)
 
-## 04 · 当前证据
+## 04 · Stage 01 完成证据
 
-- 前端：`npm run build` 通过。
-- Agent Smoke：4 条中 3 条通过，超时契约失败。
-- 新轨 `useDeliberationFlow.js` 没有调用方。
-- 前端 execute 发送 `{context}`，后端读取 `{agentIds}`。
-- AgentRunner 调用不存在的 `eventStore.append`。
-- `probeBackend()` 通过创建业务 Session 探活。
-- 当前工作区有大量用户未提交修改；任何实施只提交明确所属文件。
+1. 后端：`cd server && npm test`，16/16 通过；原 4 条 Smoke 现为 4/4。
+2. 前端：动作 ID 单测 2/2；`npm run build` 通过，Vite 转换 1062 个模块。
+3. 契约：旧 `{context}`、旧响应字段和错误 `eventStore.append` 的定向扫描均为 0。
+4. 边界：`Game.jsx`、`useGameFlow.js`、`components/board/`、`theme/` 均未被本阶段改动。
+5. Lint：Stage 01 定向文件 0 error、22 条继承 warning；全仓 0 error、508 条历史 warning，`npm run lint` 因全仓 warning 存量仍返回 1。
+6. 审计：额外发现并修复 AuditAgent 无法订阅 EventBus、告警事件格式错误、审计事件未持久化。
+7. 限制：`useDeliberationFlow.js` 仍无调用方；Stage 01 只建立可信 Runtime/契约基线，不代表生产就绪。
 
 ## 05 · 阅读规则
 
