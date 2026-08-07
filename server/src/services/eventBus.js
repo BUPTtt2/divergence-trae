@@ -30,8 +30,27 @@ class EventBus {
     this.listeners = new Map();
     /** 历史事件缓存（每session最多100条，供新订阅者补看） */
     this.history = new Map();
+    /** @type {Map<string, Set<(event: object) => void>>} event type → backend subscribers */
+    this.backendListeners = new Map();
     const MAX_HISTORY = 100;
     this.MAX_HISTORY = MAX_HISTORY;
+  }
+
+  /**
+   * 订阅某一类后端事件。返回取消订阅函数。
+   * SSE 连接仍使用 subscribe(sessionId, res)，两种监听不混用。
+   */
+  on(type, handler) {
+    if (!type || typeof handler !== 'function') {
+      throw new TypeError('EventBus.on requires an event type and handler');
+    }
+    if (!this.backendListeners.has(type)) this.backendListeners.set(type, new Set());
+    const handlers = this.backendListeners.get(type);
+    handlers.add(handler);
+    return () => {
+      handlers.delete(handler);
+      if (handlers.size === 0) this.backendListeners.delete(type);
+    };
   }
 
   /**
@@ -67,7 +86,17 @@ class EventBus {
     hist.push(fullEvent);
     if (hist.length > this.MAX_HISTORY) hist.shift();
 
-    // 3. 推送到前端 SSE
+    // 3. 通知后端订阅者（审计、评估等）；单个订阅者失败不得中断主链
+    const handlers = this.backendListeners.get(fullEvent.type) || [];
+    for (const handler of handlers) {
+      try {
+        handler(fullEvent);
+      } catch (error) {
+        logger.warn('[EventBus] 后端订阅者异常', { type: fullEvent.type, error: error.message });
+      }
+    }
+
+    // 4. 推送到前端 SSE
     const conns = this.listeners.get(sid) || [];
     for (const res of conns) {
       try {
@@ -77,7 +106,7 @@ class EventBus {
       }
     }
 
-    // 4. 持久化到 DB（异步不阻塞，失败仅告警不抛错）
+    // 5. 持久化到 DB（异步不阻塞，失败仅告警不抛错）
     this.persistEvent(fullEvent).catch((err) => {
       logger.warn('[EventBus] 事件持久化失败', { sessionId: sid, type: fullEvent.type, error: err.message });
     });
