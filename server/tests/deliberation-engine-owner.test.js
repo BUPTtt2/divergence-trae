@@ -131,6 +131,25 @@ test('a failed planner attempt becomes one persisted fallback instead of overlap
   assert.deepEqual(restored.answers, session.answers);
 });
 
+test('answer persistence failures bypass planner fallback', async () => {
+  const session = await ownedSession({
+    state: 'PLAN',
+    plan: { askUser: [{ question: '请补充期限' }], round: 2 },
+  });
+  const persistError = Object.assign(new Error('answer save unavailable'), {
+    code: 'ANSWER_PERSIST_FAILED',
+  });
+
+  await assert.rejects(
+    engine.planSessionWithFallback(session, async () => { throw persistError; }),
+    (error) => error === persistError,
+  );
+
+  const persisted = await memoryService.getSession(session.id);
+  assert.equal(persisted.state, 'PLAN');
+  assert.deepEqual(persisted.plan.askUser, [{ question: '请补充期限' }]);
+});
+
 test('answer claim rejects a WAIT session while an execute lease is running', async () => {
   assert.equal(typeof memoryService.claimClarifyAnswer, 'function');
   const session = await ownedSession({
@@ -217,6 +236,101 @@ test('answer and execute cannot race past a completed CLARIFY handoff', async ()
   assert.equal(executeCount, 0);
   const persisted = await memoryService.getSession(session.id);
   assert.equal(persisted.state, 'EXECUTE');
+  assert.equal(persisted.execute_status, null);
+  assert.equal(persisted.execute_claim_token, null);
+});
+
+test('a crashed answer lease can be taken over after expiry', async () => {
+  const session = await ownedSession({
+    plan: { askUser: [{ question: '请补充边界' }], round: 1 },
+  });
+  const first = await memoryService.claimClarifyAnswer(session.id, session, {
+    now: 100_000,
+    leaseMs: 100,
+  });
+  assert.equal(first.session.state, 'PLAN');
+  assert.equal(first.session.execute_status, 'answering');
+  await assert.rejects(
+    memoryService.claimClarifyAnswer(session.id, first.session, { now: 100_099, leaseMs: 100 }),
+    /ANSWER_STATE_CONFLICT/,
+  );
+
+  const replacement = await memoryService.claimClarifyAnswer(session.id, first.session, {
+    now: 100_101,
+    leaseMs: 100,
+  });
+  assert.notEqual(replacement.claimToken, first.claimToken);
+  assert.equal(replacement.session.execute_status, 'answering');
+  assert.equal(replacement.session.execute_lease_expires_at, 100_201);
+
+  const staleRelease = await memoryService.claimClarifyAnswer(session.id, session, {
+    mode: 'release',
+    claimToken: first.claimToken,
+    patch: memoryService.toSessionPersistenceData(session),
+  });
+  assert.equal(staleRelease.released, false);
+  const persisted = await memoryService.getSession(session.id);
+  assert.equal(persisted.state, 'PLAN');
+  assert.equal(persisted.execute_claim_token, replacement.claimToken);
+});
+
+test('planner crash releases only the current answer lease back to WAIT', async () => {
+  const session = await ownedSession({
+    plan: { askUser: [{ question: '请补充预算' }], round: 1 },
+  });
+
+  await assert.rejects(
+    engine.answer(
+      session.id,
+      [{ answer: '预算十万' }],
+      { userId: session.user_id },
+      { planSessionFn: async () => { throw new Error('planner crashed'); } },
+    ),
+    /planner crashed/,
+  );
+
+  const persisted = await memoryService.getSession(session.id);
+  assert.equal(persisted.state, 'WAIT');
+  assert.deepEqual(persisted.plan.askUser, [{ question: '请补充预算' }]);
+  assert.equal(persisted.execute_status, null);
+  assert.equal(persisted.execute_claim_token, null);
+});
+
+test('planner save failure rolls the answer lease back for retry', async () => {
+  const session = await ownedSession({
+    plan: { askUser: [{ question: '请补充期限' }], round: 1 },
+  });
+  const answerTransitionFn = async (id, snapshot, options = {}) => {
+    if (options.mode === 'save') throw new Error('answer save unavailable');
+    return memoryService.claimClarifyAnswer(id, snapshot, options);
+  };
+  const planSessionFn = async (current, { saveSessionFn }) => {
+    current.state = 'EXECUTE';
+    current.plan = { ...current.plan, askUser: [], round: 2 };
+    await saveSessionFn(current);
+    return {
+      session: current,
+      plan: current.plan,
+      askUser: [],
+      openingLine: '',
+      round: 2,
+      memory: [],
+    };
+  };
+
+  await assert.rejects(
+    engine.answer(
+      session.id,
+      [{ answer: '三个月' }],
+      { userId: session.user_id },
+      { answerTransitionFn, planSessionFn },
+    ),
+    /answer save unavailable/,
+  );
+
+  const persisted = await memoryService.getSession(session.id);
+  assert.equal(persisted.state, 'WAIT');
+  assert.deepEqual(persisted.plan.askUser, [{ question: '请补充期限' }]);
   assert.equal(persisted.execute_status, null);
   assert.equal(persisted.execute_claim_token, null);
 });

@@ -96,6 +96,33 @@ test('non-owner cannot read or mutate another principal deliberation', async () 
   });
 });
 
+test('answer state conflicts return HTTP 409', async () => {
+  await withServer(async (base) => {
+    const owner = await createAnonymous(base);
+    const session = await memoryService.saveSession({
+      user_id: owner.user.id,
+      question: '是否换工作',
+      state: 'WAIT',
+      round: 1,
+      plan: { askUser: [{ question: '请补充信息' }], round: 1 },
+    });
+    await memoryService.claimExecute(session.id, {
+      actionId: 'answer-route-conflict',
+      now: 120_000,
+      leaseMs: 5_000,
+    });
+
+    const response = await jsonRequest(base, `/api/deliberation/${session.id}/answer`, {
+      method: 'POST',
+      token: owner.accessToken,
+      body: { answers: [{ answer: '补充信息' }] },
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error, 'ANSWER_STATE_CONFLICT');
+  });
+});
+
 test('event stream authenticates before sending CONNECTED', async () => {
   await withServer(async (base) => {
     const owner = await createAnonymous(base);

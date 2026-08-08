@@ -657,7 +657,11 @@ export async function plan(session, dependencies = {}) {
     session.id = saved.id;
     logger.info('[Planner] 会话已持久化', { sessionId: session.id, state: session.state, round: session.round });
   } catch (e) {
-    if (e?.code === 'EXECUTE_CLAIM_LOST') throw e;
+    if (
+      e?.code === 'EXECUTE_CLAIM_LOST'
+      || e?.code === 'ANSWER_STATE_CONFLICT'
+      || e?.code === 'ANSWER_PERSIST_FAILED'
+    ) throw e;
     logger.warn('[Planner] 会话持久化失败，继续内存态', { error: e.message });
   }
 

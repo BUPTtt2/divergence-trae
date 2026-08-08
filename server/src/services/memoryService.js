@@ -338,44 +338,109 @@ export async function releaseExecuteClaim(sessionId, { actionId, claimToken } = 
   return { released: result.rowCount === 1, session: result.rows[0] || await getSession(sessionId) };
 }
 
-/** 从无运行租约的 WAIT 原子接管回答流程，避免 answer 清除并发 execute 的租约。 */
-export async function claimClarifyAnswer(sessionId, snapshot = {}) {
+const DEFAULT_ANSWER_LEASE_MS = 2 * 60 * 1000;
+
+function answerStateConflict() {
+  const error = new Error('ANSWER_STATE_CONFLICT');
+  error.code = 'ANSWER_STATE_CONFLICT';
+  error.status = 409;
+  return error;
+}
+
+/** answer 的单一持久化状态机：claim/save/complete/release 均由 token CAS 保护。 */
+export async function claimClarifyAnswer(sessionId, snapshot = {}, options = {}) {
+  const mode = options.mode || 'claim';
+  if (mode !== 'claim') {
+    if (!['save', 'complete', 'release'].includes(mode)) {
+      throw new Error('ANSWER_TRANSITION_INVALID');
+    }
+    const claimToken = String(options.claimToken || '').trim();
+    if (!claimToken) throw answerStateConflict();
+    const actionId = `answer:${claimToken}`;
+    const patch = dropUndefined(options.patch || {});
+    const now = Number(options.now ?? Date.now());
+    const leaseMs = Number(options.leaseMs ?? DEFAULT_ANSWER_LEASE_MS);
+    if (mode === 'save' && (!Number.isFinite(now) || !Number.isFinite(leaseMs) || leaseMs <= 0)) {
+      throw new Error('ANSWER_LEASE_INVALID');
+    }
+    const data = mode === 'save'
+      ? {
+        ...patch,
+        state: options.state,
+        execute_action_id: actionId,
+        execute_status: 'answering',
+        execute_claim_token: claimToken,
+        execute_lease_expires_at: now + leaseMs,
+      }
+      : {
+        ...patch,
+        state: mode === 'release' ? 'WAIT' : options.state,
+        execute_action_id: null,
+        execute_status: null,
+        execute_claim_token: null,
+        execute_lease_expires_at: null,
+      };
+    const result = await query({
+      table: SESSIONS_TABLE,
+      action: 'compare-and-set',
+      id: sessionId,
+      expected: {
+        execute_action_id: actionId,
+        execute_status: 'answering',
+        execute_claim_token: claimToken,
+      },
+      data: dropUndefined(data),
+    });
+    if (result.rowCount !== 1) {
+      if (mode === 'release') return { released: false, session: await getSession(sessionId) };
+      throw answerStateConflict();
+    }
+    return {
+      [mode === 'complete' ? 'completed' : mode === 'release' ? 'released' : 'saved']: true,
+      claimToken,
+      session: result.rows[0],
+    };
+  }
+
   const executeStatus = snapshot.execute_status ?? snapshot.executeStatus ?? null;
   const leaseExpiresAt = snapshot.execute_lease_expires_at ?? snapshot.executeLeaseExpiresAt ?? null;
-  const eligible = snapshot.state === 'WAIT'
+  const now = Number(options.now ?? Date.now());
+  const leaseMs = Number(options.leaseMs ?? DEFAULT_ANSWER_LEASE_MS);
+  if (!Number.isFinite(now) || !Number.isFinite(leaseMs) || leaseMs <= 0) {
+    throw new Error('ANSWER_LEASE_INVALID');
+  }
+  const eligibleWait = snapshot.state === 'WAIT'
     && (executeStatus === null || executeStatus === 'completed')
     && leaseExpiresAt === null;
-  if (!eligible) {
-    const error = new Error('ANSWER_STATE_CONFLICT');
-    error.code = 'ANSWER_STATE_CONFLICT';
-    throw error;
-  }
+  const expiredAnswer = executeStatus === 'answering'
+    && Number.isFinite(Number(leaseExpiresAt))
+    && Number(leaseExpiresAt) <= now;
+  if (!eligibleWait && !expiredAnswer) throw answerStateConflict();
+
+  const claimToken = String(options.claimToken || generateUUID()).trim();
+  const actionId = `answer:${claimToken}`;
 
   const result = await query({
     table: SESSIONS_TABLE,
     action: 'compare-and-set',
     id: sessionId,
     expected: {
-      state: 'WAIT',
+      state: snapshot.state,
       execute_action_id: snapshot.execute_action_id ?? snapshot.executeActionId ?? null,
       execute_status: executeStatus,
       execute_claim_token: snapshot.execute_claim_token ?? snapshot.executeClaimToken ?? null,
-      execute_lease_expires_at: null,
+      execute_lease_expires_at: leaseExpiresAt,
     },
     data: {
       state: 'PLAN',
-      execute_action_id: null,
-      execute_status: null,
-      execute_claim_token: null,
-      execute_lease_expires_at: null,
+      execute_action_id: actionId,
+      execute_status: 'answering',
+      execute_claim_token: claimToken,
+      execute_lease_expires_at: now + leaseMs,
     },
   });
-  if (result.rowCount !== 1) {
-    const error = new Error('ANSWER_STATE_CONFLICT');
-    error.code = 'ANSWER_STATE_CONFLICT';
-    throw error;
-  }
-  return { claimed: true, session: result.rows[0] };
+  if (result.rowCount !== 1) throw answerStateConflict();
+  return { claimed: true, claimToken, session: result.rows[0] };
 }
 
 /**

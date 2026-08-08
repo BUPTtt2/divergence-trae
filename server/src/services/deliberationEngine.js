@@ -306,7 +306,11 @@ export async function planSessionWithFallback(session, planFn = planner.plan, de
   try {
     return await planFn(session, dependencies);
   } catch (error) {
-    if (error?.code === 'EXECUTE_CLAIM_LOST') throw error;
+    if (
+      error?.code === 'EXECUTE_CLAIM_LOST'
+      || error?.code === 'ANSWER_STATE_CONFLICT'
+      || error?.code === 'ANSWER_PERSIST_FAILED'
+    ) throw error;
     logger.warn('[Deliberation] planner 失败，保存可继续的规则兜底', { sessionId: session.id, error: error.message });
     const fallback = _fallbackPlanResult(session, error.message);
     const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
@@ -546,38 +550,81 @@ export async function answer(sessionId, answers, executionCtx = {}, dependencies
   logger.info('[Deliberation] answer 收到', { sessionId, answerCount: Array.isArray(answers) ? answers.length : 0 });
 
   const loadedSession = await assertSessionOwner(sessionId, executionCtx.userId);
-  const claimAnswer = dependencies.claimAnswerFn || memoryService.claimClarifyAnswer;
+  const answerTransition = dependencies.answerTransitionFn || memoryService.claimClarifyAnswer;
+  const claimAnswer = dependencies.claimAnswerFn || ((id, snapshot) => answerTransition(id, snapshot, {
+    now: dependencies.nowFn ? dependencies.nowFn() : Date.now(),
+    ...(dependencies.leaseMs ? { leaseMs: dependencies.leaseMs } : {}),
+  }));
   const answerClaim = await claimAnswer(sessionId, loadedSession);
   const session = { ...loadedSession, ...answerClaim.session };
+  const claimToken = answerClaim.claimToken;
+  const rollbackPatch = executeProjectionPatch(loadedSession);
+  const saveSessionFn = async (candidate) => {
+    try {
+      await answerTransition(sessionId, candidate, {
+        mode: 'save',
+        claimToken,
+        state: candidate.state,
+        patch: executeProjectionPatch(candidate),
+      });
+      return { ...candidate, id: sessionId };
+    } catch (error) {
+      if (!error.code) error.code = 'ANSWER_PERSIST_FAILED';
+      throw error;
+    }
+  };
 
-  // round 从持久化的 plan.round 读取，+1 进入下一轮判定
-  const prevRound = Number((session.plan && session.plan.round) || session.round) || 1;
-  session.round = prevRound + 1;
+  try {
+    // round 从持久化的 plan.round 读取，+1 进入下一轮判定
+    const prevRound = Number((session.plan && session.plan.round) || session.round) || 1;
+    session.round = prevRound + 1;
 
-  // 合并 answers 到 questionContext（作为补充信息，不改原问题），供 autonomyGate 重新扫描
-  session.questionContext = mergeAnswersToContext(session.question, answers);
-  session.answers = Array.isArray(answers) ? answers : [];
+    // 合并 answers 到 questionContext（作为补充信息，不改原问题），供 autonomyGate 重新扫描
+    session.questionContext = mergeAnswersToContext(session.question, answers);
+    session.answers = Array.isArray(answers) ? answers : [];
 
-  logger.info('[Deliberation] answer 重新规划', {
-    sessionId,
-    prevRound,
-    newRound: session.round,
-    questionContext: session.questionContext.slice(0, 80),
-  });
+    logger.info('[Deliberation] answer 重新规划', {
+      sessionId,
+      prevRound,
+      newRound: session.round,
+      questionContext: session.questionContext.slice(0, 80),
+    });
 
-  // 重新 plan（planner 内 autonomyGate 按 session.round 判定 ASK/CONTINUE/STOP）
-  const planSession = dependencies.planSessionFn || planSessionWithFallback;
-  const result = await planSession(session);
+    // 重新 plan；其保存动作继续受当前 answer token 保护。
+    const result = dependencies.planSessionFn
+      ? await dependencies.planSessionFn(session, { saveSessionFn })
+      : await planSessionWithFallback(session, dependencies.planFn || planner.plan, { saveSessionFn });
+    await answerTransition(sessionId, result.session, {
+      mode: 'complete',
+      claimToken,
+      state: result.session.state,
+      patch: executeProjectionPatch(result.session),
+    });
 
-  logger.info('[Deliberation] answer 完成', {
-    sessionId,
-    state: result.session.state,
-    round: result.round,
-    dimCount: result.plan?.dimensions?.length || 0,
-    askUserCount: result.askUser?.length || 0,
-  });
+    logger.info('[Deliberation] answer 完成', {
+      sessionId,
+      state: result.session.state,
+      round: result.round,
+      dimCount: result.plan?.dimensions?.length || 0,
+      askUserCount: result.askUser?.length || 0,
+    });
 
-  return buildResponse(result.session, result.plan, result.askUser, result.openingLine, result.round, result.memory);
+    return buildResponse(result.session, result.plan, result.askUser, result.openingLine, result.round, result.memory);
+  } catch (error) {
+    try {
+      await answerTransition(sessionId, loadedSession, {
+        mode: 'release',
+        claimToken,
+        patch: rollbackPatch,
+      });
+    } catch (releaseError) {
+      logger.warn('[Deliberation] answer claim 释放失败，等待租约过期', {
+        sessionId,
+        error: releaseError.message,
+      });
+    }
+    throw error;
+  }
 }
 
 /**
