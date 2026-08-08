@@ -7,11 +7,13 @@ import eventBus from '../src/services/eventBus.js';
 import BaseAgent from '../src/agents/BaseAgent.js';
 import { run as runAgent } from '../src/agents/AgentRunner.js';
 import {
+  AGENT_DOMAIN_EVENT_TYPES,
   appendEvent,
   getEvents,
   isBrowserVisibleEvent,
   isSequenceConflict,
 } from '../src/services/eventStore.js';
+import { reflectionDomainEvents } from '../src/services/agentEventSemantics.js';
 
 initDB();
 
@@ -188,4 +190,55 @@ test('only the session-sequence unique constraint is retryable', () => {
   assert.equal(isSequenceConflict({ code: '23505', constraint: 'idx_events_session_sequence' }), true);
   assert.equal(isSequenceConflict({ code: '23505', constraint: 'deliberation_events_pkey' }), false);
   assert.equal(isSequenceConflict({ code: 'ECONNRESET' }), false);
+});
+
+test('Lens domain events are whitelisted, visible at their declared scope, and replay stably from a cursor', async () => {
+  const sessionId = `sess_lens_event_replay_${Date.now()}`;
+  const domainEvents = reflectionDomainEvents({
+    cognitivePlan: {
+      lensId: 24,
+      lensName: '复',
+      source: 'session-derived',
+      sourceDigest: 'b'.repeat(64),
+      invariants: {
+        evidenceLocked: true,
+        riskLocked: true,
+        approvalLocked: true,
+        userDecisionLocked: true,
+      },
+      reviewTasks: [{
+        id: 'lens-task-replay',
+        kind: 'assumption',
+        question: '哪个前提仍需补证？',
+        causedBy: ['lens:24', 'finding:unknown-1'],
+      }],
+    },
+    lensImpacts: [{
+      taskId: 'lens-task-replay',
+      lensId: 24,
+      outcome: 'no-change',
+      findingIds: [],
+      summary: '完成审查，未改变核心判断。',
+    }],
+  });
+  const lensTypes = ['LENS_SELECTED', 'LENS_TASK_CREATED', 'LENS_TASK_COMPLETED', 'LENS_REVIEW_COMPLETED'];
+
+  assert.equal(lensTypes.every((type) => AGENT_DOMAIN_EVENT_TYPES.includes(type)), true);
+  const persisted = [];
+  for (const domainEvent of domainEvents) {
+    persisted.push(await eventBus.emit(sessionId, {
+      ...domainEvent,
+      actor: 'reflector',
+      correlationId: 'corr_lens_replay',
+    }));
+  }
+
+  assert.deepEqual(persisted.map((event) => event.sequence), [1, 2, 3, 4]);
+  assert.deepEqual(persisted.map((event) => event.visibility), ['summary', 'public', 'public', 'summary']);
+  const replay = await getEvents(sessionId, { afterSequence: persisted[0].sequence, browserVisibleOnly: true });
+  assert.deepEqual(replay.map((event) => event.sequence), [2, 3, 4]);
+  assert.deepEqual(replay.map((event) => event.type), lensTypes.slice(1));
+
+  await removeEvents(persisted);
+  eventBus.cleanup(sessionId);
 });

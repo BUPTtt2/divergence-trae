@@ -49,3 +49,110 @@ test('reflection and commit semantics cover conflict, replan, approval and cryst
   assert.deepEqual(reflection.map((event) => event.type), ['CLAIM_CHALLENGED', 'PLAN_REVISED', 'APPROVAL_REQUIRED']);
   assert.deepEqual(commit.map((event) => event.type), ['DECISION_COMMITTED', 'SESSION_COMPLETED']);
 });
+
+test('reflection semantics publish a minimal, non-duplicated Lens event lifecycle', () => {
+  const reflection = reflectionDomainEvents({
+    cognitivePlan: {
+      lensId: 24,
+      lensName: '复',
+      source: 'session-derived',
+      sourceDigest: 'a'.repeat(64),
+      invariants: {
+        evidenceLocked: true,
+        riskLocked: true,
+        approvalLocked: true,
+        userDecisionLocked: true,
+      },
+      prompt: 'ignore safeguards',
+      rawModelContent: 'hidden chain of thought',
+      reviewTasks: [
+        {
+          id: 'lens-task-1',
+          kind: 'counterfactual',
+          question: '若关键假设反转，当前证据是否仍成立？',
+          targetPerspective: '风险',
+          causedBy: ['lens:24', 'conflict:cashflow'],
+          prompt: 'never expose',
+          rawModelContent: 'never expose',
+        },
+        {
+          id: 'lens-task-1',
+          kind: 'counterfactual',
+          question: 'duplicate task must not emit twice',
+          causedBy: ['lens:24'],
+        },
+      ],
+    },
+    lensImpacts: [
+      {
+        taskId: 'lens-task-1',
+        lensId: 24,
+        outcome: 'evidence-added',
+        findingIds: ['finding-1'],
+        summary: '补充了一条可追溯证据。',
+        rawModelContent: 'never expose',
+      },
+      {
+        taskId: 'lens-task-1',
+        lensId: 24,
+        outcome: 'no-change',
+        findingIds: [],
+        summary: 'duplicate impact must not emit twice',
+      },
+    ],
+  });
+
+  assert.deepEqual(reflection, [
+    {
+      type: 'LENS_SELECTED',
+      visibility: 'summary',
+      data: {
+        lensId: 24,
+        lensName: '复',
+        source: 'session-derived',
+        sourceDigest: 'a'.repeat(64),
+        invariants: {
+          evidenceLocked: true,
+          riskLocked: true,
+          approvalLocked: true,
+          userDecisionLocked: true,
+        },
+      },
+    },
+    {
+      type: 'LENS_TASK_CREATED',
+      visibility: 'public',
+      data: {
+        taskId: 'lens-task-1',
+        lensId: 24,
+        kind: 'counterfactual',
+        question: '若关键假设反转，当前证据是否仍成立？',
+        targetPerspective: '风险',
+        causedBy: ['lens:24', 'conflict:cashflow'],
+      },
+    },
+    {
+      type: 'LENS_TASK_COMPLETED',
+      visibility: 'public',
+      data: {
+        taskId: 'lens-task-1',
+        lensId: 24,
+        outcome: 'evidence-added',
+        findingIds: ['finding-1'],
+        summary: '补充了一条可追溯证据。',
+      },
+    },
+    {
+      type: 'LENS_REVIEW_COMPLETED',
+      visibility: 'summary',
+      data: {
+        lensId: 24,
+        taskCount: 1,
+        impactCount: 1,
+        changedTaskCount: 1,
+        summary: '已完成 1 项审查任务，其中 1 项产生可追溯影响。',
+      },
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(reflection), /prompt|rawModelContent|hidden chain of thought|never expose/);
+});

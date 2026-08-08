@@ -2,6 +2,79 @@ function descriptor(type, data, visibility = 'public') {
   return { type, data, visibility };
 }
 
+function uniqueBy(items, key) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const value = item?.[key];
+    if (!value || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+
+function lensInvariants(invariants = {}) {
+  return {
+    evidenceLocked: invariants.evidenceLocked === true,
+    riskLocked: invariants.riskLocked === true,
+    approvalLocked: invariants.approvalLocked === true,
+    userDecisionLocked: invariants.userDecisionLocked === true,
+  };
+}
+
+function lensDomainEvents(result = {}) {
+  const plan = result.cognitivePlan;
+  if (!Number.isInteger(plan?.lensId) || plan.lensId < 1 || plan.lensId > 64) return [];
+
+  const tasks = uniqueBy(Array.isArray(plan.reviewTasks) ? plan.reviewTasks : [], 'id');
+  const impacts = uniqueBy(Array.isArray(result.lensImpacts) ? result.lensImpacts : [], 'taskId')
+    .filter((impact) => tasks.some((task) => task.id === impact.taskId));
+  const events = [descriptor('LENS_SELECTED', {
+    lensId: plan.lensId,
+    lensName: typeof plan.lensName === 'string' ? plan.lensName : '',
+    source: plan.source === 'session-derived' ? plan.source : 'session-derived',
+    sourceDigest: typeof plan.sourceDigest === 'string' ? plan.sourceDigest : '',
+    invariants: lensInvariants(plan.invariants),
+  }, 'summary')];
+
+  for (const task of tasks) {
+    const data = {
+      taskId: task.id,
+      lensId: plan.lensId,
+      kind: task.kind,
+      question: task.question,
+      ...(typeof task.targetPerspective === 'string' && task.targetPerspective
+        ? { targetPerspective: task.targetPerspective }
+        : {}),
+      causedBy: Array.isArray(task.causedBy) ? task.causedBy.filter((source) => typeof source === 'string') : [],
+    };
+    events.push(descriptor('LENS_TASK_CREATED', data));
+  }
+
+  for (const impact of impacts) {
+    events.push(descriptor('LENS_TASK_COMPLETED', {
+      taskId: impact.taskId,
+      lensId: plan.lensId,
+      outcome: impact.outcome,
+      findingIds: Array.isArray(impact.findingIds)
+        ? impact.findingIds.filter((findingId) => typeof findingId === 'string')
+        : [],
+      summary: typeof impact.summary === 'string' ? impact.summary : '',
+    }));
+  }
+
+  const changedTaskCount = impacts.filter((impact) => impact.outcome !== 'no-change').length;
+  events.push(descriptor('LENS_REVIEW_COMPLETED', {
+    lensId: plan.lensId,
+    taskCount: tasks.length,
+    impactCount: impacts.length,
+    changedTaskCount,
+    summary: changedTaskCount > 0
+      ? `已完成 ${tasks.length} 项审查任务，其中 ${changedTaskCount} 项产生可追溯影响。`
+      : `已完成 ${tasks.length} 项审查任务，未改变核心判断。`,
+  }, 'summary'));
+  return events;
+}
+
 export function planDomainEvents(plan = {}, askUser = []) {
   const tasks = (plan.dimensions || []).map((dimension, index) => ({
     id: dimension.id || dimension.key || `dimension_${index + 1}`,
@@ -73,7 +146,7 @@ export function reflectionDomainEvents(result = {}) {
   if (events.length === 0 && result.masterSummary) {
     events.push(descriptor('CONSENSUS_FORMED', { summary: result.masterSummary }));
   }
-  return events;
+  return [...events, ...lensDomainEvents(result)];
 }
 
 export function commitDomainEvents({ choice, summary = '' } = {}) {
