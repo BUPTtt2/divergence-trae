@@ -21,6 +21,37 @@ function lensInvariants(invariants = {}) {
   };
 }
 
+const TARGET_PERSPECTIVES = new Set([
+  'strategic', 'risk', 'financial', 'action', 'communication', 'practical', 'unspecified',
+]);
+const PERSPECTIVE_ALIASES = Object.freeze({
+  '战略': 'strategic',
+  '策略': 'strategic',
+  '风险': 'risk',
+  '财务': 'financial',
+  '行动': 'action',
+  '沟通': 'communication',
+  '实践': 'practical',
+});
+const CAUSAL_REFERENCE_PATTERNS = [
+  /^lens:(?:[1-9]|[1-5]\d|6[0-4])$/,
+  /^(?:conflict|gap|finding):[A-Za-z0-9_-]{1,128}$/,
+  /^oracle:dynamic:[1-6]$/,
+];
+
+function normalizeTargetPerspective(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const candidate = PERSPECTIVE_ALIASES[normalized] || normalized;
+  return TARGET_PERSPECTIVES.has(candidate) ? candidate : 'unspecified';
+}
+
+function normalizeCausalReferences(sources) {
+  return [...new Set((Array.isArray(sources) ? sources : [])
+    .filter((source) => typeof source === 'string')
+    .map((source) => source.trim())
+    .filter((source) => CAUSAL_REFERENCE_PATTERNS.some((pattern) => pattern.test(source))))];
+}
+
 function lensDomainEvents(result = {}) {
   const plan = result.cognitivePlan;
   if (!Number.isInteger(plan?.lensId) || plan.lensId < 1 || plan.lensId > 64) return [];
@@ -31,7 +62,7 @@ function lensDomainEvents(result = {}) {
   const events = [descriptor('LENS_SELECTED', {
     lensId: plan.lensId,
     lensName: typeof plan.lensName === 'string' ? plan.lensName : '',
-    source: plan.source === 'session-derived' ? plan.source : 'session-derived',
+    source: 'session-derived',
     sourceDigest: typeof plan.sourceDigest === 'string' ? plan.sourceDigest : '',
     invariants: lensInvariants(plan.invariants),
   }, 'summary')];
@@ -42,10 +73,10 @@ function lensDomainEvents(result = {}) {
       lensId: plan.lensId,
       kind: task.kind,
       question: task.question,
-      ...(typeof task.targetPerspective === 'string' && task.targetPerspective
-        ? { targetPerspective: task.targetPerspective }
+      ...(Object.hasOwn(task, 'targetPerspective')
+        ? { targetPerspective: normalizeTargetPerspective(task.targetPerspective) }
         : {}),
-      causedBy: Array.isArray(task.causedBy) ? task.causedBy.filter((source) => typeof source === 'string') : [],
+      causedBy: normalizeCausalReferences(task.causedBy),
     };
     events.push(descriptor('LENS_TASK_CREATED', data));
   }

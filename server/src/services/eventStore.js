@@ -10,6 +10,8 @@
  * 解决问题: db.js 无事务导致状态与事件脱节（deepseek 死穴1）
  */
 
+import { createHash } from 'node:crypto';
+
 import { query } from './db.js';
 import { generateUUID } from '../utils/id.js';
 import logger from './logger.js';
@@ -27,6 +29,13 @@ export const AGENT_DOMAIN_EVENT_TYPES = Object.freeze([
   'APPROVAL_REQUIRED', 'DECISION_COMMITTED', 'SESSION_COMPLETED',
   'LENS_SELECTED', 'LENS_TASK_CREATED', 'LENS_TASK_COMPLETED', 'LENS_REVIEW_COMPLETED',
 ]);
+
+export function deterministicEventId(sessionId, correlationId, type, idempotencyKey) {
+  const digest = createHash('sha256')
+    .update(JSON.stringify([sessionId, correlationId, type, idempotencyKey]))
+    .digest('hex');
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(12, 15)}-8${digest.slice(15, 18)}-${digest.slice(18, 30)}`;
+}
 
 const INTERNAL_BY_DEFAULT = new Set(['THOUGHT', 'ACTION', 'REACT_THINK', 'REACT_ACT', 'REACT_OBSERVE', 'AUDIT_EVENT']);
 const SUMMARY_BY_DEFAULT = new Set(['OBSERVATION', 'ERROR', 'AUDIT_ALERT']);
@@ -50,6 +59,13 @@ export async function appendEvent(sessionId, type, data = {}, actor = null, meta
   const previous = appendQueues.get(sessionId) || Promise.resolve();
   const operation = previous.catch(() => {}).then(async () => {
     const eventId = metadata.eventId || generateUUID();
+    const existing = await query({
+      table: EVENTS_TABLE,
+      action: 'select',
+      filter: { id: eventId },
+      queryOptions: { limit: 1 },
+    });
+    if (existing.rows?.[0]) return rowToAgentEvent(existing.rows[0], 1);
     const createdAt = metadata.createdAt || new Date().toISOString();
     const visibility = normalizeVisibility(metadata.visibility, type);
     for (let attempt = 0; attempt < MAX_SEQUENCE_RETRIES; attempt += 1) {
@@ -96,6 +112,15 @@ export async function appendEvent(sessionId, type, data = {}, actor = null, meta
         });
         return event;
       } catch (error) {
+        if (isEventIdConflict(error)) {
+          const existingEvent = await query({
+            table: EVENTS_TABLE,
+            action: 'select',
+            filter: { id: eventId },
+            queryOptions: { limit: 1 },
+          });
+          if (existingEvent.rows?.[0]) return rowToAgentEvent(existingEvent.rows[0], 1);
+        }
         if (!isSequenceConflict(error) || attempt === MAX_SEQUENCE_RETRIES - 1) throw error;
         await new Promise((resolve) => setTimeout(resolve, (2 ** attempt) + Math.floor(Math.random() * 5)));
       }
@@ -112,6 +137,10 @@ export async function appendEvent(sessionId, type, data = {}, actor = null, meta
 
 export function isSequenceConflict(error) {
   return error?.code === '23505' && error?.constraint === 'idx_events_session_sequence';
+}
+
+function isEventIdConflict(error) {
+  return error?.code === '23505' && error?.constraint === 'deliberation_events_pkey';
 }
 
 /**

@@ -11,8 +11,31 @@
 
 import logger from './logger.js';
 import { generateUUID } from '../utils/id.js';
-import { appendEvent, getEvents, isBrowserVisibleEvent, withLegacyAliases } from './eventStore.js';
+import {
+  appendEvent,
+  deterministicEventId,
+  getEvents,
+  isBrowserVisibleEvent,
+  withLegacyAliases,
+} from './eventStore.js';
 const SYSTEM_SESSION_ID = 'system';
+
+function stableSerialize(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  return `{${Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`)
+    .join(',')}}`;
+}
+
+function isLensDomainEvent(type) {
+  return type === 'LENS_SELECTED'
+    || type === 'LENS_TASK_CREATED'
+    || type === 'LENS_TASK_COMPLETED'
+    || type === 'LENS_REVIEW_COMPLETED';
+}
 
 class EventBus {
   constructor() {
@@ -50,7 +73,11 @@ class EventBus {
    */
   emit(sessionId, event) {
     const sid = sessionId || SYSTEM_SESSION_ID;
-    const eventId = generateUUID();
+    const payload = event.payload || event.data || {};
+    const correlationId = event.correlationId || payload.correlationId || `corr_${generateUUID()}`;
+    const eventId = event.eventId || (isLensDomainEvent(event.type)
+      ? deterministicEventId(sid, correlationId, event.type, stableSerialize(payload))
+      : generateUUID());
     const draft = withLegacyAliases({
       eventId,
       type: event.type,
@@ -59,8 +86,8 @@ class EventBus {
       actorId: event.actorId || event.actor || 'system',
       ...(event.taskId ? { taskId: event.taskId } : {}),
       ...(event.causationId ? { causationId: event.causationId } : {}),
-      correlationId: event.correlationId || event.data?.correlationId || `corr_${eventId}`,
-      payload: event.payload || event.data || {},
+      correlationId,
+      payload,
       visibility: event.visibility || 'public',
       createdAt: new Date().toISOString(),
       schemaVersion: 1,

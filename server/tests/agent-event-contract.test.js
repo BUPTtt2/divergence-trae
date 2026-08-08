@@ -242,3 +242,54 @@ test('Lens domain events are whitelisted, visible at their declared scope, and r
   await removeEvents(persisted);
   eventBus.cleanup(sessionId);
 });
+
+test('Lens lifecycle persistence is idempotent for one action but independent across actions', async () => {
+  const sessionId = `sess_lens_idempotency_${Date.now()}`;
+  const domainEvents = reflectionDomainEvents({
+    cognitivePlan: {
+      lensId: 24,
+      lensName: '复',
+      source: 'session-derived',
+      sourceDigest: 'd'.repeat(64),
+      invariants: {
+        evidenceLocked: true,
+        riskLocked: true,
+        approvalLocked: true,
+        userDecisionLocked: true,
+      },
+      reviewTasks: [{
+        id: 'lens-task-idempotent',
+        kind: 'assumption',
+        question: '哪个前提仍需补证？',
+        causedBy: ['lens:24', 'finding:unknown-1'],
+      }],
+    },
+    lensImpacts: [{
+      taskId: 'lens-task-idempotent',
+      lensId: 24,
+      outcome: 'no-change',
+      findingIds: [],
+      summary: '完成审查，未改变核心判断。',
+    }],
+  });
+  const publish = async (actionId) => Promise.all(domainEvents.map((domainEvent) => eventBus.emit(sessionId, {
+    ...domainEvent,
+    actor: 'reflector',
+    correlationId: actionId,
+  })));
+
+  const first = await publish('action_lens_1');
+  const replay = await publish('action_lens_1');
+  const afterRetry = await getEvents(sessionId);
+  const secondAction = await publish('action_lens_2');
+  const allEvents = await getEvents(sessionId);
+
+  assert.deepEqual(replay.map((event) => event.eventId), first.map((event) => event.eventId));
+  assert.equal(afterRetry.length, 4);
+  assert.deepEqual(afterRetry.map((event) => event.sequence), [1, 2, 3, 4]);
+  assert.equal(allEvents.length, 8);
+  assert.deepEqual(secondAction.map((event) => event.sequence), [5, 6, 7, 8]);
+
+  await removeEvents(allEvents);
+  eventBus.cleanup(sessionId);
+});
