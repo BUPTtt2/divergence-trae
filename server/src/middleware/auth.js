@@ -10,8 +10,12 @@ function createHmac(secret, data) {
 
 function extractBearerIdentity(req) {
   const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice('Bearer '.length).trim();
+  const bearerMatch = typeof authHeader === 'string'
+    ? authHeader.match(/^\s*bearer(?:\s+(.*))?\s*$/i)
+    : null;
+  if (bearerMatch) {
+    const token = (bearerMatch[1] || '').trim();
+    if (!token) return { present: true, userId: null };
     if (token.startsWith('local-')) {
       return { present: true, userId: token.slice('local-'.length) || null };
     }

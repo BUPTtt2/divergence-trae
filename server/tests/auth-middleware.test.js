@@ -25,6 +25,13 @@ function requestWithToken(token, headers = {}) {
   };
 }
 
+function requestWithAuthorization(authorization, headers = {}, body = {}) {
+  return {
+    headers: { ...headers, authorization },
+    body,
+  };
+}
+
 function responseRecorder() {
   return {
     statusCode: 200,
@@ -75,6 +82,76 @@ test('an invalid bearer JWT is never trusted or replaced by a spoofed legacy ide
       assert.equal(nextCalls, 1);
       assert.equal(req.userId, null);
     }
+  }
+});
+
+test('bearer scheme is case-insensitive for a valid signed access JWT', () => {
+  const { accessToken } = issueTokenPair({ userId: 'lowercase-jwt-user', kind: 'anonymous' });
+
+  for (const middleware of [requireUser, optionalAuth]) {
+    const req = requestWithAuthorization(`bearer ${accessToken}`);
+    const res = responseRecorder();
+    let nextCalls = 0;
+    middleware(req, res, () => { nextCalls += 1; });
+
+    assert.equal(nextCalls, 1);
+    assert.equal(req.userId, 'lowercase-jwt-user');
+  }
+});
+
+test('lowercase forged bearer fails closed instead of trusting spoofed legacy identity', () => {
+  for (const middleware of [requireUser, optionalAuth]) {
+    const req = requestWithAuthorization('bearer forged.jwt.token', {
+      'x-user-id': 'spoofed-header-user',
+    }, { userId: 'spoofed-body-user' });
+    const res = responseRecorder();
+    let nextCalls = 0;
+    middleware(req, res, () => { nextCalls += 1; });
+
+    assert.notEqual(req.userId, 'spoofed-header-user');
+    assert.notEqual(req.userId, 'spoofed-body-user');
+    if (middleware === requireUser) {
+      assert.equal(nextCalls, 0);
+      assert.equal(res.statusCode, 401);
+    } else {
+      assert.equal(nextCalls, 1);
+      assert.equal(req.userId, null);
+    }
+  }
+});
+
+test('empty bearer and unusual bearer whitespace fail closed', () => {
+  for (const authorization of ['Bearer', 'bearer   ', ' \tBeArEr\t ', '  bearer  forged.jwt.token  ', ' \tbEaReR\tforged.jwt.token\t']) {
+    for (const middleware of [requireUser, optionalAuth]) {
+      const req = requestWithAuthorization(authorization, {
+        'x-user-id': 'spoofed-header-user',
+      }, { userId: 'spoofed-body-user' });
+      const res = responseRecorder();
+      let nextCalls = 0;
+      middleware(req, res, () => { nextCalls += 1; });
+
+      assert.notEqual(req.userId, 'spoofed-header-user', authorization);
+      assert.notEqual(req.userId, 'spoofed-body-user', authorization);
+      if (middleware === requireUser) {
+        assert.equal(nextCalls, 0, authorization);
+        assert.equal(res.statusCode, 401, authorization);
+      } else {
+        assert.equal(nextCalls, 1, authorization);
+        assert.equal(req.userId, null, authorization);
+      }
+    }
+  }
+});
+
+test('legacy identity fallback remains available when Authorization is absent', () => {
+  for (const middleware of [requireUser, optionalAuth]) {
+    const req = { headers: { 'x-user-id': 'legacy-header-user' }, body: { userId: 'legacy-body-user' } };
+    const res = responseRecorder();
+    let nextCalls = 0;
+    middleware(req, res, () => { nextCalls += 1; });
+
+    assert.equal(nextCalls, 1);
+    assert.equal(req.userId, 'legacy-header-user');
   }
 });
 
