@@ -56,6 +56,36 @@ test('projection creates task, evidence, conflict, revision, approval and comple
   assert.equal(state.motionCue.kind, 'crystallize');
 });
 
+test('projection keeps a readable activity trail for the work hidden between input and result', () => {
+  let state = createArenaProjection();
+  state = applyAgentEvent(state, event(1, 'SESSION_CREATED', { question: '要不要吃饭' }));
+  state = applyAgentEvent(state, event(2, 'PLANNING_STARTED', { label: '辨认问题与推演深度' }));
+  state = applyAgentEvent(state, event(3, 'PLAN_CREATED', {
+    analysis: '这是低风险日常选择，先判断身体信号。',
+    tasks: [{ id: 'body_signal', label: '身体信号' }],
+  }));
+  state = applyAgentEvent(state, event(4, 'AGENT_ASSIGNED', {
+    agentId: 'health', agentName: '衡生', taskId: 'body_signal', reason: '负责身体状态判断',
+  }));
+
+  assert.deepEqual(state.activity.map((item) => item.title), [
+    '会话已建立', '开始规划', '任务已生成', '衡生加入推演',
+  ]);
+  assert.equal(state.activity[2].detail, '这是低风险日常选择，先判断身体信号。');
+  assert.equal(state.tasks.body_signal.label, '身体信号');
+  assert.equal(state.agents.health.reason, '负责身体状态判断');
+});
+
+test('advisor speech enters the readable activity trail as a public contribution', () => {
+  const state = applyAgentEvent(createArenaProjection(), event(1, 'ADVISOR_SPEAK', {
+    agentId: 'health', agentName: '衡生', content: '先确认饥饿程度和距离上次进食时间。', perspective: 'health',
+  }));
+
+  assert.equal(state.activity[0].title, '衡生提出判断');
+  assert.equal(state.activity[0].detail, '先确认饥饿程度和距离上次进食时间。');
+  assert.equal(state.agents.health.status, 'running');
+});
+
 test('replayed events restore structure without entrance motion', () => {
   const state = applyAgentEvent(
     createArenaProjection(),
@@ -208,6 +238,8 @@ test('session snapshot restores arena structure before consuming missing events'
   assert.equal(state.approval.choices[0].id, 'trial');
   assert.equal(state.status, 'awaiting-approval');
   assert.equal(state.motionCue, null);
+  assert.equal(state.activity[0].title, '案卷已恢复');
+  assert.match(state.activity[0].detail, /1 项任务、1 位智囊/);
 });
 
 test('session snapshot restores Lens projection without replaying its ceremony', () => {

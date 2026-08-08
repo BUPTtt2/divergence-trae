@@ -172,7 +172,7 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
         let body = {};
         try { body = await resp.json(); } catch {}
         if (resp.status === 404 && /Application not found|not ?found/i.test(body?.message || '')) {
-          // Railway 挂了的典型信号：继续 fallback
+          // 候选后端部署不存在时继续尝试下一个 base
           continue;
         }
         if (throwOnError) {
@@ -211,11 +211,11 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
  * @param {string} question
  * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
-export async function startDeliberation(question) {
+export async function startDeliberation(question, options = {}) {
   const resp = await _deliberationFetch('/api/deliberation/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, deferPlanning: options.deferPlanning === true }),
   });
   const data = await resp.json().catch(() => ({}));
   // LOCAL_FULL：如果返回内容是空 mock，就补一个明确的 state 给调用方识别
@@ -224,6 +224,15 @@ export async function startDeliberation(question) {
     data.sessionId = data.sessionId || ('ls_' + Date.now().toString(36));
   }
   return data;
+}
+
+export async function planDeliberation(sessionId) {
+  const resp = await _deliberationFetch(`/api/deliberation/${sessionId}/plan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  return resp.json().catch(() => ({}));
 }
 
 /**

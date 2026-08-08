@@ -50,6 +50,31 @@ test('deliberation identity comes from the signed principal, never body userId',
   });
 });
 
+test('deferred HTTP start returns before planning and exposes an owner-only plan action', async () => {
+  await withServer(async (base) => {
+    const owner = await createAnonymous(base);
+    const intruder = await createAnonymous(base);
+    const started = await jsonRequest(base, '/api/deliberation/start', {
+      method: 'POST',
+      token: owner.accessToken,
+      body: { question: '要不要吃饭', deferPlanning: true },
+    });
+
+    assert.equal(started.status, 202);
+    assert.equal(started.body.state, 'PLAN');
+    assert.equal(started.body.question, '要不要吃饭');
+    assert.equal((await memoryService.getSession(started.body.sessionId)).plan, undefined);
+
+    const foreignPlan = await jsonRequest(base, `/api/deliberation/${started.body.sessionId}/plan`, {
+      method: 'POST',
+      token: intruder.accessToken,
+      body: {},
+    });
+    assert.equal(foreignPlan.status, 404);
+    assert.equal(foreignPlan.body.error, 'SESSION_NOT_FOUND');
+  });
+});
+
 test('non-owner cannot read or mutate another principal deliberation', async () => {
   await withServer(async (base) => {
     const owner = await createAnonymous(base);
@@ -70,6 +95,7 @@ test('non-owner cannot read or mutate another principal deliberation', async () 
       ['GET', `/${sid}`, undefined],
       ['GET', `/${sid}/clarify`, undefined],
       ['POST', `/${sid}/answer`, { answers: [] }],
+      ['POST', `/${sid}/plan`, {}],
       ['POST', `/${sid}/execute`, { actionId: 'action_ownership_001', agentIds: [] }],
       ['POST', `/${sid}/commit`, { choice: { id: 'a', label: 'A' } }],
       ['POST', `/${sid}/pause`, { reason: 'test' }],

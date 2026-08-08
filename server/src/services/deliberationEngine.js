@@ -375,9 +375,7 @@ export async function persistClarifyExecute(sessionId, session, questions, execu
  * @param {string} userId 用户ID
  * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
-export async function start(question, userId) {
-  logger.info('[Deliberation] start 开始', { question: (question || '').slice(0, 60), userId });
-
+export async function createSession(question, userId) {
   if (!question || typeof question !== 'string' || question.trim().length === 0) {
     throw new Error('缺少 question 参数');
   }
@@ -388,8 +386,6 @@ export async function start(question, userId) {
     throw new Error('缺少 userId 参数');
   }
 
-  // ========== v3.1 关键修复：先落 session，再 plan ==========
-  // 即使 plan 全部失败也一定给前端返回一个有效的 sessionId，避免 500 让前端卡死
   let session = {
     user_id: userId,
     question: question.trim(),
@@ -407,11 +403,45 @@ export async function start(question, userId) {
     logger.warn('[Deliberation] saveSession 失败，使用内存态 id', { sessionId: session.id, error: e.message });
   }
   const sessionId = session.id;
+  await eventBus.emit(sessionId, {
+    type: 'SESSION_CREATED',
+    data: { question: session.question },
+    actor: 'yan',
+    visibility: 'public',
+  });
+  return {
+    sessionId,
+    state: STATES.PLAN,
+    question: session.question,
+    round: 1,
+    maxRound: MAX_ROUND,
+  };
+}
 
-  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'start', thought: `演·起卦：用户问「${question.trim().slice(0, 40)}」` } });
+export async function plan(sessionId, executionCtx = {}, dependencies = {}) {
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
+  if (session.state !== STATES.PLAN || session.plan) {
+    return buildResponse(
+      session,
+      session.plan || {},
+      session.askUser || session.plan?.askUser || [],
+      session.openingLine || session.plan?.openingLine || '',
+      session.round || session.plan?.round || 1,
+      session.memory || [],
+    );
+  }
 
-  // Planner 内部各 I/O 已有可中止超时；外层不再 Promise.race 重试，避免超时任务在后台重叠执行。
-  const result = await planSessionWithFallback(session);
+  await eventBus.emit(sessionId, {
+    type: 'PLANNING_STARTED',
+    data: { label: '辨认问题与推演深度' },
+    actor: 'planner',
+    visibility: 'public',
+  });
+
+  const result = dependencies.planSessionFn
+    ? await dependencies.planSessionFn(session)
+    : await planSessionWithFallback(session, dependencies.planFn || planner.plan);
+  if (dependencies.planSessionFn) await memoryService.saveSession(result.session);
 
   // 确保 sessionId 一致（兜底时可能用的是内存态对象）
   result.session.id = result.session.id || sessionId;
@@ -462,6 +492,12 @@ export async function start(question, userId) {
     resp.fallbackReason = result.fallbackReason || '';
   }
   return resp;
+}
+
+export async function start(question, userId) {
+  logger.info('[Deliberation] start 开始', { question: (question || '').slice(0, 60), userId });
+  const created = await createSession(question, userId);
+  return plan(created.sessionId, { userId });
 }
 
 /**
@@ -1426,6 +1462,8 @@ export async function resume(sessionId, executionCtx = {}) {
 
 export default {
   STATES,
+  createSession,
+  plan,
   start,
   answer,
   execute,

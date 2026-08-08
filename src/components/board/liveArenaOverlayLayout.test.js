@@ -88,16 +88,31 @@ test('desktop keeps the existing container-relative overlay positioning', () => 
   assert.equal(arena['z-index'], '46');
 });
 
-test('767px and narrower uses a flowing card stack with controls that wrap instead of overflowing', () => {
+test('767px and narrower uses a bounded bottom sheet instead of covering the whole stage', () => {
   const arena = declarationsForViewport('.live-arena', phone);
   const header = declarationsForViewport('.live-arena__header', phone);
   const controls = declarationsForViewport('.live-arena__motion-controls', phone);
 
   assert.equal(arena.width, 'auto');
-  assert.equal(arena['max-height'], 'none');
+  assert.match(arena['max-height'], /dvh/);
+  assert.equal(arena.top, 'auto');
   assert.equal(arena['flex-direction'], 'column');
   assert.equal(header['flex-direction'], 'column');
   assert.equal(controls['flex-wrap'], 'wrap');
+});
+
+test('small landscape keeps the central interaction dock beside the live arena instead of clipping it', () => {
+  assert.match(gameSource, /className="[^"]*sandbox-interaction-dock/);
+  assert.match(indexStyles, /\.sandbox-interaction-dock\s*\{[\s\S]*?translate:\s*-50% 0/);
+  assert.match(indexStyles, /@media \(min-width: 768px\) and \(max-width: 1024px\) and \(orientation: landscape\)[\s\S]*?\.sandbox-interaction-dock\s*\{[\s\S]*?left:\s*calc\(50% \+ 160px\)/);
+  assert.match(indexStyles, /@media \(max-width: 767px\)[\s\S]*?\.sandbox-interaction-dock\s*\{[\s\S]*?bottom:\s*calc\(48dvh \+ 12px\)/);
+});
+
+test('iPad portrait uses a bottom sheet with room left for the central arena', () => {
+  const arena = declarationsForViewport('.live-arena', portrait);
+  assert.equal(arena.top, 'auto');
+  assert.match(arena['max-height'], /dvh/);
+  assert.match(arena['border-radius'], /^18px/);
 });
 
 test('all primary controls expose at least a 44px touch target without hover-only selectors', () => {

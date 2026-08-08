@@ -9,6 +9,34 @@
   min-height: 44px;
 }
 
+.sandbox-interaction-dock {
+  left: 50%;
+  bottom: 24px;
+  width: min(640px, calc(100vw - 40px));
+  translate: -50% 0;
+}
+
+@media (min-width: 768px) and (max-width: 1024px) and (orientation: landscape) {
+  .sandbox-interaction-dock {
+    left: calc(50% + 160px);
+    width: min(560px, calc(100vw - 360px));
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1024px) and (orientation: portrait) {
+  .sandbox-interaction-dock {
+    bottom: calc(46dvh + 12px);
+    width: calc(100vw - 32px);
+  }
+}
+
+@media (max-width: 767px) {
+  .sandbox-interaction-dock {
+    bottom: calc(48dvh + 12px);
+    width: calc(100vw - 24px);
+  }
+}
+
 /* Reset & Base */
 *, *::before, *::after {
   margin: 0;

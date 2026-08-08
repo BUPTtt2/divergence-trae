@@ -7,6 +7,8 @@ import './liveArenaOverlay.css';
 const STORAGE_KEY = 'yance_arena_motion_mode';
 const MODE_LABELS = { standard: '标准', reduced: '减弱', off: '关闭' };
 const CUE_COPY = {
+  session: ['阵心点亮', '会话已经建立，正在接入真实事件'],
+  planning: ['辨意成轨', '正在判断推演深度并拆解任务'],
   plan: ['阵心成轨', '推演任务已经生成'],
   'evidence-search': ['离阵查证', 'Agent 正在查询外部依据'],
   'evidence-accepted': ['证据入卷', '来源与观测时间已记录'],
@@ -29,6 +31,8 @@ const OUTCOME_LABELS = {
 };
 const KNOWLEDGE_STATE_LABELS = { verified: '已验证', unknown: '未知', contested: '有冲突' };
 const YIN_YANG_LABELS = { yang: '阳爻', yin: '阴爻' };
+const AGENT_STATUS = { assigned: '已入阵', restored: '已恢复', running: '执行中', completed: '已完成', failed: '局部失败' };
+const PLAN_TASK_STATUS = { planned: '待执行', restored: '已恢复', blocked: '待补充', running: '执行中', completed: '已完成' };
 
 function initialMotionMode() {
   if (typeof window === 'undefined') return 'standard';
@@ -183,6 +187,8 @@ export default function LiveArenaOverlay({ projection }) {
   const agents = Object.values(projection?.agents || {});
   const evidence = Object.values(projection?.evidence || {});
   const conflicts = projection?.conflicts || [];
+  const tasks = Object.values(projection?.tasks || {});
+  const activity = projection?.activity || [];
   const visible = projection?.lastSequence > 0 || projection?.transport?.connected;
   const statusText = useMemo(() => {
     if (!projection?.transport?.connected) return '事件流重连中';
@@ -246,6 +252,52 @@ export default function LiveArenaOverlay({ projection }) {
       <AnimatePresence mode="wait">
         <CueCard key={projection?.motionCue?.id || 'static'} cue={projection?.motionCue} mode={motionMode} />
       </AnimatePresence>
+
+      <div className="live-arena__workbench">
+        <section className="live-arena__work-section" aria-labelledby="arena-activity-title">
+          <h2 id="arena-activity-title">推演实况</h2>
+          {activity.length > 0 ? (
+            <ol className="live-arena__activity">
+              {activity.slice(-6).map((item, index) => (
+                <li key={item.id} className={index === activity.slice(-6).length - 1 ? 'is-current' : ''}>
+                  <span className="live-arena__activity-mark" aria-hidden="true" />
+                  <span><strong>{item.title}</strong><small>{item.detail}</small></span>
+                </li>
+              ))}
+            </ol>
+          ) : <p className="live-arena__empty">正在等待第一条真实事件，不会用假进度代替。</p>}
+        </section>
+
+        {tasks.length > 0 && (
+          <section className="live-arena__work-section" aria-labelledby="arena-tasks-title">
+            <h2 id="arena-tasks-title">本轮任务</h2>
+            <ul className="live-arena__work-list">
+              {tasks.map((task) => (
+                <li key={task.id}>
+                  <strong>{task.label || task.name || '未命名任务'}</strong>
+                  <span>{PLAN_TASK_STATUS[task.status] || task.status || '待执行'}</span>
+                  {task.reason && <small>{task.reason}</small>}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {agents.length > 0 && (
+          <section className="live-arena__work-section" aria-labelledby="arena-agents-title">
+            <h2 id="arena-agents-title">智囊分工</h2>
+            <ul className="live-arena__work-list">
+              {agents.map((agent) => (
+                <li key={agent.id}>
+                  <strong>{agent.agentName || agent.name || agent.id}</strong>
+                  <span>{AGENT_STATUS[agent.status] || agent.status || '已入阵'}</span>
+                  <small>{agent.reason || agent.perspective || agent.taskLabel || agent.taskId || '负责本轮分析'}</small>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </div>
 
       {projection?.approval && !projection.approval.resolved && (
         <div className="live-arena__approval">人印：{projection.approval.prompt}</div>

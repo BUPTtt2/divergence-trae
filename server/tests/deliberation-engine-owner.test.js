@@ -54,6 +54,52 @@ test('engine allows the verified owner to read the session', async () => {
   assert.equal(restored.replanCount, 2);
 });
 
+test('deferred start returns a persisted PLAN session before planner work begins', async () => {
+  let plannerCalls = 0;
+  const created = await engine.createSession('要不要吃饭', 'engine_deferred_owner', {
+    planFn: async () => { plannerCalls += 1; },
+  });
+  const stored = await memoryService.getSession(created.sessionId);
+
+  assert.equal(plannerCalls, 0);
+  assert.equal(created.state, 'PLAN');
+  assert.equal(created.question, '要不要吃饭');
+  assert.equal(stored.user_id, 'engine_deferred_owner');
+  assert.equal(stored.plan, undefined);
+});
+
+test('deferred planning verifies ownership and returns the authoritative planned session', async () => {
+  const created = await engine.createSession('要不要吃饭', 'engine_plan_owner');
+  const planSessionFn = async (session) => ({
+    session: {
+      ...session,
+      state: 'EXECUTE',
+      plan: {
+        dimensions: [{ id: 'body_signal', name: '身体信号' }],
+        agents: [{ id: 'health', name: '衡生', taskId: 'body_signal' }],
+      },
+    },
+    plan: {
+      dimensions: [{ id: 'body_signal', name: '身体信号' }],
+      agents: [{ id: 'health', name: '衡生', taskId: 'body_signal' }],
+    },
+    askUser: [],
+    openingLine: '先看身体信号。',
+    round: 1,
+    memory: [],
+  });
+
+  await assert.rejects(
+    engine.plan(created.sessionId, { userId: 'engine_plan_intruder' }, { planSessionFn }),
+    (error) => error?.code === 'SESSION_NOT_FOUND',
+  );
+
+  const result = await engine.plan(created.sessionId, { userId: 'engine_plan_owner' }, { planSessionFn });
+  assert.equal(result.state, 'EXECUTE');
+  assert.equal(result.plan.dimensions[0].name, '身体信号');
+  assert.equal((await memoryService.getSession(created.sessionId)).state, 'EXECUTE');
+});
+
 test('commit reaches backend COMPLETE before the client can render final', async () => {
   const session = await ownedSession({
     state: 'ORACLE',

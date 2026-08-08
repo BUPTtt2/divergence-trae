@@ -1,4 +1,6 @@
 const MOTION_BY_EVENT = Object.freeze({
+  SESSION_CREATED: 'session',
+  PLANNING_STARTED: 'planning',
   PLAN_CREATED: 'plan',
   TOOL_STARTED: 'evidence-search',
   EVIDENCE_ACCEPTED: 'evidence-accepted',
@@ -12,6 +14,38 @@ const MOTION_BY_EVENT = Object.freeze({
   LENS_TASK_COMPLETED: 'lens-impact',
   LENS_REVIEW_COMPLETED: 'lens-review',
 });
+
+function activityFor(event) {
+  const payload = event.payload || {};
+  const copy = {
+    SESSION_CREATED: ['会话已建立', payload.question || '问题已进入推演台'],
+    PLANNING_STARTED: ['开始规划', payload.label || '正在辨认问题与推演深度'],
+    PLAN_CREATED: ['任务已生成', payload.analysis || `已拆成 ${(payload.tasks || []).length} 项任务`],
+    UNKNOWN_IDENTIFIED: ['发现信息缺口', payload.reason || payload.question || payload.label || '需要补充关键信息'],
+    AGENT_ASSIGNED: [`${payload.agentName || '智囊'}加入推演`, payload.reason || payload.perspective || '已分配负责事项'],
+    AGENT_STARTED: [`${payload.agentName || '智囊'}开始处理`, payload.taskLabel || payload.taskId || '正在执行任务'],
+    AGENT_COMPLETED: [`${payload.agentName || '智囊'}完成任务`, payload.summary || payload.finding || '贡献已写入案卷'],
+    AGENT_FAILED: [`${payload.agentName || '智囊'}执行失败`, payload.reason || payload.error || '主链将继续处理'],
+    ADVISOR_SPEAK: [`${payload.agentName || '智囊'}提出判断`, payload.content || '公开贡献已写入案卷'],
+    TOOL_STARTED: ['开始查证', payload.query || payload.tool || '正在调用证据工具'],
+    EVIDENCE_ACCEPTED: ['证据已入卷', payload.summary || payload.sourceName || '来源已记录'],
+    EVIDENCE_REJECTED: ['证据未采用', payload.reason || payload.code || '保留记录但不进入结论'],
+    CLAIM_CHALLENGED: ['出现观点分歧', payload.reason || '一项主张受到挑战'],
+    PLAN_REVISED: ['计划已调整', payload.reason || '新信息改变了任务顺序'],
+    APPROVAL_REQUIRED: ['等待你的确认', payload.prompt || '下一步由你决定'],
+    SESSION_COMPLETED: ['推演已收束', payload.summary || '结论与路径已经形成'],
+  }[event.type];
+  if (!copy) return null;
+  return {
+    id: event.eventId,
+    type: event.type,
+    title: copy[0],
+    detail: copy[1],
+    actorId: event.actorId,
+    taskId: event.taskId || payload.taskId,
+    createdAt: event.createdAt,
+  };
+}
 
 function createLensProjection() {
   return { selected: null, tasks: {}, impacts: {}, review: null };
@@ -54,6 +88,7 @@ export function createArenaProjection() {
     revisions: [],
     approval: null,
     summary: '',
+    activity: [],
     lens: createLensProjection(),
     transport: { connected: false, replaying: false, error: null },
     motionCue: null,
@@ -139,8 +174,16 @@ export function applyAgentEvent(state, event, options = {}) {
     appliedEventIds: [...state.appliedEventIds, event.eventId].slice(-500),
     motionCue: motionCueFor(event, options.replay === true),
   };
+  const activity = activityFor(event);
+  if (activity) next.activity = [...(state.activity || []), activity].slice(-12);
 
   switch (event.type) {
+    case 'SESSION_CREATED':
+      next.status = 'planning';
+      break;
+    case 'PLANNING_STARTED':
+      next.status = 'planning';
+      break;
     case 'PLAN_CREATED':
       next.status = 'planning';
       next.tasks = keyedTasks(payload.tasks, state.tasks);
@@ -157,6 +200,21 @@ export function applyAgentEvent(state, event, options = {}) {
       const agentId = payload.agentId || event.actorId;
       const status = ({ AGENT_ASSIGNED: 'assigned', AGENT_STARTED: 'running', AGENT_COMPLETED: 'completed', AGENT_FAILED: 'failed' })[event.type];
       next.agents = { ...state.agents, [agentId]: { ...state.agents[agentId], ...payload, id: agentId, status, taskId: payload.taskId || event.taskId } };
+      break;
+    }
+    case 'ADVISOR_SPEAK': {
+      const agentId = payload.agentId || event.actorId;
+      next.agents = {
+        ...state.agents,
+        [agentId]: {
+          ...state.agents[agentId],
+          id: agentId,
+          agentName: payload.agentName || state.agents[agentId]?.agentName,
+          perspective: payload.perspective || state.agents[agentId]?.perspective,
+          status: 'running',
+          contribution: payload.content || '',
+        },
+      };
       break;
     }
     case 'TOOL_STARTED':
@@ -325,6 +383,18 @@ export function projectSessionSnapshot(session = {}, options = {}) {
     };
   }
   projection.motionCue = null;
+  const restoredTaskCount = Object.keys(projection.tasks).length;
+  const restoredAgentCount = Object.keys(projection.agents).length;
+  if (restoredTaskCount > 0 || restoredAgentCount > 0) {
+    projection.activity = [{
+      id: `restored_${session.sessionId || session.id || 'session'}`,
+      type: 'SESSION_RESTORED',
+      title: '案卷已恢复',
+      detail: `${restoredTaskCount} 项任务、${restoredAgentCount} 位智囊已接回当前状态`,
+      actorId: 'system',
+      createdAt: '',
+    }];
+  }
   return projection;
 }
 

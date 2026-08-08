@@ -63,4 +63,20 @@ export function currentClarificationQuestion(awaitingAnswers, answeredRounds) {
   return String(rounds.at(-1)?.question || '').trim();
 }
 
-export default { resolveSandboxRuntime, mapDeliberationPhase, mapServerStateToInternalPhase, adaptFateTicket, currentClarificationQuestion };
+export function shouldShowInteractionDock({ phase, awaitingUser, awaitingAnswers }) {
+  const interactivePhase = ['clarify_loop', 'yan_analyze', 'agent_debate', 'summary'].includes(phase);
+  if (!interactivePhase) return false;
+  const hasPendingClarification = phase === 'clarify_loop'
+    && Array.isArray(awaitingAnswers)
+    && awaitingAnswers.some((item) => String(item?.question || item || '').trim());
+  return awaitingUser === true || hasPendingClarification;
+}
+
+export default {
+  resolveSandboxRuntime,
+  mapDeliberationPhase,
+  mapServerStateToInternalPhase,
+  adaptFateTicket,
+  currentClarificationQuestion,
+  shouldShowInteractionDock,
+};

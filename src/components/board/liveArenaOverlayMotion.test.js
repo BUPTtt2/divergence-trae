@@ -124,3 +124,40 @@ test('expanded Lens card keeps formation, causal references and finding links in
     await vite.close();
   }
 });
+
+test('arena renders task, advisor and event details instead of counters alone', async () => {
+  const vite = await createServer({ appType: 'custom', logLevel: 'silent', server: { middlewareMode: true } });
+  globalThis.window = {
+    localStorage: { getItem: () => 'off', setItem: () => {} },
+    matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+  };
+  const projection = {
+    lastSequence: 4,
+    status: 'planning',
+    transport: { connected: true, replaying: false },
+    tasks: { body: { id: 'body', label: '身体信号', status: 'planned' } },
+    agents: { health: { id: 'health', agentName: '衡生', taskId: 'body', status: 'running', reason: '负责身体状态判断' } },
+    evidence: {},
+    conflicts: [],
+    activity: [
+      { id: 'evt-1', title: '会话已建立', detail: '要不要吃饭', createdAt: '2026-08-08T05:00:00.000Z' },
+      { id: 'evt-2', title: '开始规划', detail: '辨认问题与推演深度', createdAt: '2026-08-08T05:00:01.000Z' },
+    ],
+    lens: { selected: null, tasks: {}, impacts: {}, review: null },
+    motionCue: null,
+  };
+
+  try {
+    const { default: LiveArenaOverlay } = await vite.ssrLoadModule('/src/components/board/LiveArenaOverlay.jsx');
+    const markup = renderToStaticMarkup(createElement(LiveArenaOverlay, { projection }));
+    assert.match(markup, /推演实况/);
+    assert.match(markup, /身体信号/);
+    assert.match(markup, /衡生/);
+    assert.match(markup, /负责身体状态判断/);
+    assert.match(markup, /会话已建立/);
+    assert.match(markup, /辨认问题与推演深度/);
+  } finally {
+    delete globalThis.window;
+    await vite.close();
+  }
+});

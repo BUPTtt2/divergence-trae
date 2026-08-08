@@ -14,7 +14,7 @@ import { generateDialoguesForAgents } from '../services/inferenceEngine';
 import { saveAgentFeedback } from '../services/memoryStore';
 import { sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
-import { currentClarificationQuestion } from '../game/sandboxRuntime';
+import { currentClarificationQuestion, shouldShowInteractionDock } from '../game/sandboxRuntime';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -1143,10 +1143,9 @@ export default function Game() {
         </AnimatePresence>
 
         <AnimatePresence>
-          {awaitingUser && (phase === 'clarify_loop' || phase === 'yan_analyze' || phase === 'agent_debate' || phase === 'summary') && (
+          {shouldShowInteractionDock({ phase, awaitingUser, awaitingAnswers }) && (
             <motion.div
-              className="absolute left-1/2 -translate-x-1/2 z-20 flex flex-col items-center"
-              style={{ bottom: '24px', width: 'min(640px, 90vw)' }}
+              className="sandbox-interaction-dock absolute z-20 flex flex-col items-center"
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 16 }}

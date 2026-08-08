@@ -26,6 +26,7 @@ import logger from './logger.js';
 import eventBus from './eventBus.js';
 import { evidenceDomainEvent, planDomainEvents } from './agentEventSemantics.js';
 import { withRetry } from './retryHelper.js';
+import { buildQuickPlan, routeDeliberationDepth } from './deliberationDepthRouter.js';
 
 // ============ 常量 ============
 
@@ -506,6 +507,29 @@ export async function plan(session, dependencies = {}) {
   const userId = session.user_id;
   const question = session.question_context || session.questionContext || session.question || '';
   logger.info('[Planner] Plan 阶段开始', { sessionId: session.id, userId, question: question.slice(0, 60) });
+
+  const depthRoute = routeDeliberationDepth(question);
+  if (depthRoute.depth === 'quick') {
+    const result = buildQuickPlan(session);
+    const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
+    const saved = await saveSession(result.session);
+    result.session.id = saved.id || session.id;
+    const correlationId = `plan_${result.session.id}_${result.round}`;
+    for (const domainEvent of planDomainEvents(result.plan, result.askUser)) {
+      await eventBus.emit(result.session.id, {
+        ...domainEvent,
+        actor: 'planner',
+        correlationId,
+        taskId: domainEvent.data?.taskId,
+      });
+    }
+    logger.info('[Planner] 快推演规划完成', {
+      sessionId: result.session.id,
+      state: result.session.state,
+      reason: depthRoute.reason,
+    });
+    return result;
+  }
 
   // 1. 读 L3 命格
   let memories = [];

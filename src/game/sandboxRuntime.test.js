@@ -56,3 +56,17 @@ test('clarification UI renders the current pending Agent question before answere
     '现有留存、预算和停止指标分别是什么？',
   );
 });
+
+test('pending clarification keeps the central interaction dock visible even if transport state lags', () => {
+  assert.equal(typeof sandboxRuntime.shouldShowInteractionDock, 'function');
+  assert.equal(sandboxRuntime.shouldShowInteractionDock({
+    phase: 'clarify_loop',
+    awaitingUser: false,
+    awaitingAnswers: [{ question: '你现在有明显饥饿感吗？' }],
+  }), true);
+  assert.equal(sandboxRuntime.shouldShowInteractionDock({
+    phase: 'clarify_loop',
+    awaitingUser: false,
+    awaitingAnswers: [],
+  }), false);
+});

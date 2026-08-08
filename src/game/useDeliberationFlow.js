@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   startDeliberation,
+  planDeliberation,
   answerDeliberation,
   executeDeliberation,
   commitDeliberation,
@@ -113,6 +114,7 @@ export function useDeliberationFlow(initialQuestion = "") {
   const [yanQuestionRounds, setYanQuestionRounds] = useState([]);
   const [commitPending, setCommitPending] = useState(false);
   const [arenaProjection, setArenaProjection] = useState(createArenaProjection);
+  const [pendingPlanSessionId, setPendingPlanSessionId] = useState(null);
 
   const _addDebugLog = useCallback((msg) => {
     setDebugLogs(prev => {
@@ -270,6 +272,65 @@ export function useDeliberationFlow(initialQuestion = "") {
     },
   });
 
+  useEffect(() => {
+    if (!pendingPlanSessionId || pendingPlanSessionId !== deliberationSessionId) return undefined;
+    if (!arenaProjection.transport.connected) return undefined;
+    let cancelled = false;
+
+    planDeliberation(pendingPlanSessionId).then(async (session) => {
+      if (cancelled || !session?.plan) return;
+      setPendingPlanSessionId(null);
+      setInference(session);
+      const sessionAgents = Array.isArray(session.plan.agents) ? session.plan.agents : [];
+      setPlannedAgents(sessionAgents);
+      setSelectedAgentIds(new Set(sessionAgents.map((agent) => agent.id).filter(Boolean)));
+      if (session.memory) setYanMemories(session.memory);
+
+      try {
+        const mems = await getMemories();
+        if (!cancelled && mems?.length > 0) setYanMemories((previous) => [...mems, ...(previous || [])].slice(0, 20));
+      } catch {}
+      if (cancelled) return;
+
+      const askUser = Array.isArray(session.askUser) ? session.askUser : [];
+      if (askUser.length > 0) {
+        setAwaitingAnswers(askUser);
+        clarifyActiveRef.current = true;
+        setPhase(PHASE.CLARIFY);
+        setAwaitingUser(true);
+        showFloatTip('发现关键信息缺口，请补充后继续');
+      } else {
+        setAwaitingAnswers([]);
+        clarifyActiveRef.current = false;
+        setPhase(PHASE.DEBATE);
+        setActiveAgentIdx(0);
+        setAwaitingUser(true);
+        showFloatTip('任务与智囊已就位，可开始推演');
+      }
+      setAgentDialogues((previous) => ({
+        ...previous,
+        yan: session.openingLine || '演 · 规划完成',
+        history: {
+          ...(previous.history || {}),
+          yan: [...((previous.history || {}).yan || []), session.openingLine || '演 · 规划完成'],
+        },
+      }));
+      lastFailedActionRef.current = null;
+    }).catch((error) => {
+      if (cancelled) return;
+      setPendingPlanSessionId(null);
+      lastFailedActionRef.current = { type: 'start', question: userInput };
+      LOG.error('planDeliberation', error);
+      setBackendError(error.message || '推演规划失败');
+      showFloatTip('规划失败，请重试');
+      setPhase(PHASE.IDLE);
+      setShowInput(true);
+      setShowQuestion(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [pendingPlanSessionId, deliberationSessionId, arenaProjection.transport.connected, showFloatTip, LOG, userInput]);
+
   const handleStart = useCallback(async (question) => {
     if (!question || !question.trim()) return;
     const operationId = ++startOperationRef.current;
@@ -306,7 +367,7 @@ export function useDeliberationFlow(initialQuestion = "") {
       LOG.mode('REMOTE');
 
       showFloatTip('演 · 起卦中……');
-      const session = await startDeliberation(q);
+      const session = await startDeliberation(q, { deferPlanning: true });
       if (startOperationRef.current !== operationId) return;
       if (!session?.sessionId || session?.state === 'LOCAL_FULL') {
         throw new Error('Agent Runtime 未返回有效 Session');
@@ -320,59 +381,8 @@ export function useDeliberationFlow(initialQuestion = "") {
       setPlannedAgents(sessionAgents);
       setSelectedAgentIds(new Set(sessionAgents.map((agent) => agent.id).filter(Boolean)));
       LOG.session(sessionId);
-
-      if (session?.memory) {
-        setYanMemories(session.memory);
-      }
-      try {
-        const mems = await getMemories();
-        if (mems && mems.length > 0) {
-          setYanMemories(prev => [...mems, ...(prev || [])].slice(0, 20));
-        }
-      } catch {}
-
-      const delay = (ms) => new Promise(r => setTimeout(r, ms));
-
-      await delay(2500);
-      if (startOperationRef.current !== operationId) return;
-      setPhase(PHASE.SUMMONING);
-      showFloatTip('演 · 召唤智囊……');
-
-      const askUser = session?.askUser;
-      const plan = session?.plan;
-      if (!plan) throw new Error('Agent Runtime Session 缺少计划');
-
-      if (askUser && Array.isArray(askUser) && askUser.length > 0) {
-        setAwaitingAnswers(askUser);
-        clarifyActiveRef.current = true;
-        setPhase(PHASE.CLARIFY);
-        setAwaitingUser(true);
-        showFloatTip('演 · 有几个问题想请教……');
-        setAgentDialogues(prev => ({
-          ...prev,
-          yan: session?.openingLine || '演 · 正在请教……',
-          history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), session?.openingLine || '演 · 正在请教……'] },
-        }));
-        return;
-      }
-
-      setAwaitingAnswers([]);
-      clarifyActiveRef.current = false;
-
-      setAgentDialogues(prev => ({
-        ...prev,
-        yan: session?.openingLine || '演 · 正在思索……',
-        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), session?.openingLine || '演 · 正在思索……'] },
-      }));
-
-      await delay(2000);
-      if (startOperationRef.current !== operationId) return;
-      setPhase(PHASE.DEBATE);
-      LOG.phase(phase, PHASE.DEBATE);
-      setActiveAgentIdx(0);
-      setAwaitingUser(true);
-      showFloatTip('诸智集结，准备发言……');
-      lastFailedActionRef.current = null;
+      setPendingPlanSessionId(sessionId);
+      showFloatTip('会话已建立，正在接入推演实况');
 
     } catch (e) {
       if (startOperationRef.current !== operationId) return;
@@ -384,7 +394,7 @@ export function useDeliberationFlow(initialQuestion = "") {
       setShowInput(true);
       setShowQuestion(false);
     }
-  }, [showFloatTip, phase, LOG]);
+  }, [showFloatTip, LOG]);
 
   const handleRestart = useCallback(() => {
     startOperationRef.current += 1;
@@ -429,6 +439,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     setYanQuestionRounds([]);
     setCommitPending(false);
     setArenaProjection(createArenaProjection());
+    setPendingPlanSessionId(null);
     try { sessionStorage.removeItem(ACTIVE_SESSION_KEY); } catch {}
     commitInFlightRef.current = false;
     lastFailedActionRef.current = null;

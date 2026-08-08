@@ -7,7 +7,7 @@
   bottom: max(18px, env(safe-area-inset-bottom));
   left: max(18px, env(safe-area-inset-left));
   z-index: 46;
-  width: min(320px, calc(100vw - 36px));
+  width: min(360px, calc(100vw - 36px));
   max-width: 100%;
   max-height: none;
   overflow-y: auto;
@@ -142,6 +142,96 @@
   color: #e5cbb0;
   font-size: 11px;
   line-height: 1.45;
+}
+
+.live-arena__workbench {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.live-arena__work-section {
+  min-width: 0;
+}
+
+.live-arena__work-section h2 {
+  margin: 0 0 7px;
+  color: #d8c58c;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .14em;
+}
+
+.live-arena__activity,
+.live-arena__work-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.live-arena__activity li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 7px;
+  color: #978d7c;
+}
+
+.live-arena__activity-mark {
+  width: 6px;
+  height: 6px;
+  margin-top: 5px;
+  border: 1px solid #8b7441;
+  border-radius: 50%;
+}
+
+.live-arena__activity li.is-current .live-arena__activity-mark {
+  border-color: #f0d47e;
+  background: #d7ae4e;
+  box-shadow: 0 0 10px rgb(215 174 78 / 48%);
+}
+
+.live-arena__activity strong,
+.live-arena__activity small,
+.live-arena__work-list strong,
+.live-arena__work-list small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.live-arena__activity strong,
+.live-arena__work-list strong {
+  color: #d9ccb4;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.live-arena__activity small,
+.live-arena__work-list small,
+.live-arena__empty {
+  margin-top: 2px;
+  color: #8f8575;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.live-arena__empty { margin: 0; }
+
+.live-arena__work-list li {
+  position: relative;
+  min-width: 0;
+  padding: 7px 62px 7px 9px;
+  border-left: 2px solid rgb(175 143 72 / 48%);
+  background: rgb(255 255 255 / 3%);
+}
+
+.live-arena__work-list li > span {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  color: #bba66f;
+  font-size: 9px;
 }
 
 .live-arena__lens {
@@ -309,22 +399,25 @@
   .live-arena {
     position: fixed;
     z-index: 60;
-    top: max(96px, calc(env(safe-area-inset-top) + 16px));
+    top: auto;
     right: max(16px, env(safe-area-inset-right));
-    bottom: max(92px, calc(env(safe-area-inset-bottom) + 76px));
+    bottom: max(86px, calc(env(safe-area-inset-bottom) + 70px));
     left: max(16px, env(safe-area-inset-left));
     width: auto;
+    max-height: min(46dvh, 470px);
+    border-radius: 18px 18px 4px 4px;
   }
 }
 
 @media (max-width: 767px) {
   .live-arena {
-    top: max(132px, calc(env(safe-area-inset-top) + 84px));
+    top: auto;
     right: max(12px, env(safe-area-inset-right));
-    bottom: max(84px, calc(env(safe-area-inset-bottom) + 72px));
+    bottom: max(76px, calc(env(safe-area-inset-bottom) + 64px));
     left: max(12px, env(safe-area-inset-left));
     width: auto;
-    max-height: none;
+    max-height: min(48dvh, 430px);
+    border-radius: 18px 18px 4px 4px;
   }
 
   .live-arena__header {

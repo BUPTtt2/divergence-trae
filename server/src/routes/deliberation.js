@@ -45,7 +45,7 @@ const router = Router();
 // 固定路由保留字（不可被当作 sessionId 匹配）
 const RESERVED_KEYWORDS = new Set([
   'health', 'start', 'memories', 'advisors',
-  'answer', 'execute', 'commit', 'pause', 'resume',
+  'plan', 'answer', 'execute', 'commit', 'pause', 'resume',
   'snapshot', 'events',
 ]);
 
@@ -154,7 +154,7 @@ router.post(
   '/start',
   requirePrincipal,
   asyncHandler(async (req, res) => {
-    const { question } = req.body || {};
+    const { question, deferPlanning } = req.body || {};
 
     if (!question || typeof question !== 'string') {
       return res.status(400).json({ error: '缺少 question 参数' });
@@ -162,8 +162,12 @@ router.post(
     if (question.length > 500) {
       return res.status(400).json({ error: '问题过长，请控制在500字以内' });
     }
+    if (deferPlanning === true) {
+      const result = await deliberationEngine.createSession(question, req.principal.userId);
+      return res.status(202).json(result);
+    }
     const result = await deliberationEngine.start(question, req.principal.userId);
-    res.json(result);
+    return res.json(result);
   })
 );
 
@@ -214,6 +218,18 @@ router.get('/:sessionId/events', requirePrincipal, requireOwnedDeliberation, asy
 /* ============================================================
  * 第三组 · :sessionId 的动作路由（两个 path segment）
  * ============================================================ */
+
+router.post(
+  '/:sessionId/plan',
+  requirePrincipal,
+  requireOwnedDeliberation,
+  asyncHandler(async (req, res) => {
+    const result = await deliberationEngine.plan(req.params.sessionId, {
+      userId: req.principal.userId,
+    });
+    res.json(result);
+  }),
+);
 
 /**
  * GET /api/deliberation/:sessionId/clarify
