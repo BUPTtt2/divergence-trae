@@ -14,6 +14,7 @@ import { generateDialoguesForAgents } from '../services/inferenceEngine';
 import { saveAgentFeedback } from '../services/memoryStore';
 import { sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
+import { currentClarificationQuestion } from '../game/sandboxRuntime';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -427,7 +428,7 @@ export default function Game() {
     backendError, streamError, handleRejectRetry,
     commitPending,
     arenaProjection,
-    caseFile, yanQuestionRounds, progress, memoryLayers, mirrorReview,
+    caseFile, yanQuestionRounds, awaitingAnswers, progress, memoryLayers, mirrorReview,
     debateAutoPlay, setDebateAutoPlay, handleSkipToSummary,
     handleRestart, handleStart, handleUserAdvance, handleSkipClarify, handleConfirmAgents,
     handleRunAnotherRound, handleChoiceClick, handleRevealFate,
@@ -450,7 +451,7 @@ export default function Game() {
   }, []);
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)' }}>
+    <div className="game-root h-screen flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)' }}>
       <div className="crt-overlay" />
       {(backendError || streamError) && (
         <div role="alert" style={{
@@ -1152,7 +1153,7 @@ export default function Game() {
               transition={{ duration: 0.6, ease: 'easeOut' }}
             >
               {phase === 'clarify_loop' && (() => {
-                const lastRound = yanQuestionRounds?.[yanQuestionRounds.length - 1];
+                const clarificationQuestion = currentClarificationQuestion(awaitingAnswers, yanQuestionRounds);
                 return (
                   <motion.div
                     initial={{ opacity: 0, y: -8 }}
@@ -1206,7 +1207,7 @@ export default function Game() {
                       lineHeight: 1.9,
                       letterSpacing: '0.06em',
                     }}>
-                      {lastRound?.question || '正在斟酌提问...'}
+                      {clarificationQuestion || '正在斟酌提问...'}
                     </div>
                   </motion.div>
                 );

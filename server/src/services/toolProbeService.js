@@ -40,7 +40,7 @@ const AGENT_TOOL_REGISTRY = getAgentToolRegistry();
 const QUESTION_TYPE_TO_PROBES = {
   travel: ['weather_query', 'web_search'],
   finance: ['stock_query', 'exchange_rate'],
-  career: ['web_search', 'company_info'],
+  career: [],
   health: ['web_search'],
   relationship: [],
   life: [],
@@ -48,8 +48,9 @@ const QUESTION_TYPE_TO_PROBES = {
   pet: ['web_search'],
   education: ['web_search'],
   legal: ['web_search'],
-  competition: ['web_search'],
-  tech: ['web_search'],
+  competition: [],
+  product: [],
+  tech: [],
   other: [],
 };
 
@@ -85,6 +86,10 @@ const KNOWN_COMPANIES = ['腾讯', '阿里', '阿里巴巴', '字节跳动', '�
 export function detectToolNeeds(question, questionType) {
   const q = String(question || '');
   const probes = [...(QUESTION_TYPE_TO_PROBES[questionType] || [])];
+
+  if (questionType === 'career' && extractCompanyName(q)) {
+    probes.push('web_search', 'company_info');
+  }
 
   // 关键词兜底
   if (REALTIME_PATTERN.test(q) && !probes.includes('web_search')) probes.push('web_search');
@@ -123,7 +128,7 @@ export function buildProbeArgs(toolName, question, questionType) {
     }
 
     case 'company_info':
-      return { name: extractCompanyName(q) || '腾讯' };
+      return { name: extractCompanyName(q) };
 
     case 'calendar_query':
       return {};

@@ -38,6 +38,32 @@ const BLACKBOARD_MAX_CHARS = 8000;
 const TOOL_RESULT_MAX_CHARS = 2000;
 const AGENT_TOOL_REGISTRY = getAgentToolRegistry();
 
+const STANCE_PERSPECTIVE_MAP = Object.freeze({
+  财务: 'financial',
+  职业: 'career',
+  风险: 'risk',
+  情感: 'emotional',
+  反思: 'reflection',
+  宏观: 'macro',
+  行动: 'action',
+  沟通: 'communication',
+  法律: 'legal',
+  健康: 'health',
+  教育: 'education',
+  技术: 'technical',
+});
+
+export function perspectiveForAgent(agent = {}) {
+  if (typeof agent.perspective === 'string' && agent.perspective.trim()) {
+    return agent.perspective.trim().toLowerCase();
+  }
+
+  const stance = String(agent.stance || '');
+  const matched = Object.entries(STANCE_PERSPECTIVE_MAP)
+    .find(([label]) => stance.includes(label));
+  return matched?.[1] || 'reflection';
+}
+
 /**
  * 构建演的 ReAct 系统提示
  * @param {object} state 推演状态
@@ -426,12 +452,13 @@ export async function runReActLoop(sessionId, state) {
                 state.llmCallCount++;
 
                 const content = (text || '').slice(0, 300);
+                const perspective = perspectiveForAgent(agent);
                 const finding = {
                   agentId: agent.id,
                   agentName: agent.name,
                   content,
                   stance: agent.stance || '',
-                  perspective: agent.perspective || '',
+                  perspective,
                 };
 
                 if (!state.findings) state.findings = [];
@@ -440,7 +467,7 @@ export async function runReActLoop(sessionId, state) {
                 // 记录事件 + 推送 SSE
                 await eventBus.emit(sessionId, {
                   type: 'ADVISOR_SPEAK',
-                  data: { agentId: agent.id, agentName: agent.name, content, stance: agent.stance || '', perspective: agent.perspective || '' },
+                  data: { agentId: agent.id, agentName: agent.name, content, stance: agent.stance || '', perspective },
                   actor: agent.id,
                   correlationId: state.actionId,
                   taskId: `react_round_${round}`,

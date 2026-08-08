@@ -7,6 +7,7 @@ import {
   mapServerStateToInternalPhase,
   adaptFateTicket,
 } from './sandboxRuntime.js';
+import * as sandboxRuntime from './sandboxRuntime.js';
 
 test('sandbox defaults to the Agent runtime and only explicit legacy rolls back', () => {
   assert.equal(resolveSandboxRuntime(undefined), 'agent');
@@ -43,4 +44,15 @@ test('authoritative fate ticket is adapted to the existing view contract', () =>
   assert.equal(adapted.verse, '先试后定。');
   assert.deepEqual(adapted.keyPoints, ['两周后用结果复盘']);
   assert.deepEqual(adapted.agentSnippets, [{ name: '镜渊', snippet: '两周后用结果复盘' }]);
+});
+
+test('clarification UI renders the current pending Agent question before answered history', () => {
+  assert.equal(typeof sandboxRuntime.currentClarificationQuestion, 'function');
+  assert.equal(
+    sandboxRuntime.currentClarificationQuestion(
+      [{ question: '现有留存、预算和停止指标分别是什么？' }],
+      [{ question: '旧问题', userAnswer: '旧答案' }],
+    ),
+    '现有留存、预算和停止指标分别是什么？',
+  );
 });

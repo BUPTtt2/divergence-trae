@@ -64,6 +64,9 @@ const QUESTION_TYPE_RULES = [
   { type: 'city', pattern: /租房|买房|定居|搬家|落户|居住|落脚|合租|房租|房源|换城市|去.{1,6}(生活|定居|工作|发展|落脚|安家)/ },
   // 财务类
   { type: 'finance', pattern: /投资|股票|基金|理财|贷款|借钱|还钱|财务|赚钱|存钱|汇率|通货膨胀|股市|基金定投|还款|负债/ },
+  // 比赛与产品类必须先于 career，避免“投入项目/复赛目标”被误判成求职。
+  { type: 'competition', pattern: /比赛|竞赛|初赛|复赛|决赛|参赛|评审|展览|赛道作品|作品提交/ },
+  { type: 'product', pattern: /产品|项目|用户留存|用户增长|活跃用户|功能迭代|上线|部署|商业化|MVP|Demo|Agent|AI[ -]?native/i },
   // 职业类
   { type: 'career', pattern: /工作|职业|offer|跳槽|涨薪|创业|辞职|转行|升职|面试|简历|打工|内卷|加班|入职|离职|裁员|失业/ },
   // 健康类（养宠的"养"已经优先匹配 pet，这里 health 养.1,2 不抢"养猫"）
@@ -99,7 +102,7 @@ export async function detectQuestionType(question) {
   // 正则未命中 → LLM 分类（带重试，失败抛错）
   const text = await callPlannerLLM(
         [
-          { role: 'system', content: '你是问题分类专家。将用户问题归类为以下类型之一：travel(出行/旅游/出差)、finance(财务/投资)、career(职业/工作)、health(健康/医疗)、relationship(情感/人际关系)、pet(养宠)、education(教育/学习)、legal(法律)、competition(比赛/竞赛)、tech(技术/编程)、city(租房/买房/定居/搬家/城市生活)、life(日常生活)、other(其他)。只返回类型关键词，不要解释。注意：租房买房是city不是travel；去某地工作/定居/生活是city不是travel。' },
+          { role: 'system', content: '你是问题分类专家。将用户问题归类为以下类型之一：travel(出行/旅游/出差)、finance(财务/投资)、career(求职/岗位/职场)、health(健康/医疗)、relationship(情感/人际关系)、pet(养宠)、education(教育/学习)、legal(法律)、competition(比赛/竞赛/参展)、product(产品/项目/用户/迭代/部署)、tech(技术/编程)、city(租房/买房/定居/搬家/城市生活)、life(日常生活)、other(其他)。只返回类型关键词，不要解释。注意：做产品或项目不是career；租房买房是city不是travel；去某地工作/定居/生活是city不是travel。' },
           { role: 'user', content: `问题：${q}\n分类结果：` },
         ],
         { maxTokens: 10, temperature: 0.1, timeout: 10000 },
@@ -107,7 +110,7 @@ export async function detectQuestionType(question) {
   );
 
   const normalized = (text || '').trim().toLowerCase();
-  const validTypes = ['travel', 'finance', 'career', 'health', 'relationship', 'pet', 'education', 'legal', 'competition', 'tech', 'city', 'life', 'other'];
+  const validTypes = ['travel', 'finance', 'career', 'health', 'relationship', 'pet', 'education', 'legal', 'competition', 'product', 'tech', 'city', 'life', 'other'];
   const firstWord = normalized.replace(/^[^a-z]/g, '').split(/[^a-z]/)[0];
   let matched = validTypes.find(t => firstWord === t);
   if (!matched) {
@@ -186,6 +189,12 @@ async function generateYanAnalysis(question, questionType, dimensions, toolResul
   return hasMem
     ? `${base}，且有旧例可循${tail}`
     : `${base}${tail}`;
+}
+
+export async function ensurePlannerAnalysis(existingAnalysis, generateAnalysis) {
+  const existing = String(existingAnalysis || '').trim();
+  if (existing) return existing;
+  return generateAnalysis();
 }
 
 // v3.0 已删除 ruleBasedDimensions 函数（零预设：维度由 LLM 自主生成，失败抛错不降级规则映射）
@@ -582,6 +591,7 @@ export async function plan(session, dependencies = {}) {
       const fromPool = typeof agentEngine.getAgentById === 'function' ? agentEngine.getAgentById(id) : null;
       if (fromPool) return {
         id: fromPool.id, name: fromPool.name, stance: fromPool.stance,
+        perspective: fromPool.perspective,
         role: fromPool.role || 'dynamic', trigram: fromPool.trigram || '☰',
         color: fromPool.color || '#C8A850', glow: fromPool.glow || '#F0D890'
       };
@@ -695,8 +705,10 @@ export async function plan(session, dependencies = {}) {
   }
 
   // 7.6 LLM 驱动演分析文本（v3.0 零预设：失败抛错，不降级模板）
-  const analysis = await generateYanAnalysis(question, questionType, dimensions, toolResults, memories);
-  deliberationPlan.analysis = analysis;
+  deliberationPlan.analysis = await ensurePlannerAnalysis(
+    deliberationPlan.analysis,
+    () => generateYanAnalysis(question, questionType, dimensions, toolResults, memories),
+  );
 
   const planCorrelationId = `plan_${session.id}_${session.round}`;
   for (const domainEvent of planDomainEvents(deliberationPlan, askUser)) {

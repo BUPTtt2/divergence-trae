@@ -1187,7 +1187,7 @@ function generateFateTicket(session, choice, feedback) {
     agentName: f.agentName || '未知',
     perspective: f.perspective || 'reflection',
     stance: f.stance || 'neutral',
-    excerpt: (f.content || '').slice(0, 60),
+    excerpt: agentEngine.sanitizeAgentDialogue(f.content || '', question).slice(0, 60),
   }));
 
   // 卦象摘要

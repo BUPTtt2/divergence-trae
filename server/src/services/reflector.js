@@ -623,7 +623,7 @@ function disabledCognitivePlan() {
  * 流程:
  *   1. 聚合 findings
  *   2. 矛盾检测 → 有矛盾且可重规划 → state=PLAN
- *   3. 覆盖检查 → 有缺口且可重规划 → 补维度, state=EXECUTE
+ *   3. 覆盖检查 → 将缺口保留为 unknown，不用重复推演伪造确定性
  *   4. 立卦 + 生成认知扰动计划 + 中性说明 → state=ORACLE
  *
  * @param {object} session 推演会话（需含 plan.dimensions, findings, replan_count）
@@ -667,25 +667,11 @@ export async function reflect(session, dependencies = {}) {
 
   // 3. 覆盖检查
   const gaps = checkCoverage(dimensions, findings);
-  if (gaps.length > 0 && replanCount < MAX_REPLAN) {
-    // 补维度，回到 EXECUTE 重跑智囊
-    session.replan_count = replanCount + 1;
-    session.plan.dimensions = [...dimensions, ...gaps.map((g) => ({ name: g.name, perspective: g.perspective, agents: [], toolNeeds: [] }))];
-    session.state = 'EXECUTE';
-    logger.info('[Reflector] 补维度重跑（覆盖不足）', {
-      replanCount: session.replan_count,
+  if (gaps.length > 0) {
+    logger.info('[Reflector] 覆盖缺口保留为未知', {
       gapCount: gaps.length,
-      addedPerspectives: gaps.map((g) => g.perspective),
+      unknownPerspectives: gaps.map((g) => g.perspective),
     });
-    return {
-      session,
-      oracle: null,
-      conflicts,
-      gaps,
-      aggregated,
-      replanned: true,
-      reason: '维度缺口补全',
-    };
   }
 
   // 4. 立卦

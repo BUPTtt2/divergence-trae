@@ -5,6 +5,10 @@
 @tailwind components;
 @tailwind utilities;
 
+.game-root button {
+  min-height: 44px;
+}
+
 /* Reset & Base */
 *, *::before, *::after {
   margin: 0;

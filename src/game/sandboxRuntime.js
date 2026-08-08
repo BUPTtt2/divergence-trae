@@ -55,4 +55,12 @@ export function adaptFateTicket(ticket) {
   };
 }
 
-export default { resolveSandboxRuntime, mapDeliberationPhase, mapServerStateToInternalPhase, adaptFateTicket };
+export function currentClarificationQuestion(awaitingAnswers, answeredRounds) {
+  const pending = Array.isArray(awaitingAnswers) ? awaitingAnswers : [];
+  const firstPending = pending.find((item) => String(item?.question || item || '').trim());
+  if (firstPending) return String(firstPending.question || firstPending).trim();
+  const rounds = Array.isArray(answeredRounds) ? answeredRounds : [];
+  return String(rounds.at(-1)?.question || '').trim();
+}
+
+export default { resolveSandboxRuntime, mapDeliberationPhase, mapServerStateToInternalPhase, adaptFateTicket, currentClarificationQuestion };
