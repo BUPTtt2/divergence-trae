@@ -272,6 +272,48 @@ export async function completeExecute(sessionId, { actionId, claimToken, state, 
   return { completed: true, session: result.rows[0] };
 }
 
+/** 当前 execute owner 的中间写入；CAS 成功时同时续租，旧 owner 不得覆盖新 owner。 */
+export async function updateClaimedExecute(sessionId, {
+  actionId,
+  claimToken,
+  state,
+  patch = {},
+  now = Date.now(),
+  leaseMs = DEFAULT_EXECUTE_LEASE_MS,
+} = {}) {
+  const normalizedActionId = String(actionId || '').trim();
+  const normalizedClaimToken = String(claimToken || '').trim();
+  const normalizedNow = Number(now);
+  const normalizedLeaseMs = Number(leaseMs);
+  if (!Number.isFinite(normalizedNow) || !Number.isFinite(normalizedLeaseMs) || normalizedLeaseMs <= 0) {
+    throw new Error('EXECUTE_LEASE_INVALID');
+  }
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      execute_action_id: normalizedActionId,
+      execute_status: 'running',
+      execute_claim_token: normalizedClaimToken,
+    },
+    data: dropUndefined({
+      state,
+      ...patch,
+      execute_action_id: normalizedActionId,
+      execute_status: 'running',
+      execute_claim_token: normalizedClaimToken,
+      execute_lease_expires_at: normalizedNow + normalizedLeaseMs,
+    }),
+  });
+  if (result.rowCount !== 1) {
+    const error = new Error('EXECUTE_CLAIM_LOST');
+    error.code = 'EXECUTE_CLAIM_LOST';
+    throw error;
+  }
+  return { updated: true, session: result.rows[0] };
+}
+
 /** 失败时仅由当前 fencing token 释放租约；同时清理未完成的 Lens 子状态。 */
 export async function releaseExecuteClaim(sessionId, { actionId, claimToken } = {}) {
   const result = await query({
@@ -300,7 +342,7 @@ export async function releaseExecuteClaim(sessionId, { actionId, claimToken } = 
  * 原子抢占一次性 Lens 审查。只有 lens_review 仍为空的调用者可以成为执行者。
  * PostgreSQL 使用条件 UPDATE；内存模式在同一同步临界区执行等价 CAS。
  */
-export async function claimLensReview(sessionId, { cognitivePlan, actionId } = {}) {
+export async function claimLensReview(sessionId, { cognitivePlan, actionId, executeClaimToken } = {}) {
   const tasks = Array.isArray(cognitivePlan?.reviewTasks) ? cognitivePlan.reviewTasks.slice(0, 3) : [];
   const lensReview = {
     started: true,
@@ -321,7 +363,12 @@ export async function claimLensReview(sessionId, { cognitivePlan, actionId } = {
     table: SESSIONS_TABLE,
     action: 'compare-and-set',
     id: sessionId,
-    expected: { lens_review: null },
+    expected: {
+      lens_review: null,
+      execute_action_id: String(actionId || '').trim(),
+      execute_status: 'running',
+      execute_claim_token: String(executeClaimToken || '').trim(),
+    },
     data: {
       cognitive_plan: claimedPlan,
       lens_review: lensReview,
@@ -861,5 +908,10 @@ export default {
   saveSession,
   getSession,
   updateSessionState,
+  updateClaimedExecute,
+  claimExecute,
+  completeExecute,
+  releaseExecuteClaim,
+  claimLensReview,
   selfTest,
 };

@@ -493,7 +493,7 @@ async function selfCritiquePlan(question, dimensions, toolResults, memories) {
  *   - askUser 为演的追问数组（state=WAIT 时非空）
  *   - memory 为映射后的 [{content, type}] 供前端开场吊言+个性化
  */
-export async function plan(session) {
+export async function plan(session, dependencies = {}) {
   const userId = session.user_id;
   const question = session.question_context || session.questionContext || session.question || '';
   logger.info('[Planner] Plan 阶段开始', { sessionId: session.id, userId, question: question.slice(0, 60) });
@@ -652,10 +652,12 @@ export async function plan(session) {
 
   // 7. 持久化（saveSession 会自动生成 id 若缺失）
   try {
-    const saved = await memoryService.saveSession(session);
+    const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
+    const saved = await saveSession(session);
     session.id = saved.id;
     logger.info('[Planner] 会话已持久化', { sessionId: session.id, state: session.state, round: session.round });
   } catch (e) {
+    if (e?.code === 'EXECUTE_CLAIM_LOST') throw e;
     logger.warn('[Planner] 会话持久化失败，继续内存态', { error: e.message });
   }
 

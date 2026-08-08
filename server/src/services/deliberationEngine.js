@@ -251,7 +251,12 @@ export async function runLensReviewLifecycle(result, context = {}, dependencies 
       review: lensReview,
     };
     const claim = dependencies.claimFn || memoryService.claimLensReview;
-    const claimResult = await claim(sessionId, { cognitivePlan: claimedPlan, lensReview, actionId });
+    const claimResult = await claim(sessionId, {
+      cognitivePlan: claimedPlan,
+      lensReview,
+      actionId,
+      executeClaimToken: context.claimToken,
+    });
     if (!claimResult?.claimed) {
       const persisted = claimResult?.session;
       if (!persisted) throw new Error('LENS_REVIEW_CLAIM_STATE_UNAVAILABLE');
@@ -297,19 +302,63 @@ export async function assertSessionOwner(sessionId, verifiedUserId) {
   return session;
 }
 
-export async function planSessionWithFallback(session, planFn = planner.plan) {
+export async function planSessionWithFallback(session, planFn = planner.plan, dependencies = {}) {
   try {
-    return await planFn(session);
+    return await planFn(session, dependencies);
   } catch (error) {
+    if (error?.code === 'EXECUTE_CLAIM_LOST') throw error;
     logger.warn('[Deliberation] planner 失败，保存可继续的规则兜底', { sessionId: session.id, error: error.message });
     const fallback = _fallbackPlanResult(session, error.message);
-    await memoryService.saveSession({
+    const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
+    await saveSession({
       ...fallback.session,
       state: fallback.session.state,
       plan: fallback.plan,
     });
     return fallback;
   }
+}
+
+function executeProjectionPatch(session) {
+  const patch = memoryService.toSessionPersistenceData(session);
+  delete patch.state;
+  delete patch.execute_action_id;
+  delete patch.execute_status;
+  delete patch.execute_claim_token;
+  delete patch.execute_lease_expires_at;
+  return patch;
+}
+
+async function persistClaimedExecuteSession(sessionId, session, executionCtx) {
+  await memoryService.updateClaimedExecute(sessionId, {
+    actionId: executionCtx.actionId,
+    claimToken: executionCtx.claimToken,
+    state: session.state,
+    patch: executeProjectionPatch(session),
+  });
+  return { ...session, id: sessionId };
+}
+
+export async function persistClarifyExecute(sessionId, session, questions, executionCtx = {}, dependencies = {}) {
+  const plan = {
+    ...(session.plan || {}),
+    askUser: questions,
+  };
+  const completeExecute = dependencies.completeExecuteFn || memoryService.completeExecute;
+  const completed = await completeExecute(sessionId, {
+    actionId: executionCtx.actionId,
+    claimToken: executionCtx.claimToken,
+    state: STATES.WAIT,
+    patch: {
+      findings: Array.isArray(session.findings) ? session.findings : [],
+      tool_results: Array.isArray(session.tool_results) ? session.tool_results : [],
+      plan,
+    },
+  });
+  session.state = STATES.WAIT;
+  session.plan = plan;
+  session.askUser = questions;
+  return completed.session;
 }
 
 // ============ 主入口 ============
@@ -631,10 +680,7 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
 
   // 6. 演决定追问：持久化 + 返回 CLARIFY（不预设，演基于上下文判断）
   if (reactResult.state === 'CLARIFY' && Array.isArray(reactResult.askUser) && reactResult.askUser.length > 0) {
-    await memoryService.updateSessionState(sessionId, STATES.WAIT, {
-      findings: session.findings,
-      tool_results: session.tool_results,
-    });
+    await persistClarifyExecute(sessionId, session, reactResult.askUser, executionCtx);
     logger.info('[Deliberation] execute 演追问，返回 CLARIFY', {
       sessionId,
       askUserCount: reactResult.askUser.length,
@@ -674,11 +720,13 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
     for (const domainEvent of reflectionDomainEvents(result)) {
       await eventBus.emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
     }
-    // 持久化当前 session（含 replan_count 和补维度）
-    await memoryService.saveSession(result.session);
+    // 当前 execute owner 才能持久化 replan 中间态，同时续租。
+    const saveSessionFn = (candidate) => persistClaimedExecuteSession(sessionId, candidate, executionCtx);
+    await saveSessionFn(result.session);
     // state='PLAN'：先重新 plan（planner 会读 session 已有 findings 重新规划）
     if (result.session.state === 'PLAN') {
-      await planSessionWithFallback(result.session);
+      const replanned = await planSessionWithFallback(result.session, planner.plan, { saveSessionFn });
+      result.session = replanned.session;
     }
     // 递归 execute（传空 agentIds 让 agentRouter 基于新维度推荐智囊，replan_count 已+1 不会无限）
     return performExecute(sessionId, [], executionCtx, result.session);
@@ -1335,6 +1383,7 @@ export default {
   answer,
   execute,
   runExecuteClaimLifecycle,
+  persistClarifyExecute,
   commit,
   pause,
   resume,

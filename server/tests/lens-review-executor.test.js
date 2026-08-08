@@ -290,10 +290,23 @@ test('durable Lens claim allows exactly one winner and stores the winning action
     lensReview: null,
     lensImpacts: [],
   });
+  const executeClaim = await memoryService.claimExecute(sessionId, {
+    actionId: 'claim-a',
+    now: 500,
+    leaseMs: 5_000,
+  });
 
   const [first, second] = await Promise.all([
-    memoryService.claimLensReview(sessionId, { cognitivePlan: plan, actionId: 'claim-a' }),
-    memoryService.claimLensReview(sessionId, { cognitivePlan: plan, actionId: 'claim-b' }),
+    memoryService.claimLensReview(sessionId, {
+      cognitivePlan: plan,
+      actionId: 'claim-a',
+      executeClaimToken: executeClaim.claimToken,
+    }),
+    memoryService.claimLensReview(sessionId, {
+      cognitivePlan: plan,
+      actionId: 'claim-b',
+      executeClaimToken: 'wrong-token',
+    }),
   ]);
   const winners = [first, second].filter((claim) => claim.claimed);
   const persisted = await memoryService.getSession(sessionId);
@@ -335,10 +348,28 @@ test('execute lease has one cross-instance winner and an expired owner can be re
   assert.equal(afterExpiry.session.execute_action_id, 'replacement-after-expiry');
   assert.equal(afterExpiry.session.execute_status, 'running');
   assert.equal(afterExpiry.session.execute_lease_expires_at, 2_001);
+
+  const original = [first, second].find((claim) => claim.claimed);
+  const staleRelease = await memoryService.releaseExecuteClaim(sessionId, {
+    actionId: 'shared-action',
+    claimToken: original.claimToken,
+  });
+  assert.equal(staleRelease.released, false);
+  await assert.rejects(
+    memoryService.completeExecute(sessionId, {
+      actionId: 'shared-action',
+      claimToken: original.claimToken,
+      state: 'ORACLE',
+      patch: { findings: [{ id: 'stale-overwrite' }] },
+    }),
+    /EXECUTE_CLAIM_LOST/,
+  );
+  const fenced = await memoryService.getSession(sessionId);
+  assert.equal(fenced.execute_action_id, 'replacement-after-expiry');
+  assert.notDeepEqual(fenced.findings, [{ id: 'stale-overwrite' }]);
 });
 
 test('two engine instances execute one session/action only once and loser restores persisted state', async () => {
-  assert.equal(typeof deliberationEngine.runExecuteClaimLifecycle, 'function');
   const sessionId = `sess_execute_cross_instance_${Date.now()}`;
   const session = await memoryService.saveSession({
     ...createSession(sessionId),
@@ -360,18 +391,18 @@ test('two engine instances execute one session/action only once and loser restor
     return { sessionId, state: 'ORACLE', findings: [{ id: 'winner-finding' }], claimedSession };
   };
 
-  const first = deliberationEngine.runExecuteClaimLifecycle(
-    session,
+  const first = deliberationEngine.execute(
+    sessionId,
     [],
     { userId: session.user_id, actionId: 'shared-action' },
-    { executeFn, nowFn: () => 10_000 },
+    { executeFn, nowFn: () => 10_000, flightRegistry: new Map() },
   );
   await new Promise((resolve) => setImmediate(resolve));
-  const second = deliberationEngine.runExecuteClaimLifecycle(
-    session,
+  const second = deliberationEngine.execute(
+    sessionId,
     [],
     { userId: session.user_id, actionId: 'shared-action' },
-    { executeFn, nowFn: () => 10_000 },
+    { executeFn, nowFn: () => 10_000, flightRegistry: new Map() },
   );
   const restored = await second;
 
@@ -381,6 +412,108 @@ test('two engine instances execute one session/action only once and loser restor
   releaseWork();
   const completed = await first;
   assert.equal(completed.state, 'ORACLE');
+});
+
+test('stale replan owner cannot overwrite the replacement owner projection', async () => {
+  const sessionId = `sess_execute_replan_fence_${Date.now()}`;
+  await memoryService.saveSession({
+    ...createSession(sessionId),
+    state: 'EXECUTE',
+    plan: { agents: [], askUser: [] },
+  });
+  const stale = await memoryService.claimExecute(sessionId, {
+    actionId: 'stale-action',
+    now: 30_000,
+    leaseMs: 100,
+  });
+  const replacement = await memoryService.claimExecute(sessionId, {
+    actionId: 'replacement-action',
+    now: 30_101,
+    leaseMs: 500,
+  });
+  assert.equal(replacement.claimed, true);
+
+  await assert.rejects(
+    memoryService.updateClaimedExecute(sessionId, {
+      actionId: 'stale-action',
+      claimToken: stale.claimToken,
+      state: 'PLAN',
+      patch: { plan: { dimensions: [{ perspective: 'stale' }] } },
+      now: 30_102,
+      leaseMs: 500,
+    }),
+    /EXECUTE_CLAIM_LOST/,
+  );
+  const persisted = await memoryService.getSession(sessionId);
+  assert.equal(persisted.execute_action_id, 'replacement-action');
+  assert.notDeepEqual(persisted.plan, { dimensions: [{ perspective: 'stale' }] });
+});
+
+test('Lens claim requires the active execute action and fencing token', async () => {
+  const sessionId = `sess_lens_execute_fence_${Date.now()}`;
+  const plan = { ...structuredClone(PLAN), reviewTasks: [structuredClone(PLAN.reviewTasks[0])] };
+  await memoryService.saveSession({
+    ...createSession(sessionId),
+    state: 'EXECUTE',
+    plan: { agents: [], askUser: [] },
+  });
+  const stale = await memoryService.claimExecute(sessionId, {
+    actionId: 'stale-action',
+    now: 40_000,
+    leaseMs: 100,
+  });
+  const replacement = await memoryService.claimExecute(sessionId, {
+    actionId: 'replacement-action',
+    now: 40_101,
+    leaseMs: 500,
+  });
+
+  const rejected = await memoryService.claimLensReview(sessionId, {
+    cognitivePlan: plan,
+    actionId: 'stale-action',
+    executeClaimToken: stale.claimToken,
+  });
+  assert.equal(rejected.claimed, false);
+  const accepted = await memoryService.claimLensReview(sessionId, {
+    cognitivePlan: plan,
+    actionId: 'replacement-action',
+    executeClaimToken: replacement.claimToken,
+  });
+  assert.equal(accepted.claimed, true);
+});
+
+test('CLARIFY success atomically stores WAIT projection and completes the active lease', async () => {
+  assert.equal(typeof deliberationEngine.persistClarifyExecute, 'function');
+  const sessionId = `sess_execute_clarify_${Date.now()}`;
+  await memoryService.saveSession({
+    ...createSession(sessionId),
+    state: 'EXECUTE',
+    plan: { agents: [], askUser: [] },
+    tool_results: [{ tool: 'existing', ok: true }],
+  });
+  const claim = await memoryService.claimExecute(sessionId, {
+    actionId: 'clarify-action',
+    now: 50_000,
+    leaseMs: 500,
+  });
+  const questions = [{ question: '预算上限是多少？', reason: '补齐边界' }];
+
+  await deliberationEngine.persistClarifyExecute(sessionId, {
+    ...claim.session,
+    findings: [{ id: 'clarify-finding' }],
+    tool_results: [{ tool: 'fresh', ok: true }],
+  }, questions, {
+    actionId: 'clarify-action',
+    claimToken: claim.claimToken,
+  });
+
+  const persisted = await memoryService.getSession(sessionId);
+  assert.equal(persisted.state, 'WAIT');
+  assert.equal(persisted.execute_status, 'completed');
+  assert.equal(persisted.execute_lease_expires_at, null);
+  assert.deepEqual(persisted.findings, [{ id: 'clarify-finding' }]);
+  assert.deepEqual(persisted.tool_results, [{ tool: 'fresh', ok: true }]);
+  assert.deepEqual(persisted.plan.askUser, questions);
 });
 
 test('execute persistence failure emits no Lens completion and releases the lease for retry', async () => {
@@ -406,7 +539,7 @@ test('execute persistence failure emits no Lens completion and releases the leas
       gaps: [{ id: 'gap-before-failure' }],
       cognitivePlan: { ...structuredClone(PLAN), reviewTasks: [structuredClone(PLAN.reviewTasks[0])] },
       lensImpacts: [],
-    }, { sessionId, actionId: executionCtx.actionId }, {
+    }, { sessionId, actionId: executionCtx.actionId, claimToken: executionCtx.claimToken }, {
       emitFn: async (_id, event) => emitted.push(event.type),
       executeFn: async ({ plan }) => {
         const finding = { id: 'lens-finding-recover', lensTaskId: plan.reviewTasks[0].id, lensId: plan.lensId };
