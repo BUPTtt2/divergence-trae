@@ -22,7 +22,8 @@ function mediaMatches(params, viewport) {
   });
 }
 
-function computedStyle(selector, viewport) {
+// Parses authored declarations and applies this file's media-query policy; it is not a browser layout engine.
+function declarationsForViewport(selector, viewport) {
   const declarations = {};
 
   stylesheet.walkRules((rule) => {
@@ -44,10 +45,12 @@ function computedStyle(selector, viewport) {
 const portrait = { width: 768, height: 1024, reducedMotion: false };
 const landscape = { width: 1024, height: 768, reducedMotion: false };
 const phone = { width: 767, height: 900, reducedMotion: false };
+const desktop = { width: 1440, height: 900, reducedMotion: false };
 
 test('768x1024 portrait keeps the arena in one safe-area-aware column without horizontal overflow', () => {
-  const arena = computedStyle('.live-arena', portrait);
+  const arena = declarationsForViewport('.live-arena', portrait);
 
+  assert.equal(arena.position, 'fixed');
   assert.equal(arena.display, 'flex');
   assert.equal(arena['flex-direction'], 'column');
   assert.equal(arena.width, 'auto');
@@ -59,9 +62,11 @@ test('768x1024 portrait keeps the arena in one safe-area-aware column without ho
 });
 
 test('1024x768 landscape uses a bounded, vertically scrollable sidebar inside safe areas', () => {
-  const arena = computedStyle('.live-arena', landscape);
+  const arena = declarationsForViewport('.live-arena', landscape);
 
-  assert.equal(arena.width, 'min(320px, calc(100vw - 36px))');
+  assert.equal(arena.position, 'fixed');
+  assert.match(arena.width, /env\(safe-area-inset-left\)/);
+  assert.match(arena.width, /env\(safe-area-inset-right\)/);
   assert.equal(arena['max-width'], '320px');
   assert.match(arena.top, /env\(safe-area-inset-top\)/);
   assert.match(arena.left, /env\(safe-area-inset-left\)/);
@@ -72,10 +77,14 @@ test('1024x768 landscape uses a bounded, vertically scrollable sidebar inside sa
   assert.equal(arena['touch-action'], 'pan-y');
 });
 
+test('desktop keeps the existing container-relative overlay positioning', () => {
+  assert.equal(declarationsForViewport('.live-arena', desktop).position, 'absolute');
+});
+
 test('767px and narrower uses a flowing card stack with controls that wrap instead of overflowing', () => {
-  const arena = computedStyle('.live-arena', phone);
-  const header = computedStyle('.live-arena__header', phone);
-  const controls = computedStyle('.live-arena__motion-controls', phone);
+  const arena = declarationsForViewport('.live-arena', phone);
+  const header = declarationsForViewport('.live-arena__header', phone);
+  const controls = declarationsForViewport('.live-arena__motion-controls', phone);
 
   assert.equal(arena.width, 'auto');
   assert.equal(arena['max-height'], 'none');
@@ -86,7 +95,7 @@ test('767px and narrower uses a flowing card stack with controls that wrap inste
 
 test('all primary controls expose at least a 44px touch target without hover-only selectors', () => {
   for (const selector of ['.live-arena__motion-controls button', '.live-arena__lens-toggle']) {
-    const control = computedStyle(selector, portrait);
+    const control = declarationsForViewport(selector, portrait);
     assert.ok(Number.parseFloat(control['min-width']) >= 44, `${selector} min-width`);
     assert.ok(Number.parseFloat(control['min-height']) >= 44, `${selector} min-height`);
   }
@@ -97,8 +106,8 @@ test('all primary controls expose at least a 44px touch target without hover-onl
 });
 
 test('system reduced-motion disables ornamental transitions while off mode remains static', () => {
-  const reducedCue = computedStyle('.live-arena__cue', { ...landscape, reducedMotion: true });
-  const offCue = computedStyle('.live-arena__cue--crystallize.live-arena__cue--motion-off', landscape);
+  const reducedCue = declarationsForViewport('.live-arena__cue', { ...landscape, reducedMotion: true });
+  const offCue = declarationsForViewport('.live-arena__cue--crystallize.live-arena__cue--motion-off', landscape);
 
   assert.equal(reducedCue.animation, 'none');
   assert.equal(reducedCue.transition, 'none');

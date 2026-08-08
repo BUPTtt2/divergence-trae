@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useMemo, useState } from 'react';
 
-import { motionConfigFor, resolveMotionMode } from '../../game/motionPreference';
+import { effectiveMotionMode, motionConfigFor, resolveMotionMode } from '../../game/motionPreference';
 import './liveArenaOverlay.css';
 
 const STORAGE_KEY = 'yance_arena_motion_mode';
@@ -31,8 +31,12 @@ const OUTCOME_LABELS = {
 function initialMotionMode() {
   if (typeof window === 'undefined') return 'standard';
   const saved = window.localStorage.getItem(STORAGE_KEY) || undefined;
-  const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
-  return resolveMotionMode(saved, reduced);
+  return resolveMotionMode(saved, false);
+}
+
+function initialSystemReducedMotion() {
+  return typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
 }
 
 function CueCard({ cue, mode }) {
@@ -148,7 +152,9 @@ function LensCard({ lens }) {
 }
 
 export default function LiveArenaOverlay({ projection }) {
-  const [motionMode, setMotionMode] = useState(initialMotionMode);
+  const [selectedMotionMode, setSelectedMotionMode] = useState(initialMotionMode);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(initialSystemReducedMotion);
+  const motionMode = effectiveMotionMode(selectedMotionMode, prefersReducedMotion);
   const taskCount = Object.keys(projection?.tasks || {}).length;
   const agents = Object.values(projection?.agents || {});
   const evidence = Object.values(projection?.evidence || {});
@@ -164,8 +170,20 @@ export default function LiveArenaOverlay({ projection }) {
   }, [projection]);
 
   useEffect(() => {
-    try { window.localStorage.setItem(STORAGE_KEY, motionMode); } catch {}
-  }, [motionMode]);
+    try { window.localStorage.setItem(STORAGE_KEY, selectedMotionMode); } catch {}
+  }, [selectedMotionMode]);
+
+  useEffect(() => {
+    const query = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!query) return undefined;
+    const handleChange = (event) => setPrefersReducedMotion(event.matches === true);
+    if (query.addEventListener) {
+      query.addEventListener('change', handleChange);
+      return () => query.removeEventListener('change', handleChange);
+    }
+    query.addListener?.(handleChange);
+    return () => query.removeListener?.(handleChange);
+  }, []);
 
   if (!visible) return null;
   return (
@@ -180,8 +198,8 @@ export default function LiveArenaOverlay({ projection }) {
             <button
               key={mode}
               type="button"
-              aria-pressed={motionMode === mode}
-              onClick={() => setMotionMode(mode)}
+              aria-pressed={selectedMotionMode === mode}
+              onClick={() => setSelectedMotionMode(mode)}
             >{label}</button>
           ))}
         </div>

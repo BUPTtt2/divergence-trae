@@ -113,7 +113,8 @@
 3. 事件与恢复：四类 Lens 事件沿用 AgentEventV1，通过 EventStore 顺序持久化；前端投影支持重复、乱序、Snapshot 和重放不重播。
 4. DOM 信息：Lens 卡展示来源、审查问题、任务状态、实际贡献以及事实、风险、审批、选择四项锁定边界。
 5. iPad 样式契约：768×1024 单列、1024×768 受限侧栏、767px 以下流式布局、安全区、无横向溢出、44px 触控、无 hover 依赖和 reduced/off 均有可执行测试覆盖。
-6. 自动验证：后端 75/75、前端 40/40；production build 成功并转换 1075 个模块；新增布局测试定向 lint 0 error。
+6. 自动验证：后端 75/75、fix round 1 后前端 42/42；production build 成功并转换 1075 个模块；本轮改动文件定向 lint 0 error。
 7. 全仓 lint 边界：`npm run lint` 仍被既有 `scripts/legacy/13-qfix.mjs:3:54` 的 `Unterminated string` 阻塞，并保留历史 warning，不将全仓 lint 宣称通过。
 8. 待验收：主控仍需用真实 Safari/WebKit 检查 768×1024 与 1024×768 的 Lens 展开、动态安全区、standard/reduced/off、刷新/SSE 恢复、页面横向溢出、底部导航遮挡和独立触控。该项通过前 Stage 06 不记录为最终完成。
 9. 边界：未部署生产；自动 CSS 契约不能替代真实 iPad WebKit 渲染证据。
+10. Fix round 1：真实 iPad 首轮发现父容器 `scrollLeft=30` 会把 absolute overlay 裁到 viewport 左侧之外；两个 iPad media 区间现改为 fixed，待重载复验。正式审查同时修复已保存 standard 覆盖系统 Reduce Motion 的问题，off 保持完全静态。

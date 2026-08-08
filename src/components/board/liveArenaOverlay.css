@@ -275,13 +275,18 @@
 
 @media (min-width: 768px) and (max-width: 1180px) and (orientation: landscape) {
   .live-arena {
-    width: min(320px, calc(100vw - 36px));
+    position: fixed;
+    width: min(
+      320px,
+      calc(100vw - max(18px, env(safe-area-inset-left)) - max(18px, env(safe-area-inset-right)))
+    );
     max-width: 320px;
   }
 }
 
 @media (min-width: 768px) and (max-width: 1180px) and (orientation: portrait) {
   .live-arena {
+    position: fixed;
     top: max(96px, calc(env(safe-area-inset-top) + 16px));
     right: max(16px, env(safe-area-inset-right));
     bottom: max(92px, calc(env(safe-area-inset-bottom) + 76px));

@@ -1,8 +1,14 @@
 const MODES = new Set(['standard', 'reduced', 'off']);
 
+export function effectiveMotionMode(selectedMode, prefersReduced) {
+  const mode = MODES.has(selectedMode) ? selectedMode : 'standard';
+  if (mode === 'off') return 'off';
+  if (prefersReduced) return 'reduced';
+  return mode;
+}
+
 export function resolveMotionMode(savedMode, prefersReduced) {
-  if (MODES.has(savedMode)) return savedMode;
-  return prefersReduced ? 'reduced' : 'standard';
+  return effectiveMotionMode(savedMode, prefersReduced);
 }
 
 export function motionConfigFor(mode, cueKind) {
@@ -12,4 +18,4 @@ export function motionConfigFor(mode, cueKind) {
   return { enabled: true, duration, intensity: 1 };
 }
 
-export default { resolveMotionMode, motionConfigFor };
+export default { effectiveMotionMode, resolveMotionMode, motionConfigFor };
