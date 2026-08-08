@@ -216,6 +216,7 @@
 
 .live-arena__task-list,
 .live-arena__impact-list,
+.live-arena__formation-list,
 .live-arena__invariants {
   margin: 0;
   padding: 0;
@@ -223,18 +224,37 @@
 }
 
 .live-arena__task-list,
-.live-arena__impact-list {
+.live-arena__impact-list,
+.live-arena__formation-list {
   display: grid;
   gap: 7px;
 }
 
 .live-arena__task-list li,
-.live-arena__impact-list li {
+.live-arena__impact-list li,
+.live-arena__formation-list li {
   display: grid;
+  min-width: 0;
   gap: 4px;
   color: #c8bda8;
   font-size: 11px;
   line-height: 1.5;
+}
+
+.live-arena__formation-list {
+  margin-top: 7px;
+}
+
+.live-arena__formation-list li {
+  padding-left: 7px;
+  border-left: 2px solid rgb(151 132 94 / 42%);
+}
+
+.live-arena__trace-ref {
+  overflow-wrap: anywhere;
+  color: #887d6c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
 }
 
 .live-arena__status {

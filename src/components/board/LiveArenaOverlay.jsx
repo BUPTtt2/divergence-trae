@@ -27,6 +27,8 @@ const OUTCOME_LABELS = {
   'exit-condition-added': '新增退出条件',
   'no-change': '未改变核心判断',
 };
+const KNOWLEDGE_STATE_LABELS = { verified: '已验证', unknown: '未知', contested: '有冲突' };
+const YIN_YANG_LABELS = { yang: '阳爻', yin: '阴爻' };
 
 function initialMotionMode() {
   if (typeof window === 'undefined') return 'standard';
@@ -71,6 +73,7 @@ function LensCard({ lens }) {
   const tasks = Object.values(lens?.tasks || {});
   const impacts = Object.values(lens?.impacts || {});
   const selected = lens?.selected;
+  const formation = selected?.formation;
   if (!selected) return null;
 
   const invariants = [
@@ -105,6 +108,21 @@ function LensCard({ lens }) {
           {selected.sourceDigest && <p className="live-arena__digest">输入摘要指纹：{selected.sourceDigest}</p>}
         </section>
 
+        {formation && (
+          <section className="live-arena__lens-section" aria-labelledby="live-arena-lens-formation">
+            <h3 id="live-arena-lens-formation">六爻如何形成</h3>
+            <p>主卦：{formation.primary?.lowerTrigram || '?'}下 · {formation.primary?.upperTrigram || '?'}上</p>
+            <p>变卦：{formation.changed?.lowerTrigram || '?'}下 · {formation.changed?.upperTrigram || '?'}上</p>
+            <ol className="live-arena__formation-list">
+              {(formation.lines || []).map((line) => (
+                <li key={line.position}>
+                  第{line.position}爻 · {YIN_YANG_LABELS[line.yinYang] || '阴爻'} · {KNOWLEDGE_STATE_LABELS[line.knowledgeState] || '未知'} · {line.perspective || 'unspecified'} · {line.dynamic ? '动爻' : '静爻'}
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+
         <section className="live-arena__lens-section" aria-labelledby="live-arena-lens-questions">
           <h3 id="live-arena-lens-questions">审查问题与执行状态</h3>
           {tasks.length > 0 ? (
@@ -115,6 +133,9 @@ function LensCard({ lens }) {
                     {TASK_STATUS[task.status] || '状态未记录'}
                   </span>
                   <span>{task.question || '审查问题未记录'}</span>
+                  {task.causedBy?.length > 0 && (
+                    <span className="live-arena__trace-ref">来源引用：{task.causedBy.join('、')}</span>
+                  )}
                 </li>
               ))}
             </ol>
@@ -129,6 +150,9 @@ function LensCard({ lens }) {
                 <li key={impact.taskId}>
                   <strong>{OUTCOME_LABELS[impact.outcome] || '审查结果'}</strong>
                   <span>{impact.summary || '本项影响没有补充摘要。'}</span>
+                  {impact.findingIds?.length > 0 && (
+                    <span className="live-arena__trace-ref">关联 finding：{impact.findingIds.join('、')}</span>
+                  )}
                 </li>
               ))}
             </ul>

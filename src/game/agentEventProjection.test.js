@@ -121,6 +121,41 @@ test('Lens lifecycle events project source, task status, impact and review with 
   assert.equal(state.motionCue.kind, 'lens-review');
 });
 
+test('Lens event and snapshot projections preserve safe formation in line order', () => {
+  const formation = {
+    primary: { lowerTrigram: '离', upperTrigram: '坎' },
+    changed: { lowerTrigram: '乾', upperTrigram: '坤' },
+    lines: [
+      { position: 1, yinYang: 'yang', knowledgeState: 'verified', perspective: 'strategic', dynamic: false },
+      { position: 2, yinYang: 'yin', knowledgeState: 'contested', perspective: 'risk', dynamic: true },
+      { position: 3, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'financial', dynamic: false },
+      { position: 4, yinYang: 'yin', knowledgeState: 'verified', perspective: 'action', dynamic: false },
+      { position: 5, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'communication', dynamic: false },
+      { position: 6, yinYang: 'yin', knowledgeState: 'verified', perspective: 'practical', dynamic: false },
+    ],
+  };
+  const eventState = applyAgentEvent(createArenaProjection(), event(1, 'LENS_SELECTED', {
+    lensId: 29,
+    lensName: '坎',
+    source: 'session-derived',
+    formation,
+  }));
+  const snapshotState = projectSessionSnapshot({
+    state: 'REFLECT',
+    cognitivePlan: {
+      lensId: 29,
+      lensName: '坎',
+      source: 'session-derived',
+      formation,
+      reviewTasks: [],
+    },
+  });
+
+  assert.deepEqual(eventState.lens.selected.formation, formation);
+  assert.deepEqual(snapshotState.lens.selected.formation, formation);
+  assert.deepEqual(eventState.lens.selected.formation.lines.map((line) => line.position), [1, 2, 3, 4, 5, 6]);
+});
+
 test('Lens duplicate, older and replayed events never retrigger motion', () => {
   const selected = applyAgentEvent(createArenaProjection(), event(4, 'LENS_SELECTED', {
     lensId: 24,

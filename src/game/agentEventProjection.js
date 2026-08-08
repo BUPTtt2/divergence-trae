@@ -17,6 +17,30 @@ function createLensProjection() {
   return { selected: null, tasks: {}, impacts: {}, review: null };
 }
 
+function projectLensFormation(formation) {
+  if (!formation || !Array.isArray(formation.lines) || formation.lines.length !== 6) return null;
+  const trigramName = (value) => ['乾', '坤', '震', '巽', '坎', '离', '艮', '兑', '?'].includes(value) ? value : '?';
+  const trigramPair = (value) => ({
+    lowerTrigram: trigramName(value?.lowerTrigram),
+    upperTrigram: trigramName(value?.upperTrigram),
+  });
+  return {
+    primary: trigramPair(formation.primary),
+    changed: trigramPair(formation.changed),
+    lines: formation.lines.map((line, index) => ({
+      position: index + 1,
+      yinYang: line?.yinYang === 'yang' ? 'yang' : 'yin',
+      knowledgeState: ['verified', 'unknown', 'contested'].includes(line?.knowledgeState)
+        ? line.knowledgeState
+        : 'unknown',
+      perspective: /^[a-z0-9_-]{1,64}$/i.test(String(line?.perspective || ''))
+        ? String(line.perspective).toLowerCase()
+        : 'unspecified',
+      dynamic: line?.dynamic === true,
+    })),
+  };
+}
+
 export function createArenaProjection() {
   return {
     lastSequence: 0,
@@ -37,6 +61,7 @@ export function createArenaProjection() {
 }
 
 function projectLensSelection(payload = {}) {
+  const formation = projectLensFormation(payload.formation);
   return {
     lensId: payload.lensId,
     lensName: payload.lensName || '',
@@ -48,6 +73,7 @@ function projectLensSelection(payload = {}) {
       approvalLocked: payload.invariants?.approvalLocked === true,
       userDecisionLocked: payload.invariants?.userDecisionLocked === true,
     },
+    ...(formation ? { formation } : {}),
   };
 }
 

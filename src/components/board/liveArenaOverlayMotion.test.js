@@ -54,3 +54,73 @@ test('component applies system reduced motion to saved standard and renders off 
     await vite.close();
   }
 });
+
+test('expanded Lens card keeps formation, causal references and finding links in DOM text', async () => {
+  const vite = await createServer({ appType: 'custom', logLevel: 'silent', server: { middlewareMode: true } });
+  globalThis.window = {
+    localStorage: { getItem: () => 'off', setItem: () => {} },
+    matchMedia: () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} }),
+  };
+  const projection = {
+    lastSequence: 4,
+    transport: { connected: true, replaying: false },
+    tasks: {},
+    agents: {},
+    evidence: {},
+    conflicts: [],
+    lens: {
+      selected: {
+        lensId: 29,
+        lensName: '坎',
+        source: 'session-derived',
+        formation: {
+          primary: { lowerTrigram: '离', upperTrigram: '坎' },
+          changed: { lowerTrigram: '乾', upperTrigram: '坤' },
+          lines: [
+            { position: 1, yinYang: 'yang', knowledgeState: 'verified', perspective: 'strategic', dynamic: false },
+            { position: 2, yinYang: 'yin', knowledgeState: 'contested', perspective: 'risk', dynamic: true },
+            { position: 3, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'financial', dynamic: false },
+            { position: 4, yinYang: 'yin', knowledgeState: 'verified', perspective: 'action', dynamic: false },
+            { position: 5, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'communication', dynamic: false },
+            { position: 6, yinYang: 'yin', knowledgeState: 'verified', perspective: 'practical', dynamic: false },
+          ],
+        },
+        invariants: { evidenceLocked: true, riskLocked: true, approvalLocked: true, userDecisionLocked: true },
+      },
+      tasks: {
+        'lens-task-risk': {
+          taskId: 'lens-task-risk',
+          question: '最坏情况是什么？',
+          status: 'completed',
+          causedBy: ['ref_lens_29', 'ref_conflict_cashflow'],
+        },
+      },
+      impacts: {
+        'lens-task-risk': {
+          taskId: 'lens-task-risk',
+          outcome: 'claim-challenged',
+          summary: '主张仍需核验。',
+          findingIds: ['finding-risk-1'],
+        },
+      },
+      review: { summary: '审查完成。' },
+    },
+    motionCue: null,
+  };
+
+  try {
+    const { default: LiveArenaOverlay } = await vite.ssrLoadModule('/src/components/board/LiveArenaOverlay.jsx');
+    const markup = renderToStaticMarkup(createElement(LiveArenaOverlay, { projection }));
+
+    assert.match(markup, /六爻如何形成/);
+    assert.match(markup, /主卦：离下 · 坎上/);
+    assert.match(markup, /变卦：乾下 · 坤上/);
+    assert.match(markup, /第1爻 · 阳爻 · 已验证 · strategic · 静爻/);
+    assert.match(markup, /第2爻 · 阴爻 · 有冲突 · risk · 动爻/);
+    assert.match(markup, /来源引用：ref_lens_29、ref_conflict_cashflow/);
+    assert.match(markup, /关联 finding：finding-risk-1/);
+  } finally {
+    delete globalThis.window;
+    await vite.close();
+  }
+});
