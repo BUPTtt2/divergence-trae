@@ -347,39 +347,25 @@ function answerStateConflict() {
   return error;
 }
 
-/** answer 的单一持久化状态机：claim/save/complete/release 均由 token CAS 保护。 */
+/** answer 的单一持久化状态机：claim/complete/release 均由 token CAS 保护。 */
 export async function claimClarifyAnswer(sessionId, snapshot = {}, options = {}) {
   const mode = options.mode || 'claim';
   if (mode !== 'claim') {
-    if (!['save', 'complete', 'release'].includes(mode)) {
+    if (!['complete', 'release'].includes(mode)) {
       throw new Error('ANSWER_TRANSITION_INVALID');
     }
     const claimToken = String(options.claimToken || '').trim();
     if (!claimToken) throw answerStateConflict();
     const actionId = `answer:${claimToken}`;
     const patch = dropUndefined(options.patch || {});
-    const now = Number(options.now ?? Date.now());
-    const leaseMs = Number(options.leaseMs ?? DEFAULT_ANSWER_LEASE_MS);
-    if (mode === 'save' && (!Number.isFinite(now) || !Number.isFinite(leaseMs) || leaseMs <= 0)) {
-      throw new Error('ANSWER_LEASE_INVALID');
-    }
-    const data = mode === 'save'
-      ? {
-        ...patch,
-        state: options.state,
-        execute_action_id: actionId,
-        execute_status: 'answering',
-        execute_claim_token: claimToken,
-        execute_lease_expires_at: now + leaseMs,
-      }
-      : {
-        ...patch,
-        state: mode === 'release' ? 'WAIT' : options.state,
-        execute_action_id: null,
-        execute_status: null,
-        execute_claim_token: null,
-        execute_lease_expires_at: null,
-      };
+    const data = {
+      ...patch,
+      state: mode === 'release' ? 'WAIT' : options.state,
+      execute_action_id: null,
+      execute_status: null,
+      execute_claim_token: null,
+      execute_lease_expires_at: null,
+    };
     const result = await query({
       table: SESSIONS_TABLE,
       action: 'compare-and-set',
@@ -396,7 +382,7 @@ export async function claimClarifyAnswer(sessionId, snapshot = {}, options = {})
       throw answerStateConflict();
     }
     return {
-      [mode === 'complete' ? 'completed' : mode === 'release' ? 'released' : 'saved']: true,
+      [mode === 'complete' ? 'completed' : 'released']: true,
       claimToken,
       session: result.rows[0],
     };

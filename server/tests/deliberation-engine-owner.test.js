@@ -194,10 +194,10 @@ test('answer and execute cannot race past a completed CLARIFY handoff', async ()
     await new Promise((resolve) => setImmediate(resolve));
     return claimed;
   };
-  const planSessionFn = async (claimedSession) => {
+  const planSessionFn = async (claimedSession, { saveSessionFn }) => {
     const plan = { ...claimedSession.plan, askUser: [], round: 2 };
     const plannedSession = { ...claimedSession, state: 'EXECUTE', plan, round: 2 };
-    await memoryService.saveSession(plannedSession);
+    await saveSessionFn(plannedSession);
     return {
       session: plannedSession,
       plan,
@@ -296,12 +296,60 @@ test('planner crash releases only the current answer lease back to WAIT', async 
   assert.equal(persisted.execute_claim_token, null);
 });
 
-test('planner save failure rolls the answer lease back for retry', async () => {
+test('planner output stays behind the answer lease until one atomic complete CAS', async () => {
   const session = await ownedSession({
     plan: { askUser: [{ question: '请补充期限' }], round: 1 },
   });
+  let unblockPlanner;
+  let markPlanned;
+  const plannerBlocked = new Promise((resolve) => { unblockPlanner = resolve; });
+  const planned = new Promise((resolve) => { markPlanned = resolve; });
+  const answerPromise = engine.answer(
+    session.id,
+    [{ answer: '三个月' }],
+    { userId: session.user_id },
+    {
+      planSessionFn: async (current, { saveSessionFn }) => {
+        current.state = 'EXECUTE';
+        current.plan = { ...current.plan, askUser: [], round: 2 };
+        await saveSessionFn(current);
+        markPlanned();
+        await plannerBlocked;
+        return {
+          session: current,
+          plan: current.plan,
+          askUser: [],
+          openingLine: '',
+          round: 2,
+          memory: [],
+        };
+      },
+    },
+  );
+
+  await planned;
+  const beforeComplete = await memoryService.getSession(session.id);
+  assert.equal(beforeComplete.state, 'PLAN');
+  assert.deepEqual(beforeComplete.plan.askUser, [{ question: '请补充期限' }]);
+  assert.equal(beforeComplete.execute_status, 'answering');
+
+  unblockPlanner();
+  await answerPromise;
+  const completed = await memoryService.getSession(session.id);
+  assert.equal(completed.state, 'EXECUTE');
+  assert.deepEqual(completed.plan.askUser, []);
+  assert.equal(completed.execute_status, null);
+  assert.equal(completed.execute_claim_token, null);
+});
+
+test('atomic answer completion failure rolls the lease back for retry', async () => {
+  const session = await ownedSession({
+    plan: { askUser: [{ question: '请补充期限' }], round: 1 },
+  });
+  const transitionModes = [];
   const answerTransitionFn = async (id, snapshot, options = {}) => {
-    if (options.mode === 'save') throw new Error('answer save unavailable');
+    transitionModes.push(options.mode || 'claim');
+    if (options.mode === 'complete') throw new Error('answer complete unavailable');
     return memoryService.claimClarifyAnswer(id, snapshot, options);
   };
   const planSessionFn = async (current, { saveSessionFn }) => {
@@ -325,9 +373,10 @@ test('planner save failure rolls the answer lease back for retry', async () => {
       { userId: session.user_id },
       { answerTransitionFn, planSessionFn },
     ),
-    /answer save unavailable/,
+    /answer complete unavailable/,
   );
 
+  assert.deepEqual(transitionModes, ['claim', 'complete', 'release']);
   const persisted = await memoryService.getSession(session.id);
   assert.equal(persisted.state, 'WAIT');
   assert.deepEqual(persisted.plan.askUser, [{ question: '请补充期限' }]);

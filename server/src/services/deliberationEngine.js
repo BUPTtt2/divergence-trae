@@ -559,20 +559,8 @@ export async function answer(sessionId, answers, executionCtx = {}, dependencies
   const session = { ...loadedSession, ...answerClaim.session };
   const claimToken = answerClaim.claimToken;
   const rollbackPatch = executeProjectionPatch(loadedSession);
-  const saveSessionFn = async (candidate) => {
-    try {
-      await answerTransition(sessionId, candidate, {
-        mode: 'save',
-        claimToken,
-        state: candidate.state,
-        patch: executeProjectionPatch(candidate),
-      });
-      return { ...candidate, id: sessionId };
-    } catch (error) {
-      if (!error.code) error.code = 'ANSWER_PERSIST_FAILED';
-      throw error;
-    }
-  };
+  // Planner 只生成内存投影；最终业务状态与 lease 清理由 complete 的单次 CAS 一起落库。
+  const saveSessionFn = async (candidate) => ({ ...candidate, id: sessionId });
 
   try {
     // round 从持久化的 plan.round 读取，+1 进入下一轮判定
@@ -594,12 +582,17 @@ export async function answer(sessionId, answers, executionCtx = {}, dependencies
     const result = dependencies.planSessionFn
       ? await dependencies.planSessionFn(session, { saveSessionFn })
       : await planSessionWithFallback(session, dependencies.planFn || planner.plan, { saveSessionFn });
-    await answerTransition(sessionId, result.session, {
-      mode: 'complete',
-      claimToken,
-      state: result.session.state,
-      patch: executeProjectionPatch(result.session),
-    });
+    try {
+      await answerTransition(sessionId, result.session, {
+        mode: 'complete',
+        claimToken,
+        state: result.session.state,
+        patch: executeProjectionPatch(result.session),
+      });
+    } catch (error) {
+      if (!error.code) error.code = 'ANSWER_PERSIST_FAILED';
+      throw error;
+    }
 
     logger.info('[Deliberation] answer 完成', {
       sessionId,
