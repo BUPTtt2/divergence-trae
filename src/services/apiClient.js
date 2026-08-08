@@ -19,6 +19,7 @@ import {
   storageRemove,
   TOKEN_KEYS,
 } from './baseConfig.js';
+import { shouldAttemptTokenRefresh } from './apiAuthPolicy.js';
 
 const PRIMARY_API = API_BASE_URL;
 const FALLBACK_API = PRIMARY_API;
@@ -78,17 +79,8 @@ function resetBackendCircuit() {
 // 内联实现 refreshAccessToken，不依赖 auth.js
 async function refreshAccessToken() {
   const refreshToken = getRefreshTokenSync();
-  if (!refreshToken) return null;
-
-  // 根本性修复：匿名/本地模式（local- 前缀）的 token 永不过期，无需网络刷新。
-  // 之前这里会对一个不存在的用户强制 POST /api/auth/refresh → 后端查库查不到 → 401，
-  // 每个请求都刷一遍 401 红日志，看起来像"后端挂了"。
-  // 匿名 token 直接跳过刷新，静默返回 null，彻底消除这串 401 噪音。
   const curUserId = typeof window !== 'undefined' ? getCurrentUserIdSync() : null;
-  const isAnonymous = !!curUserId && (curUserId.startsWith('anon_') || curUserId.startsWith('local-'));
-  if (isAnonymous) {
-    return null;
-  }
+  if (!shouldAttemptTokenRefresh({ refreshToken, userId: curUserId })) return null;
 
   try {
     const resp = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
@@ -112,7 +104,6 @@ async function refreshAccessToken() {
     }
     throw new Error('响应缺少 accessToken');
   } catch (e) {
-    // 匿名模式下 refresh token 本身就不存在，401 是预期行为——静默就行，不要刷红日志
     if (typeof window !== 'undefined') {
       const log = window.__circuitTripped ? console.debug : console.info;
       log('[apiClient] token refresh skipped / failed:', e?.message || 'no refresh token');

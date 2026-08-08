@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { verifyToken } from '../services/authTokenService.js';
 
 const SIGNING_SECRET = process.env.SIGNING_SECRET || 'yance_bagua_secret_key_change_this_in_production';
 const SIGNATURE_TTL = 60000;
@@ -7,20 +8,25 @@ function createHmac(secret, data) {
   return crypto.createHmac('sha256', secret).update(data).digest('hex');
 }
 
-function extractUserIdFromBearer(req) {
+function extractBearerIdentity(req) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.replace('Bearer ', '');
+    const token = authHeader.slice('Bearer '.length).trim();
     if (token.startsWith('local-')) {
-      return token.replace('local-', '');
+      return { present: true, userId: token.slice('local-'.length) || null };
+    }
+    try {
+      return { present: true, userId: verifyToken(token, 'access').sub };
+    } catch {
+      return { present: true, userId: null };
     }
   }
-  return null;
+  return { present: false, userId: null };
 }
 
 function extractUserId(req) {
-  const bearerId = extractUserIdFromBearer(req);
-  if (bearerId) return bearerId;
+  const bearer = extractBearerIdentity(req);
+  if (bearer.present) return bearer.userId;
   return req.headers['x-user-id'] || req.body?.userId || null;
 }
 
