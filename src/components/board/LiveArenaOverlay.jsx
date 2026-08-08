@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useMemo, useState } from 'react';
 
 import { motionConfigFor, resolveMotionMode } from '../../game/motionPreference';
+import './liveArenaOverlay.css';
 
 const STORAGE_KEY = 'yance_arena_motion_mode';
 const MODE_LABELS = { standard: '标准', reduced: '减弱', off: '关闭' };
@@ -14,6 +15,17 @@ const CUE_COPY = {
   replan: ['阵轨重组', '新信息改变了原有计划'],
   approval: ['人印待落', '下一步需要由你确认'],
   crystallize: ['诸证归一', '事实、分歧与选择正在结晶'],
+  'lens-select': ['审查镜头入阵', 'Lens 来源与不可变边界已经记录'],
+  'lens-task': ['审查问题成轨', '一项可追溯的补充任务已经创建'],
+  'lens-impact': ['审查影响入卷', '任务结果与实际贡献已经记录'],
+  'lens-review': ['认知扰动收束', '本轮 Lens 审查已经形成总体记录'],
+};
+const TASK_STATUS = { pending: '待执行', completed: '已完成' };
+const OUTCOME_LABELS = {
+  'evidence-added': '新增证据',
+  'claim-challenged': '挑战主张',
+  'exit-condition-added': '新增退出条件',
+  'no-change': '未改变核心判断',
 };
 
 function initialMotionMode() {
@@ -27,21 +39,15 @@ function CueCard({ cue, mode }) {
   if (!cue) return null;
   const [title, detail] = CUE_COPY[cue.kind] || ['推演更新', '事件已经写入案卷'];
   const config = motionConfigFor(mode, cue.kind);
-  const style = {
-    marginTop: 10,
-    padding: '9px 10px',
-    border: '1px solid rgba(213, 177, 88, 0.42)',
-    background: 'rgba(24, 18, 12, 0.88)',
-    boxShadow: cue.kind === 'crystallize' ? `0 0 ${22 * config.intensity}px rgba(218, 180, 81, 0.38)` : 'none',
-  };
+  const className = `live-arena__cue live-arena__cue--${cue.kind}`;
   const content = (
     <>
-      <div style={{ color: '#E4C873', fontSize: 12, letterSpacing: '0.14em' }}>{title}</div>
-      <div style={{ color: '#B9AB91', fontSize: 11, marginTop: 3, lineHeight: 1.45 }}>{detail}</div>
+      <div className="live-arena__cue-title">{title}</div>
+      <div className="live-arena__cue-detail">{detail}</div>
     </>
   );
 
-  if (!config.enabled) return <div style={style}>{content}</div>;
+  if (!config.enabled) return <div className={className}>{content}</div>;
   return (
     <motion.div
       key={cue.id}
@@ -49,10 +55,95 @@ function CueCard({ cue, mode }) {
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0 }}
       transition={{ duration: config.duration, ease: 'easeOut' }}
-      style={style}
+      className={className}
     >
       {content}
     </motion.div>
+  );
+}
+
+function LensCard({ lens }) {
+  const [expanded, setExpanded] = useState(false);
+  const tasks = Object.values(lens?.tasks || {});
+  const impacts = Object.values(lens?.impacts || {});
+  const selected = lens?.selected;
+  if (!selected) return null;
+
+  const invariants = [
+    ['事实', selected.invariants?.evidenceLocked],
+    ['风险', selected.invariants?.riskLocked],
+    ['审批', selected.invariants?.approvalLocked],
+    ['选择', selected.invariants?.userDecisionLocked],
+  ];
+
+  return (
+    <section className="live-arena__lens" aria-labelledby="live-arena-lens-title">
+      <button
+        type="button"
+        className="live-arena__lens-toggle"
+        aria-expanded={expanded}
+        aria-controls="live-arena-lens-details"
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span>
+          <span className="live-arena__eyebrow">本轮审查镜头</span>
+          <strong id="live-arena-lens-title">{selected.lensName || `Lens ${selected.lensId}`}</strong>
+        </span>
+        <span aria-hidden="true">{expanded ? '收起' : '展开'}</span>
+      </button>
+
+      <div id="live-arena-lens-details" className="live-arena__lens-details" hidden={!expanded}>
+        <p className="live-arena__lens-note">文化镜头，不是事实依据，也不替你做选择。</p>
+
+        <section className="live-arena__lens-section" aria-labelledby="live-arena-lens-source">
+          <h3 id="live-arena-lens-source">Lens 来源</h3>
+          <p>{selected.source === 'session-derived' ? '由本局事实、未知与冲突确定性派生' : selected.source || '来源未记录'}</p>
+          {selected.sourceDigest && <p className="live-arena__digest">输入摘要指纹：{selected.sourceDigest}</p>}
+        </section>
+
+        <section className="live-arena__lens-section" aria-labelledby="live-arena-lens-questions">
+          <h3 id="live-arena-lens-questions">审查问题与执行状态</h3>
+          {tasks.length > 0 ? (
+            <ol className="live-arena__task-list">
+              {tasks.map((task) => (
+                <li key={task.taskId}>
+                  <span className={`live-arena__status live-arena__status--${task.status || 'pending'}`}>
+                    {TASK_STATUS[task.status] || '状态未记录'}
+                  </span>
+                  <span>{task.question || '审查问题未记录'}</span>
+                </li>
+              ))}
+            </ol>
+          ) : <p>本轮没有新增审查问题。</p>}
+        </section>
+
+        <section className="live-arena__lens-section" aria-labelledby="live-arena-lens-impact">
+          <h3 id="live-arena-lens-impact">实际贡献</h3>
+          {impacts.length > 0 && (
+            <ul className="live-arena__impact-list">
+              {impacts.map((impact) => (
+                <li key={impact.taskId}>
+                  <strong>{OUTCOME_LABELS[impact.outcome] || '审查结果'}</strong>
+                  <span>{impact.summary || '本项影响没有补充摘要。'}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="live-arena__review-summary">
+            {lens.review?.summary || '等待 Lens 审查完成事件。'}
+          </p>
+        </section>
+
+        <section className="live-arena__lens-section" aria-labelledby="live-arena-lens-boundaries">
+          <h3 id="live-arena-lens-boundaries">锁定边界</h3>
+          <ul className="live-arena__invariants">
+            {invariants.map(([label, locked]) => (
+              <li key={label}>{label}{locked === true ? '已锁定' : '锁定状态未确认'}</li>
+            ))}
+          </ul>
+        </section>
+      </div>
+    </section>
   );
 }
 
@@ -78,47 +169,34 @@ export default function LiveArenaOverlay({ projection }) {
 
   if (!visible) return null;
   return (
-    <aside
-      aria-label="活推演阵状态"
-      style={{
-        position: 'absolute', left: 18, top: 88, zIndex: 46, width: 'min(290px, calc(100vw - 36px))',
-        padding: 12, color: '#D8CCB5', background: 'rgba(13, 10, 8, 0.86)',
-        border: '1px solid rgba(174, 142, 73, 0.34)', backdropFilter: 'blur(10px)',
-        pointerEvents: 'auto', fontFamily: 'var(--font-sans, sans-serif)',
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+    <aside aria-label="活推演阵状态" className="live-arena">
+      <div className="live-arena__header">
         <div>
-          <div style={{ color: '#E4C873', fontSize: 11, letterSpacing: '0.18em' }}>活推演阵</div>
-          <div role="status" aria-live="polite" style={{ color: '#A99D87', fontSize: 10, marginTop: 3 }}>{statusText}</div>
+          <div className="live-arena__eyebrow">活推演阵</div>
+          <div role="status" aria-live="polite" className="live-arena__stream-status">{statusText}</div>
         </div>
-        <div aria-label="动画强度" style={{ display: 'flex', gap: 3 }}>
+        <div aria-label="动画强度" className="live-arena__motion-controls">
           {Object.entries(MODE_LABELS).map(([mode, label]) => (
             <button
               key={mode}
               type="button"
               aria-pressed={motionMode === mode}
               onClick={() => setMotionMode(mode)}
-              style={{
-                border: `1px solid ${motionMode === mode ? '#D5B158' : 'rgba(130, 111, 78, 0.4)'}`,
-                background: motionMode === mode ? 'rgba(213, 177, 88, 0.14)' : 'transparent',
-                color: motionMode === mode ? '#E4C873' : '#817866', padding: '2px 5px', fontSize: 9, cursor: 'pointer',
-              }}
             >{label}</button>
           ))}
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5, marginTop: 10 }}>
+      <div className="live-arena__metrics">
         {[
           ['任务', taskCount],
           ['智囊', agents.length],
           ['证据', evidence.filter((item) => item.accepted).length],
           ['分歧', conflicts.length],
         ].map(([label, value]) => (
-          <div key={label} style={{ borderTop: '1px solid rgba(174, 142, 73, 0.25)', paddingTop: 5 }}>
-            <div style={{ color: '#E1D5BD', fontSize: 14 }}>{value}</div>
-            <div style={{ color: '#7F7667', fontSize: 9 }}>{label}</div>
+          <div key={label}>
+            <strong>{value}</strong>
+            <span>{label}</span>
           </div>
         ))}
       </div>
@@ -128,10 +206,10 @@ export default function LiveArenaOverlay({ projection }) {
       </AnimatePresence>
 
       {projection?.approval && !projection.approval.resolved && (
-        <div style={{ marginTop: 9, color: '#E5CBB0', fontSize: 11, lineHeight: 1.45 }}>
-          人印：{projection.approval.prompt}
-        </div>
+        <div className="live-arena__approval">人印：{projection.approval.prompt}</div>
       )}
+
+      <LensCard lens={projection?.lens} />
     </aside>
   );
 }

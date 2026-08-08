@@ -7,7 +7,15 @@ const MOTION_BY_EVENT = Object.freeze({
   PLAN_REVISED: 'replan',
   APPROVAL_REQUIRED: 'approval',
   SESSION_COMPLETED: 'crystallize',
+  LENS_SELECTED: 'lens-select',
+  LENS_TASK_CREATED: 'lens-task',
+  LENS_TASK_COMPLETED: 'lens-impact',
+  LENS_REVIEW_COMPLETED: 'lens-review',
 });
+
+function createLensProjection() {
+  return { selected: null, tasks: {}, impacts: {}, review: null };
+}
 
 export function createArenaProjection() {
   return {
@@ -22,8 +30,57 @@ export function createArenaProjection() {
     revisions: [],
     approval: null,
     summary: '',
+    lens: createLensProjection(),
     transport: { connected: false, replaying: false, error: null },
     motionCue: null,
+  };
+}
+
+function projectLensSelection(payload = {}) {
+  return {
+    lensId: payload.lensId,
+    lensName: payload.lensName || '',
+    source: payload.source || '',
+    sourceDigest: payload.sourceDigest || '',
+    invariants: {
+      evidenceLocked: payload.invariants?.evidenceLocked === true,
+      riskLocked: payload.invariants?.riskLocked === true,
+      approvalLocked: payload.invariants?.approvalLocked === true,
+      userDecisionLocked: payload.invariants?.userDecisionLocked === true,
+    },
+  };
+}
+
+function projectLensTask(payload = {}, status = 'pending') {
+  return {
+    taskId: payload.taskId,
+    lensId: payload.lensId,
+    kind: payload.kind || '',
+    question: payload.question || '',
+    ...(payload.targetPerspective ? { targetPerspective: payload.targetPerspective } : {}),
+    causedBy: Array.isArray(payload.causedBy) ? [...payload.causedBy] : [],
+    status,
+  };
+}
+
+function projectLensImpact(payload = {}) {
+  return {
+    taskId: payload.taskId,
+    lensId: payload.lensId,
+    outcome: payload.outcome || 'no-change',
+    findingIds: Array.isArray(payload.findingIds) ? [...payload.findingIds] : [],
+    summary: payload.summary || '',
+  };
+}
+
+function projectLensReview(payload = {}) {
+  return {
+    lensId: payload.lensId,
+    taskCount: Number(payload.taskCount || 0),
+    impactCount: Number(payload.impactCount || 0),
+    changedTaskCount: Number(payload.changedTaskCount || 0),
+    summary: payload.summary || '',
+    ...(payload.restored === true ? { restored: true } : {}),
   };
 }
 
@@ -49,6 +106,7 @@ export function applyAgentEvent(state, event, options = {}) {
   if (sequence <= state.lastSequence || state.appliedEventIds.includes(event.eventId)) return state;
 
   const payload = event.payload || {};
+  const lens = state.lens || createLensProjection();
   const next = {
     ...state,
     lastSequence: sequence,
@@ -109,6 +167,46 @@ export function applyAgentEvent(state, event, options = {}) {
       next.summary = payload.summary || state.summary;
       next.approval = state.approval ? { ...state.approval, resolved: true } : null;
       break;
+    case 'LENS_SELECTED':
+      next.lens = { ...lens, selected: projectLensSelection(payload) };
+      break;
+    case 'LENS_TASK_CREATED': {
+      if (!payload.taskId) break;
+      const previousTask = lens.tasks[payload.taskId];
+      const status = previousTask?.status === 'completed' ? 'completed' : 'pending';
+      next.lens = {
+        ...lens,
+        tasks: {
+          ...lens.tasks,
+          [payload.taskId]: { ...previousTask, ...projectLensTask(payload, status) },
+        },
+      };
+      break;
+    }
+    case 'LENS_TASK_COMPLETED': {
+      if (!payload.taskId) break;
+      const previousTask = lens.tasks[payload.taskId] || {};
+      next.lens = {
+        ...lens,
+        tasks: {
+          ...lens.tasks,
+          [payload.taskId]: {
+            ...previousTask,
+            taskId: payload.taskId,
+            lensId: payload.lensId ?? previousTask.lensId,
+            status: 'completed',
+          },
+        },
+        impacts: {
+          ...lens.impacts,
+          [payload.taskId]: projectLensImpact(payload),
+        },
+      };
+      break;
+    }
+    case 'LENS_REVIEW_COMPLETED':
+      next.lens = { ...lens, review: projectLensReview(payload) };
+      break;
     case 'ACTION_FAILED':
     case 'AUDIT_FAILED':
       next.status = 'degraded';
@@ -160,6 +258,43 @@ export function projectSessionSnapshot(session = {}, options = {}) {
     status: 'restored',
   }));
   projection.summary = session.masterSummary || '';
+  const plan = session.cognitivePlan;
+  if (Number.isInteger(plan?.lensId) && plan.lensId >= 1 && plan.lensId <= 64) {
+    projection.lens.selected = projectLensSelection(plan);
+    const impacts = {};
+    for (const impact of Array.isArray(session.lensImpacts) ? session.lensImpacts : []) {
+      if (!impact?.taskId || impacts[impact.taskId]) continue;
+      impacts[impact.taskId] = projectLensImpact(impact);
+    }
+    for (const task of Array.isArray(plan.reviewTasks) ? plan.reviewTasks : []) {
+      if (!task?.id || projection.lens.tasks[task.id]) continue;
+      projection.lens.tasks[task.id] = projectLensTask({
+        taskId: task.id,
+        lensId: plan.lensId,
+        kind: task.kind,
+        question: task.question,
+        targetPerspective: task.targetPerspective,
+        causedBy: task.causedBy,
+      }, impacts[task.id] ? 'completed' : 'pending');
+    }
+    projection.lens.impacts = Object.fromEntries(
+      Object.entries(impacts).filter(([taskId]) => projection.lens.tasks[taskId]),
+    );
+    const taskCount = Object.keys(projection.lens.tasks).length;
+    const impactCount = Object.keys(projection.lens.impacts).length;
+    const changedTaskCount = Object.values(projection.lens.impacts)
+      .filter((impact) => impact.outcome !== 'no-change').length;
+    projection.lens.review = projectLensReview({
+      lensId: plan.lensId,
+      taskCount,
+      impactCount,
+      changedTaskCount,
+      summary: changedTaskCount > 0
+        ? `已完成 ${taskCount} 项审查任务，其中 ${changedTaskCount} 项产生可追溯影响。`
+        : `已完成 ${taskCount} 项审查任务，未改变核心判断。`,
+      restored: true,
+    });
+  }
   projection.lastSequence = Number(options.lastSequence || 0);
   projection.status = ({
     PLAN: 'planning', WAIT: 'planning', EXECUTE: 'researching', DELIBERATE: 'researching',
