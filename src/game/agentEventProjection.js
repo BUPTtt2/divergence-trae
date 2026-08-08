@@ -280,20 +280,10 @@ export function projectSessionSnapshot(session = {}, options = {}) {
     projection.lens.impacts = Object.fromEntries(
       Object.entries(impacts).filter(([taskId]) => projection.lens.tasks[taskId]),
     );
-    const taskCount = Object.keys(projection.lens.tasks).length;
-    const impactCount = Object.keys(projection.lens.impacts).length;
-    const changedTaskCount = Object.values(projection.lens.impacts)
-      .filter((impact) => impact.outcome !== 'no-change').length;
-    projection.lens.review = projectLensReview({
-      lensId: plan.lensId,
-      taskCount,
-      impactCount,
-      changedTaskCount,
-      summary: changedTaskCount > 0
-        ? `已完成 ${taskCount} 项审查任务，其中 ${changedTaskCount} 项产生可追溯影响。`
-        : `已完成 ${taskCount} 项审查任务，未改变核心判断。`,
-      restored: true,
-    });
+    const persistedReview = session.lensReview ?? session.lens_review;
+    if (persistedReview?.lensId === plan.lensId && typeof persistedReview.summary === 'string') {
+      projection.lens.review = projectLensReview({ ...persistedReview, restored: true });
+    }
   }
   projection.lastSequence = Number(options.lastSequence || 0);
   projection.status = ({

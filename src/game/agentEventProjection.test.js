@@ -207,6 +207,13 @@ test('session snapshot restores Lens projection without replaying its ceremony',
       summary: '增加了可验证的退出条件。',
       rawModelContent: '不得进入前端投影',
     }],
+    lensReview: {
+      lensId: 24,
+      taskCount: 1,
+      impactCount: 1,
+      changedTaskCount: 1,
+      summary: '权威审查记录已完成。',
+    },
   }, { lastSequence: 18 });
 
   assert.deepEqual(state.lens.selected, {
@@ -228,9 +235,61 @@ test('session snapshot restores Lens projection without replaying its ceremony',
     taskCount: 1,
     impactCount: 1,
     changedTaskCount: 1,
-    summary: '已完成 1 项审查任务，其中 1 项产生可追溯影响。',
+    summary: '权威审查记录已完成。',
     restored: true,
   });
   assert.doesNotMatch(JSON.stringify(state.lens), /rawModelContent|prompt|不得进入前端投影/);
+  assert.equal(state.motionCue, null);
+});
+
+test('session snapshot keeps unfinished Lens tasks pending and does not synthesize review from partial impacts', () => {
+  const state = projectSessionSnapshot({
+    state: 'REFLECT',
+    cognitivePlan: {
+      lensId: 24,
+      lensName: '复',
+      source: 'session-derived',
+      reviewTasks: [
+        { id: 'lens-task-done', kind: 'assumption', question: '已完成的问题', causedBy: ['ref_done'] },
+        { id: 'lens-task-pending', kind: 'counterfactual', question: '尚未完成的问题', causedBy: ['ref_pending'] },
+      ],
+    },
+    lensImpacts: [{
+      taskId: 'lens-task-done',
+      lensId: 24,
+      outcome: 'claim-challenged',
+      findingIds: ['finding-done'],
+      summary: '一项主张已被挑战。',
+    }],
+  });
+
+  assert.equal(state.lens.tasks['lens-task-done'].status, 'completed');
+  assert.equal(state.lens.tasks['lens-task-pending'].status, 'pending');
+  assert.deepEqual(Object.keys(state.lens.impacts), ['lens-task-done']);
+  assert.equal(state.lens.review, null);
+  assert.equal(state.motionCue, null);
+});
+
+test('session snapshot with zero Lens impacts leaves every task pending and review absent', () => {
+  const state = projectSessionSnapshot({
+    state: 'REFLECT',
+    cognitivePlan: {
+      lensId: 2,
+      lensName: '坤',
+      source: 'session-derived',
+      reviewTasks: [
+        { id: 'lens-task-zero-1', kind: 'failure-mode', question: '失败模式是什么？', causedBy: ['ref_zero_1'] },
+        { id: 'lens-task-zero-2', kind: 'exit-condition', question: '退出条件是什么？', causedBy: ['ref_zero_2'] },
+      ],
+    },
+    lensImpacts: [],
+  });
+
+  assert.deepEqual(
+    Object.values(state.lens.tasks).map((task) => task.status),
+    ['pending', 'pending'],
+  );
+  assert.deepEqual(state.lens.impacts, {});
+  assert.equal(state.lens.review, null);
   assert.equal(state.motionCue, null);
 });

@@ -39,7 +39,7 @@ function CueCard({ cue, mode }) {
   if (!cue) return null;
   const [title, detail] = CUE_COPY[cue.kind] || ['推演更新', '事件已经写入案卷'];
   const config = motionConfigFor(mode, cue.kind);
-  const className = `live-arena__cue live-arena__cue--${cue.kind}`;
+  const className = `live-arena__cue live-arena__cue--${cue.kind} live-arena__cue--motion-${mode}`;
   const content = (
     <>
       <div className="live-arena__cue-title">{title}</div>

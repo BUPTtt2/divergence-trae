@@ -98,9 +98,19 @@
   background: rgb(24 18 12 / 88%);
 }
 
-.live-arena__cue--crystallize,
-.live-arena__cue--lens-review {
+.live-arena__cue--crystallize.live-arena__cue--motion-standard,
+.live-arena__cue--lens-review.live-arena__cue--motion-standard {
   box-shadow: 0 0 18px rgb(218 180 81 / 28%);
+}
+
+.live-arena__cue--crystallize.live-arena__cue--motion-reduced,
+.live-arena__cue--lens-review.live-arena__cue--motion-reduced {
+  box-shadow: 0 0 7px rgb(218 180 81 / 12%);
+}
+
+.live-arena__cue--crystallize.live-arena__cue--motion-off,
+.live-arena__cue--lens-review.live-arena__cue--motion-off {
+  box-shadow: none;
 }
 
 .live-arena__cue-title {
