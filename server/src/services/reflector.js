@@ -26,7 +26,6 @@ import logger from './logger.js';
 import { callLLM } from './llmRouter.js';
 import {
   createCognitivePerturbationPlan,
-  createLensImpactRecords,
 } from './cognitivePerturbationService.js';
 
 // ============ 常量 ============
@@ -617,23 +616,26 @@ export async function reflect(session, dependencies = {}) {
   oracle.gaps = gaps;
 
   const createPlan = dependencies.createCognitivePerturbationPlanFn || createCognitivePerturbationPlan;
-  const createImpacts = dependencies.createLensImpactRecordsFn || createLensImpactRecords;
-  let cognitivePlan;
-  let lensImpacts;
-  try {
-    cognitivePlan = createPlan({
-      oracle,
-      findings,
-      conflicts,
-      gaps,
-      dimensions,
-      sessionSeed: session?.sessionSeed ?? session?.seed ?? session?.id,
-    });
-    lensImpacts = createImpacts(cognitivePlan, findings);
-  } catch (error) {
-    logger.warn('[Reflector] Lens 失败，不阻断基础推演', { sessionId: session?.id, error: error.message });
-    cognitivePlan = disabledCognitivePlan(error);
-    lensImpacts = [];
+  const persistedPlan = session?.cognitive_plan ?? session?.cognitivePlan ?? null;
+  const persistedReview = session?.lens_review ?? session?.lensReview ?? persistedPlan?.review ?? null;
+  let cognitivePlan = persistedReview?.started === true ? persistedPlan : null;
+  let lensImpacts = persistedReview?.started === true
+    ? (session?.lens_impacts ?? session?.lensImpacts ?? [])
+    : [];
+  if (!cognitivePlan) {
+    try {
+      cognitivePlan = createPlan({
+        oracle,
+        findings,
+        conflicts,
+        gaps,
+        dimensions,
+        sessionSeed: session?.sessionSeed ?? session?.seed ?? session?.id,
+      });
+    } catch (error) {
+      logger.warn('[Reflector] Lens 失败，不阻断基础推演', { sessionId: session?.id, error: error.message });
+      cognitivePlan = disabledCognitivePlan(error);
+    }
   }
 
   oracle.text = await generateReviewLensText(
@@ -650,6 +652,7 @@ export async function reflect(session, dependencies = {}) {
   session.oracle = oracle;
   session.cognitivePlan = cognitivePlan;
   session.lensImpacts = lensImpacts;
+  session.lensReview = persistedReview?.started === true ? persistedReview : null;
   session.dynamicChoices = dynamicChoices;
   session.masterSummary = masterSummaryText;
   session.state = 'ORACLE';

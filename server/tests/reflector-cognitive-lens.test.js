@@ -146,6 +146,7 @@ test('Reflect 用已验证、未知和冲突生成中性 Lens，且不改写证�
   assert.equal(result.oracle.lineMeta.some((line) => Object.hasOwn(line, 'intensity')), false);
   assert.deepEqual(result.oracle.dynamics, [1]);
   assert.ok(result.cognitivePlan.reviewTasks.length > 0);
+  assert.deepEqual(result.lensImpacts, []);
   assert.deepEqual(result.session.cognitivePlan, result.cognitivePlan);
   assert.deepEqual(result.session.lensImpacts, result.lensImpacts);
   assert.doesNotMatch(result.oracle.text, FORBIDDEN_VERDICT);
@@ -280,6 +281,32 @@ test('Lens 服务失败时标记本轮禁用，但 Reflect 仍进入 ORACLE', as
   assert.doesNotMatch(result.oracle.text, FORBIDDEN_VERDICT);
 });
 
+test('Reflect reuses a persisted one-shot Lens review instead of regenerating a plan', async () => {
+  const session = createSession();
+  const persistedPlan = {
+    lensId: 24,
+    lensName: '复',
+    source: 'session-derived',
+    sourceDigest: 'd'.repeat(64),
+    invariants: { evidenceLocked: true, riskLocked: true, approvalLocked: true, userDecisionLocked: true },
+    reviewTasks: [{ id: 'persisted-task', kind: 'assumption', question: '既有任务', causedBy: ['finding:existing'], status: 'pending' }],
+    review: { started: true, status: 'pending', actionId: 'first-action', totalTaskCount: 1, completedTaskCount: 0 },
+  };
+  const persistedImpacts = [];
+  session.cognitive_plan = structuredClone(persistedPlan);
+  session.lens_impacts = structuredClone(persistedImpacts);
+  session.lens_review = structuredClone(persistedPlan.review);
+
+  const result = await reflect(session, {
+    createCognitivePerturbationPlanFn: () => { throw new Error('must not regenerate'); },
+    callLLMFn: async () => null,
+  });
+
+  assert.deepEqual(result.cognitivePlan, persistedPlan);
+  assert.deepEqual(result.lensImpacts, persistedImpacts);
+  assert.deepEqual(result.session.lensReview, persistedPlan.review);
+});
+
 test('mapToHexagram 不会把立场强度当作知识真假', () => {
   const dimensions = [
     { perspective: 'strategic' },
@@ -338,6 +365,7 @@ test('Session 投影和 execute 响应保留 Lens 结果，持久化补丁不覆
     },
   };
   const lensImpacts = [];
+  const lensReview = { started: true, status: 'completed', totalTaskCount: 1, completedTaskCount: 1 };
   const result = {
     session: {
       ...session,
@@ -345,6 +373,7 @@ test('Session 投影和 execute 响应保留 Lens 结果，持久化补丁不覆
       oracle: { text: '本轮审查镜头聚焦已知边界。' },
       cognitivePlan,
       lensImpacts,
+      lensReview,
     },
     oracle: { text: '本轮审查镜头聚焦已知边界。' },
     conflicts: [],
@@ -353,6 +382,7 @@ test('Session 投影和 execute 响应保留 Lens 结果，持久化补丁不覆
     reason: '立卦完成',
     cognitivePlan,
     lensImpacts,
+    lensReview,
   };
   let persisted;
 
@@ -366,11 +396,13 @@ test('Session 投影和 execute 响应保留 Lens 结果，持久化补丁不覆
   assert.equal(persisted.state, 'ORACLE');
   assert.deepEqual(persisted.patch.cognitive_plan, cognitivePlan);
   assert.deepEqual(persisted.patch.lens_impacts, lensImpacts);
+  assert.deepEqual(persisted.patch.lens_review, lensReview);
   assert.equal(Object.hasOwn(persisted.patch, 'tool_results'), false);
 
   const executeResponse = deliberationEngine.buildExecuteResponse('sess_cognitive_lens', result);
   assert.deepEqual(executeResponse.cognitivePlan, cognitivePlan);
   assert.deepEqual(executeResponse.lensImpacts, lensImpacts);
+  assert.deepEqual(executeResponse.lensReview, lensReview);
   const routedAndClientNormalized = normalizeExecuteResponse(executeResponse);
   assert.deepEqual(routedAndClientNormalized.cognitivePlan, cognitivePlan);
   assert.deepEqual(routedAndClientNormalized.lensImpacts, lensImpacts);
@@ -380,9 +412,11 @@ test('Session 投影和 execute 响应保留 Lens 结果，持久化补丁不覆
     state: 'ORACLE',
     cognitive_plan: cognitivePlan,
     lens_impacts: lensImpacts,
+    lens_review: lensReview,
   });
   assert.deepEqual(restoredResponse.cognitivePlan, cognitivePlan);
   assert.deepEqual(restoredResponse.lensImpacts, lensImpacts);
+  assert.deepEqual(restoredResponse.lensReview, lensReview);
 });
 
 test('PostgreSQL 迁移和 memoryService 映射都持久化 Lens Session 字段', async () => {
@@ -402,11 +436,14 @@ test('PostgreSQL 迁移和 memoryService 映射都持久化 Lens Session 字段'
 
   assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS cognitive_plan JSONB/i.test(sql)));
   assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS lens_impacts JSONB/i.test(sql)));
+  assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS lens_review JSONB/i.test(sql)));
   assert.equal(typeof memoryService.toSessionPersistenceData, 'function');
   const mapped = memoryService.toSessionPersistenceData({
     cognitivePlan: { lensId: 1 },
     lensImpacts: [{ taskId: 'lens-task-1' }],
+    lensReview: { status: 'completed' },
   });
   assert.deepEqual(mapped.cognitive_plan, { lensId: 1 });
   assert.deepEqual(mapped.lens_impacts, [{ taskId: 'lens-task-1' }]);
+  assert.deepEqual(mapped.lens_review, { status: 'completed' });
 });

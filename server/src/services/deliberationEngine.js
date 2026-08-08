@@ -29,7 +29,13 @@ import logger from './logger.js';
 import eventBus from './eventBus.js';
 import { evaluateSession } from './evalPipeline.js';
 import * as reactLoop from './reactLoop.js';
-import { commitDomainEvents, reflectionDomainEvents } from './agentEventSemantics.js';
+import {
+  commitDomainEvents,
+  lensCompletionDomainEvents,
+  lensPlanDomainEvents,
+  reflectionDomainEvents,
+} from './agentEventSemantics.js';
+import { executeLensReviewTasks } from './cognitivePerturbationService.js';
 import { normalizeExecuteResponse } from '../../../shared/deliberationContract.js';
 // 系统级 Agent（生产级 4 Agent）
 import AuditAgentSingleton from '../agents/system/AuditAgent.js';
@@ -52,6 +58,8 @@ export const STATES = {
 const MAX_ROUND = 2;
 const PAUSE_TIMEOUT_MS = 30 * 60 * 1000; // 30 分钟内可 resume
 const commitFlights = new Map();
+const executeFlights = new Map();
+const lensReviewFlights = new Map();
 
 // ============ 工具函数 ============
 
@@ -114,6 +122,7 @@ export function buildResponseFromSession(session) {
     lensImpacts: Array.isArray(session?.lens_impacts)
       ? session.lens_impacts
       : (Array.isArray(session?.lensImpacts) ? session.lensImpacts : []),
+    lensReview: session?.lens_review ?? session?.lensReview ?? session?.cognitive_plan?.review ?? null,
     commitResult: session?.commit_result || null,
   };
 }
@@ -142,6 +151,85 @@ function sessionNotFoundError() {
   const error = new Error('SESSION_NOT_FOUND');
   error.code = 'SESSION_NOT_FOUND';
   return error;
+}
+
+async function performLensReviewLifecycle(result, context = {}, dependencies = {}) {
+  const plan = result?.cognitivePlan ?? result?.session?.cognitivePlan ?? null;
+  const sessionId = context.sessionId || result.session?.id;
+  const actionId = String(context.actionId || '').trim();
+  const emit = dependencies.emitFn || eventBus.emit.bind(eventBus);
+  for (const event of lensPlanDomainEvents({ cognitivePlan: plan, lensImpacts: [] })) {
+    await emit(sessionId, { ...event, actor: 'reflector', correlationId: actionId });
+  }
+
+  const executeFn = dependencies.executeFn || executeLensReviewTasks;
+  const executed = await executeFn({ session: result.session, plan, actionId });
+  const totalTaskCount = Math.min(3, plan.reviewTasks.length);
+  const reviewedTaskIds = new Set(plan.reviewTasks.slice(0, totalTaskCount).map((task) => task.id));
+  const completedTaskIds = new Set(executed.impacts.flatMap((impact) => {
+    if (!reviewedTaskIds.has(impact?.taskId) || !Array.isArray(impact?.findingIds)) return [];
+    const linked = impact.findingIds.some((findingId) => executed.findings.some((finding) => (
+      finding?.id === findingId
+      && finding?.lensTaskId === impact.taskId
+      && finding?.lensId === plan.lensId
+    )));
+    return linked ? [impact.taskId] : [];
+  }));
+  const completedTaskCount = completedTaskIds.size;
+  const lensReview = {
+    started: true,
+    status: completedTaskCount === totalTaskCount ? 'completed' : 'pending',
+    actionId,
+    totalTaskCount,
+    completedTaskCount,
+    pendingTaskIds: [...reviewedTaskIds].filter((taskId) => !completedTaskIds.has(taskId)),
+  };
+  const cognitivePlan = {
+    ...executed.plan,
+    reviewTasks: executed.plan.reviewTasks.map((task) => reviewedTaskIds.has(task.id)
+      ? { ...task, status: completedTaskIds.has(task.id) ? 'completed' : 'pending' }
+      : task),
+    review: lensReview,
+  };
+  const next = {
+    ...result,
+    cognitivePlan,
+    lensImpacts: executed.impacts,
+    lensReview,
+    session: {
+      ...result.session,
+      findings: executed.findings,
+      cognitivePlan,
+      lensImpacts: executed.impacts,
+      lensReview,
+    },
+  };
+  for (const event of lensCompletionDomainEvents(next)) {
+    await emit(sessionId, { ...event, actor: 'reflector', correlationId: actionId });
+  }
+  return next;
+}
+
+export async function runLensReviewLifecycle(result, context = {}, dependencies = {}) {
+  const plan = result?.cognitivePlan ?? result?.session?.cognitivePlan ?? null;
+  if (!Number.isInteger(plan?.lensId) || !Array.isArray(plan?.reviewTasks) || plan.reviewTasks.length === 0) {
+    return result;
+  }
+  if (plan.review?.started === true) return result;
+
+  const sessionId = String(context.sessionId || result?.session?.id || '').trim();
+  if (!sessionId) return performLensReviewLifecycle(result, context, dependencies);
+
+  const active = lensReviewFlights.get(sessionId);
+  if (active) return active;
+
+  const flight = performLensReviewLifecycle(result, context, dependencies);
+  lensReviewFlights.set(sessionId, flight);
+  try {
+    return await flight;
+  } finally {
+    if (lensReviewFlights.get(sessionId) === flight) lensReviewFlights.delete(sessionId);
+  }
 }
 
 export async function assertSessionOwner(sessionId, verifiedUserId) {
@@ -395,11 +483,9 @@ export async function answer(sessionId, answers, executionCtx = {}) {
  * @param {{actionId?:string,userId?:string|null}} executionCtx 稳定动作与调用者上下文
  * @returns {Promise<{sessionId, state, findings, oracle, conflicts, gaps, replanned}>}
  */
-export async function execute(sessionId, agentIds, executionCtx = {}) {
+async function performExecute(sessionId, agentIds, executionCtx, session) {
   const actionId = String(executionCtx.actionId || '').trim();
   logger.info('[Deliberation] execute 开始', { sessionId, agentIds, actionId });
-
-  const session = await assertSessionOwner(sessionId, executionCtx.userId);
 
   // === ★ P0 守卫：澄清未完成绝不允许启动 ReAct 循环（之前前端 SSE 抢跑 EXECUTE → DELIBERATE，就靠这一条后端双保险）
   const askUser = session.askUser || (session.plan && session.plan.askUser) || [];
@@ -533,7 +619,7 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
   // 7. Reflect（立卦或重规划）
   eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'REFLECT' } });
   eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'reflect', thought: `演·反思：聚合${session.findings.length}位智囊发现` } });
-  const result = await reflector.reflect(session);
+  let result = await reflector.reflect(session);
 
   // Step 8: 重规划串通 — reflector 触发重规划时，自动重新 plan/execute，最多1次
   if (result.replanned && (result.session.state === 'PLAN' || result.session.state === 'EXECUTE')) {
@@ -556,8 +642,10 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
       await planSessionWithFallback(result.session);
     }
     // 递归 execute（传空 agentIds 让 agentRouter 基于新维度推荐智囊，replan_count 已+1 不会无限）
-    return execute(sessionId, [], executionCtx);
+    return performExecute(sessionId, [], executionCtx, result.session);
   }
+
+  result = await runLensReviewLifecycle(result, { sessionId, actionId });
 
   // emit 反思结果
   if (result.oracle) {
@@ -578,11 +666,31 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
     dynamicChoices: result.session?.dynamicChoices || [],
     masterSummary: result.session?.masterSummary || '',
   };
-  for (const domainEvent of reflectionDomainEvents(reflectionProjection)) {
+  for (const domainEvent of reflectionDomainEvents({ ...reflectionProjection, cognitivePlan: null, lensImpacts: [] })) {
     await eventBus.emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
   }
 
   return buildExecuteResponse(sessionId, result);
+}
+
+export async function execute(sessionId, agentIds, executionCtx = {}) {
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
+  const persistedPlan = session.cognitive_plan ?? session.cognitivePlan ?? null;
+  const persistedReview = session.lens_review ?? session.lensReview ?? persistedPlan?.review ?? null;
+  if (session.state === STATES.ORACLE && persistedReview?.started === true) {
+    return normalizeExecuteResponse(buildResponseFromSession(session));
+  }
+
+  const active = executeFlights.get(sessionId);
+  if (active) return active;
+
+  const flight = performExecute(sessionId, agentIds, executionCtx, session);
+  executeFlights.set(sessionId, flight);
+  try {
+    return await flight;
+  } finally {
+    if (executeFlights.get(sessionId) === flight) executeFlights.delete(sessionId);
+  }
 }
 
 /**
@@ -599,6 +707,7 @@ export async function persistExecuteResult(sessionId, result, dependencies = {})
       replan_count: result.session.replan_count ?? 0,
       cognitive_plan: result.cognitivePlan ?? result.session.cognitivePlan ?? null,
       lens_impacts: result.lensImpacts ?? result.session.lensImpacts ?? [],
+      lens_review: result.lensReview ?? result.session.lensReview ?? null,
     };
     // P1-1：持久化动态抉择选项和全局总结（下次恢复推演时不丢失）
     if (result.session.dynamicChoices) patch.dynamic_choices = result.session.dynamicChoices;
@@ -639,6 +748,7 @@ export function buildExecuteResponse(sessionId, result) {
     masterSummary: result.session.masterSummary || '',
     cognitivePlan: result.cognitivePlan ?? result.session.cognitivePlan ?? null,
     lensImpacts: result.lensImpacts ?? result.session.lensImpacts ?? [],
+    lensReview: result.lensReview ?? result.session.lensReview ?? null,
     fallback: result.fallback === true,
   });
 }

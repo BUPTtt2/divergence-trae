@@ -136,6 +136,7 @@ export function toSessionPersistenceData(session = {}) {
     master_summary: session.master_summary ?? session.masterSummary,
     cognitive_plan: session.cognitive_plan ?? session.cognitivePlan,
     lens_impacts: session.lens_impacts ?? session.lensImpacts,
+    lens_review: session.lens_review ?? session.lensReview,
     memory_used: session.memory_used,
     commit_result: session.commit_result,
     replan_count: session.replan_count ?? 0,

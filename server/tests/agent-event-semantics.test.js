@@ -55,7 +55,7 @@ test('reflection and commit semantics cover conflict, replan, approval and cryst
   assert.deepEqual(commit.map((event) => event.type), ['DECISION_COMMITTED', 'SESSION_COMPLETED']);
 });
 
-test('reflection semantics publish a minimal, non-duplicated Lens event lifecycle', () => {
+test('reflection semantics do not publish completion before Lens tasks execute', () => {
   const reflection = reflectionDomainEvents({
     cognitivePlan: {
       lensId: 24,
@@ -88,23 +88,7 @@ test('reflection semantics publish a minimal, non-duplicated Lens event lifecycl
         },
       ],
     },
-    lensImpacts: [
-      {
-        taskId: 'lens-task-1',
-        lensId: 24,
-        outcome: 'evidence-added',
-        findingIds: ['finding-1'],
-        summary: '补充了一条可追溯证据。',
-        rawModelContent: 'never expose',
-      },
-      {
-        taskId: 'lens-task-1',
-        lensId: 24,
-        outcome: 'no-change',
-        findingIds: [],
-        summary: 'duplicate impact must not emit twice',
-      },
-    ],
+    lensImpacts: [],
   });
 
   assert.deepEqual(reflection, [
@@ -136,30 +120,34 @@ test('reflection semantics publish a minimal, non-duplicated Lens event lifecycl
         causedBy: [opaqueReference('lens:24'), opaqueReference('conflict:cashflow')],
       },
     },
-    {
-      type: 'LENS_TASK_COMPLETED',
-      visibility: 'public',
-      data: {
-        taskId: 'lens-task-1',
-        lensId: 24,
-        outcome: 'evidence-added',
-        findingIds: ['finding-1'],
-        summary: '补充了一条可追溯证据。',
-      },
-    },
-    {
-      type: 'LENS_REVIEW_COMPLETED',
-      visibility: 'summary',
-      data: {
-        lensId: 24,
-        taskCount: 1,
-        impactCount: 1,
-        changedTaskCount: 1,
-        summary: '已完成 1 项审查任务，其中 1 项产生可追溯影响。',
-      },
-    },
   ]);
   assert.doesNotMatch(JSON.stringify(reflection), /prompt|rawModelContent|hidden chain of thought|never expose/);
+});
+
+test('Lens completion events require a linked finding and review completes only when every task succeeded', () => {
+  const reflection = reflectionDomainEvents({
+    cognitivePlan: {
+      lensId: 24,
+      lensName: '复',
+      sourceDigest: 'b'.repeat(64),
+      invariants: {},
+      reviewTasks: [
+        { id: 'lens-task-ok', kind: 'assumption', question: '核验前提', causedBy: ['finding:1'] },
+        { id: 'lens-task-pending', kind: 'failure-mode', question: '核验失败模式', causedBy: ['finding:2'] },
+      ],
+    },
+    lensImpacts: [
+      { taskId: 'lens-task-ok', lensId: 24, outcome: 'claim-challenged', findingIds: ['lens-finding-1'], summary: '已挑战。' },
+      { taskId: 'lens-task-pending', lensId: 24, outcome: 'no-change', findingIds: [], summary: '不得伪完成。' },
+    ],
+    findings: [{ id: 'lens-finding-1', lensTaskId: 'lens-task-ok', lensId: 24 }],
+  });
+
+  assert.deepEqual(
+    reflection.filter((event) => event.type === 'LENS_TASK_COMPLETED').map((event) => event.data.taskId),
+    ['lens-task-ok'],
+  );
+  assert.equal(reflection.some((event) => event.type === 'LENS_REVIEW_COMPLETED'), false);
 });
 
 test('Lens public task payload normalizes untrusted perspective and causal references', () => {

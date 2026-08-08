@@ -53,6 +53,7 @@ export function normalizeExecuteResponse(input = {}) {
     masterSummary: String(input.masterSummary || ''),
     cognitivePlan: input.cognitivePlan || null,
     lensImpacts: Array.isArray(input.lensImpacts) ? input.lensImpacts : [],
+    lensReview: input.lensReview || null,
     fallback: input.fallback === true,
     clarifyRequired: input.clarifyRequired === true,
     askUser: Array.isArray(input.askUser) ? input.askUser : [],

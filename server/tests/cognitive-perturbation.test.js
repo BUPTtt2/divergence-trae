@@ -65,6 +65,16 @@ test('相同输入会生成同一摘要、Lens 与任务，并锁定四项不可
   });
 });
 
+test('binaryKey 使用文王卦序映射而不是数值加一', () => {
+  const allYin = createCognitivePerturbationPlan({ ...source, oracle: { primary: { binaryKey: 0 } } });
+  const allYang = createCognitivePerturbationPlan({ ...source, oracle: { primary: { binaryKey: 63 } } });
+
+  assert.equal(allYin.lensId, 2);
+  assert.equal(allYin.lensName, '坤');
+  assert.equal(allYang.lensId, 1);
+  assert.equal(allYang.lensName, '乾');
+});
+
 test('语义相同但键插入顺序不同的输入生成同一计划', () => {
   const reordered = {
     sessionSeed: 'session-06-seed',
@@ -109,7 +119,7 @@ test('未知 finding 不会被升级为事实或被扰动计划修改', () => {
   assert.doesNotMatch(JSON.stringify(plan), /已验证事实/);
 });
 
-test('影响记录只关联已有 finding，无法证明影响时明确 no-change', () => {
+test('影响记录只保留有实际关联 finding 的可证明结果', () => {
   const plan = createCognitivePerturbationPlan(source);
   const [firstTask] = plan.reviewTasks;
   const records = createLensImpactRecords(plan, [
@@ -117,20 +127,15 @@ test('影响记录只关联已有 finding，无法证明影响时明确 no-chang
     { id: 'finding_unrelated', lensTaskId: 'missing_task', content: '无关联' },
   ]);
 
-  assert.equal(records.length, plan.reviewTasks.length);
+  assert.equal(records.length, 1);
   assert.deepEqual(records[0].findingIds, ['finding_added']);
   assert.equal(records[0].outcome, 'evidence-added');
-  for (const record of records.slice(1)) {
-    assert.equal(record.outcome, 'no-change');
-    assert.deepEqual(record.findingIds, []);
-    assert.equal(record.summary, '暂无可证明影响。');
-  }
 });
 
 test('未知状态的关联证据不会被升级为 evidence-added', () => {
   const plan = createCognitivePerturbationPlan(source);
   const [firstTask] = plan.reviewTasks;
-  const [record] = createLensImpactRecords(plan, [
+  const records = createLensImpactRecords(plan, [
     {
       id: 'finding_unverified',
       lensTaskId: firstTask.id,
@@ -139,6 +144,5 @@ test('未知状态的关联证据不会被升级为 evidence-added', () => {
     },
   ]);
 
-  assert.equal(record.outcome, 'no-change');
-  assert.equal(record.summary, '暂无可证明影响。');
+  assert.deepEqual(records, []);
 });

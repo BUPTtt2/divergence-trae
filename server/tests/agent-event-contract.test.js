@@ -216,10 +216,11 @@ test('Lens domain events are whitelisted, visible at their declared scope, and r
     lensImpacts: [{
       taskId: 'lens-task-replay',
       lensId: 24,
-      outcome: 'no-change',
-      findingIds: [],
-      summary: '完成审查，未改变核心判断。',
+      outcome: 'claim-challenged',
+      findingIds: ['lens-finding-replay'],
+      summary: '已生成关联的待核验发现。',
     }],
+    findings: [{ id: 'lens-finding-replay', lensTaskId: 'lens-task-replay', lensId: 24 }],
   });
   const lensTypes = ['LENS_SELECTED', 'LENS_TASK_CREATED', 'LENS_TASK_COMPLETED', 'LENS_REVIEW_COMPLETED'];
 
@@ -243,7 +244,7 @@ test('Lens domain events are whitelisted, visible at their declared scope, and r
   eventBus.cleanup(sessionId);
 });
 
-test('Lens lifecycle persistence is idempotent for one action but independent across actions', async () => {
+test('Lens event persistence is idempotent for one action but independent across actions', async () => {
   const sessionId = `sess_lens_idempotency_${Date.now()}`;
   const domainEvents = reflectionDomainEvents({
     cognitivePlan: {
@@ -267,10 +268,11 @@ test('Lens lifecycle persistence is idempotent for one action but independent ac
     lensImpacts: [{
       taskId: 'lens-task-idempotent',
       lensId: 24,
-      outcome: 'no-change',
-      findingIds: [],
-      summary: '完成审查，未改变核心判断。',
+      outcome: 'claim-challenged',
+      findingIds: ['lens-finding-idempotent'],
+      summary: '已生成关联的待核验发现。',
     }],
+    findings: [{ id: 'lens-finding-idempotent', lensTaskId: 'lens-task-idempotent', lensId: 24 }],
   });
   const publish = async (actionId) => Promise.all(domainEvents.map((domainEvent) => eventBus.emit(sessionId, {
     ...domainEvent,

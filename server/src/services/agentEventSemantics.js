@@ -59,6 +59,16 @@ function lensDomainEvents(result = {}) {
   const tasks = uniqueBy(Array.isArray(plan.reviewTasks) ? plan.reviewTasks : [], 'id');
   const impacts = uniqueBy(Array.isArray(result.lensImpacts) ? result.lensImpacts : [], 'taskId')
     .filter((impact) => tasks.some((task) => task.id === impact.taskId));
+  const findings = Array.isArray(result.findings)
+    ? result.findings
+    : (Array.isArray(result.session?.findings) ? result.session.findings : []);
+  const completedImpacts = impacts.filter((impact) => (
+    Array.isArray(impact.findingIds) && impact.findingIds.some((findingId) => findings.some((finding) => (
+      finding?.id === findingId
+      && finding?.lensTaskId === impact.taskId
+      && finding?.lensId === plan.lensId
+    )))
+  ));
   const events = [descriptor('LENS_SELECTED', {
     lensId: plan.lensId,
     lensName: typeof plan.lensName === 'string' ? plan.lensName : '',
@@ -81,7 +91,7 @@ function lensDomainEvents(result = {}) {
     events.push(descriptor('LENS_TASK_CREATED', data));
   }
 
-  for (const impact of impacts) {
+  for (const impact of completedImpacts) {
     events.push(descriptor('LENS_TASK_COMPLETED', {
       taskId: impact.taskId,
       lensId: plan.lensId,
@@ -93,17 +103,31 @@ function lensDomainEvents(result = {}) {
     }));
   }
 
-  const changedTaskCount = impacts.filter((impact) => impact.outcome !== 'no-change').length;
+  if (tasks.length === 0 || completedImpacts.length !== tasks.length) return events;
+
+  const changedTaskCount = completedImpacts.filter((impact) => impact.outcome !== 'no-change').length;
   events.push(descriptor('LENS_REVIEW_COMPLETED', {
     lensId: plan.lensId,
     taskCount: tasks.length,
-    impactCount: impacts.length,
+    impactCount: completedImpacts.length,
     changedTaskCount,
     summary: changedTaskCount > 0
       ? `已完成 ${tasks.length} 项审查任务，其中 ${changedTaskCount} 项产生可追溯影响。`
       : `已完成 ${tasks.length} 项审查任务，未改变核心判断。`,
   }, 'summary'));
   return events;
+}
+
+export function lensPlanDomainEvents(result = {}) {
+  return lensDomainEvents(result).filter((event) => (
+    event.type === 'LENS_SELECTED' || event.type === 'LENS_TASK_CREATED'
+  ));
+}
+
+export function lensCompletionDomainEvents(result = {}) {
+  return lensDomainEvents(result).filter((event) => (
+    event.type === 'LENS_TASK_COMPLETED' || event.type === 'LENS_REVIEW_COMPLETED'
+  ));
 }
 
 export function planDomainEvents(plan = {}, askUser = []) {
@@ -187,4 +211,11 @@ export function commitDomainEvents({ choice, summary = '' } = {}) {
   ];
 }
 
-export default { planDomainEvents, evidenceDomainEvent, reflectionDomainEvents, commitDomainEvents };
+export default {
+  planDomainEvents,
+  evidenceDomainEvent,
+  reflectionDomainEvents,
+  lensPlanDomainEvents,
+  lensCompletionDomainEvents,
+  commitDomainEvents,
+};
