@@ -4,9 +4,8 @@ import Board from '../components/board/GameBoard';
 import ChoiceHud from '../components/board/ChoiceHud';
 import AgentDialogueOverlay from '../components/board/AgentDialogueOverlay';
 import ProcessStepper from '../components/board/ProcessStepper';
-import LiveArenaOverlay from '../components/board/LiveArenaOverlay';
+import DeliberationConversation from '../components/sandbox/DeliberationConversation';
 import FateCardPanel from '../components/fate/FateCardPanel';
-import ConfirmedInfoPanel from '../components/yan/ConfirmedInfoPanel';
 import DecisionCaseReviewPanel from '../components/yan/DecisionCaseReviewPanel';
 import { COLORS } from '../components/board/layoutConfig';
 import { detectQuestionType } from '../data/agents';
@@ -14,7 +13,6 @@ import { generateDialoguesForAgents } from '../services/inferenceEngine';
 import { saveAgentFeedback } from '../services/memoryStore';
 import { sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
-import { currentClarificationQuestion, shouldShowInteractionDock } from '../game/sandboxRuntime';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -54,264 +52,6 @@ const _normalizeMsg = (raw) => {
 };
 
 const VIRTUAL_ROLES = [
-  { id: 'yan', name: '演', stance: '提问·析理', color: '#E8C670', glow: '#FFE89A', role: 'virtual', font: 'seal' },
-  { id: 'jingyuan', name: '镜渊', stance: '反省·审查', color: '#A898C8', glow: '#C8B8FF', role: 'virtual', font: 'script' },
-];
-
-// ========= 卦镜 · 赛博八卦盘 SVG 组件 =========
-// 接收：name(卦名), symbol(八卦字符/卦象), trigram(单卦符), palace(宫), wuxing(五行),
-//       ganzhi(干支短串), movingLine(动爻数 1-6), movingLineMeaning(动爻辞), verse(卦辞首行)
-function GuaMirror({
-  size = 260,
-  name = '大有',
-  symbol = '☰',
-  trigram,
-  palace,
-  wuxing,
-  ganzhi,
-  movingLine,
-  movingLineMeaning,
-  verse,
-  accent = GLOW_COLOR,
-  rust = RUST_COLOR,
-  gold = BORDER_COLOR,
-}) {
-  // 8 外卦名（后天文王顺序：乾坎艮震巽离坤兑）
-  const BAGUA = ['乾', '坎', '艮', '震', '巽', '离', '坤', '兑'];
-  const BAGUA_SYMBOLS = ['☰', '☵', '☶', '☳', '☴', '☲', '☷', '☱'];
-  const center = size / 2;
-  const outerR = size * 0.48;    // 最外环
-  const ring8R = size * 0.41;    // 8卦环
-  const ring8innerR = size * 0.33;
-  const taijiR = size * 0.23;    // 太极（中心环）半径
-
-  return (
-    <div style={{
-      position: 'relative',
-      width: size,
-      height: size,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      filter: `drop-shadow(0 0 28px ${accent}55) drop-shadow(0 0 8px ${accent}88)`,
-    }}>
-      {/* 背景发光晕 */}
-      <motion.div
-        aria-hidden
-        animate={{ opacity: [0.4, 0.75, 0.4], scale: [1, 1.04, 1] }}
-        transition={{ duration: 4.5, repeat: Infinity, ease: 'easeInOut' }}
-        style={{
-          position: 'absolute', inset: '6%',
-          borderRadius: '50%',
-          background: `radial-gradient(circle, ${accent}22 0%, transparent 70%)`,
-        }}
-      />
-
-      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ position: 'absolute', inset: 0 }}>
-        <defs>
-          <radialGradient id="gua-disc-bg" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="rgba(26,18,12,0.92)" />
-            <stop offset="75%" stopColor="rgba(30,22,14,0.96)" />
-            <stop offset="100%" stopColor="rgba(12,8,4,1)" />
-          </radialGradient>
-          <linearGradient id="gua-ring-gold" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#F8E4B0" />
-            <stop offset="45%" stopColor={gold} />
-            <stop offset="100%" stopColor="#7A5A24" />
-          </linearGradient>
-          <filter id="gua-glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="2.5" result="b" />
-            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-          </filter>
-        </defs>
-
-        {/* 最外环圆（金） */}
-        <circle cx={center} cy={center} r={outerR} fill="url(#gua-disc-bg)" stroke="url(#gua-ring-gold)" strokeWidth="2.5" />
-        <circle cx={center} cy={center} r={outerR - 6} fill="none" stroke={`${gold}55`} strokeWidth="0.8" strokeDasharray="2 3" />
-
-        {/* 外围 24 节刻度 (节气感) */}
-        {Array.from({ length: 36 }).map((_, i) => {
-          const a = (i / 36) * Math.PI * 2 - Math.PI / 2;
-          const isMajor = i % 3 === 0;
-          const r1 = outerR - (isMajor ? 18 : 13);
-          const r2 = outerR - 5;
-          const x1 = center + Math.cos(a) * r1;
-          const y1 = center + Math.sin(a) * r1;
-          const x2 = center + Math.cos(a) * r2;
-          const y2 = center + Math.sin(a) * r2;
-          return (
-            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-              stroke={isMajor ? accent : `${gold}77`}
-              strokeWidth={isMajor ? 1.6 : 0.7}
-              opacity={isMajor ? 0.95 : 0.5}
-            />
-          );
-        })}
-
-        {/* 8 卦环（缓慢旋转组） */}
-        <motion.g
-          animate={{ rotate: 360 }}
-          transition={{ duration: 90, repeat: Infinity, ease: 'linear' }}
-          style={{ transformOrigin: `${center}px ${center}px` }}
-        >
-          {/* 8 卦分割线（8 条径向虚线） */}
-          {BAGUA.map((_, i) => {
-            const a = (i / 8) * Math.PI * 2;
-            const x1 = center + Math.cos(a) * ring8innerR;
-            const y1 = center + Math.sin(a) * ring8innerR;
-            const x2 = center + Math.cos(a) * (ring8R + 6);
-            const y2 = center + Math.sin(a) * (ring8R + 6);
-            return (
-              <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={`${gold}33`} strokeWidth="0.6" strokeDasharray="1 2" />
-            );
-          })}
-
-          {/* 8 卦字符 沿环排布 */}
-          {BAGUA.map((guaName, i) => {
-            const a = (i / 8) * Math.PI * 2 - Math.PI / 2;
-            const rText = (ring8R + ring8innerR) / 2;
-            const x = center + Math.cos(a) * rText;
-            const y = center + Math.sin(a) * rText;
-            const rotDeg = (a * 180) / Math.PI + 90;
-            return (
-              <g key={guaName} transform={`translate(${x}, ${y}) rotate(${rotDeg})`}>
-                <text textAnchor="middle" y="-5"
-                  fontSize={size * 0.046}
-                  fill={accent}
-                  style={{ fontFamily: '"Ma Shan Zheng", serif', filter: 'url(#gua-glow)', letterSpacing: '0.05em' }}
-                >
-                  {BAGUA_SYMBOLS[i]}
-                </text>
-                <text textAnchor="middle" y={size * 0.028}
-                  fontSize={size * 0.032}
-                  fill="#E6D4A8"
-                  opacity="0.85"
-                  style={{ fontFamily: '"Noto Serif SC", serif', letterSpacing: '0.05em' }}
-                >
-                  {guaName}
-                </text>
-              </g>
-            );
-          })}
-        </motion.g>
-
-        {/* 中心太极环（外圈） */}
-        <circle cx={center} cy={center} r={taijiR + 8} fill="none" stroke={`${gold}88`} strokeWidth="1" />
-        <circle cx={center} cy={center} r={taijiR} fill="rgba(16,10,4,0.85)" stroke={`${accent}AA`} strokeWidth="1.2" />
-
-        {/* 太极鱼（反色旋转） */}
-        <motion.g
-          animate={{ rotate: -360 }}
-          transition={{ duration: 70, repeat: Infinity, ease: 'linear' }}
-          style={{ transformOrigin: `${center}px ${center}px` }}
-        >
-          <path
-            d={
-              (() => {
-                const R = taijiR - 2;
-                const yTop = center - R;
-                // 标准太极路径（右半白上→左半白下，两个点）
-                const d = [
-                  `M ${center} ${yTop}`,
-                  `A ${R} ${R} 0 0 1 ${center} ${center + R}`,
-                  `A ${R / 2} ${R / 2} 0 0 1 ${center} ${center}`,
-                  `A ${R / 2} ${R / 2} 0 0 0 ${center} ${yTop}`,
-                  'Z',
-                ].join(' ');
-                return d;
-              })()
-            }
-            fill={accent}
-            opacity="0.92"
-          />
-          <circle cx={center} cy={center - taijiR / 2 + 1} r={Math.max(1.5, taijiR * 0.12)} fill="rgba(16,10,4,1)" />
-          <circle cx={center} cy={center + taijiR / 2 - 1} r={Math.max(1.5, taijiR * 0.12)} fill={accent} />
-        </motion.g>
-      </svg>
-
-      {/* 中心卦名/卦符文字层（不随旋转动） */}
-      <div style={{
-        position: 'relative', zIndex: 2,
-        display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center',
-        width: taijiR * 1.4,
-        height: taijiR * 1.4,
-        pointerEvents: 'none',
-        color: '#FFF7E0',
-        textAlign: 'center',
-      }}>
-        <motion.div
-          initial={{ scale: 0, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.7, delay: 0.15, type: 'spring', bounce: 0.25 }}
-          style={{
-            fontSize: size * 0.10,
-            fontFamily: '"Ma Shan Zheng", serif',
-            lineHeight: 1,
-            color: accent,
-            textShadow: `0 0 14px ${accent}CC, 0 0 4px #fff8`,
-            marginBottom: 2,
-          }}
-        >
-          {trigram || symbol}
-        </motion.div>
-        <motion.div
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.35 }}
-          style={{
-            fontSize: size * 0.048,
-            fontFamily: '"Ma Shan Zheng", serif',
-            letterSpacing: '0.2em',
-            color: '#FFF2CC',
-            textShadow: `0 0 6px ${accent}`,
-          }}
-        >
-          {name}卦
-        </motion.div>
-      </div>
-
-      {/* 底部信息横条（宫 · 五行 · 干支） */}
-      <div style={{
-        position: 'absolute',
-        left: 0, right: 0,
-        bottom: size * 0.03,
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-        pointerEvents: 'none',
-      }}>
-        {ganzhi && (
-          <div style={{
-            fontSize: Math.max(9, size * 0.03),
-            color: '#D4C090',
-            letterSpacing: '0.3em',
-            fontFamily: '"Noto Serif SC", serif',
-            background: 'rgba(16,10,4,0.5)',
-            padding: '2px 10px',
-            borderRadius: 2,
-            border: `1px solid ${gold}44`,
-            backdropFilter: 'blur(2px)',
-          }}>
-            {ganzhi}
-          </div>
-        )}
-        {(palace || wuxing) && (
-          <div style={{
-            fontSize: Math.max(9, size * 0.028),
-            color: accent,
-            letterSpacing: '0.18em',
-            fontFamily: '"Ma Shan Zheng", serif',
-            textShadow: `0 0 6px ${accent}77`,
-            marginTop: ganzhi ? 0 : size * 0.02,
-          }}>
-            {palace ? `${palace}宫 · ` : ''}
-            {wuxing ? `属${wuxing}` : ''}
-            {movingLine ? ` · 第${movingLine}爻动` : ''}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /* ============================================================
    辅助：阶段 · 标签 · 底部导航按键渲染
@@ -418,7 +158,7 @@ export default function Game() {
   const {
     phase, userInput, inputValue, setInputValue, inference, showInput,
     showQuestion, activeAgentIdx, selectedChoice, agentDialogues,
-    showHistoryPanel, setShowHistoryPanel, awaitingUser, currentResponse,
+    showHistoryPanel, setShowHistoryPanel, awaitingUser, currentResponse, isPaused,
     setCurrentResponse, currentCommit, setCurrentCommit, oracleThrowing,
     oracleResult, floatTip, selectedAgentIds, setSelectedAgentIds,
     agentCallResults, setAgentCallResults, toolCallState, debateRound,
@@ -429,13 +169,14 @@ export default function Game() {
     commitPending,
     arenaProjection,
     caseFile, yanQuestionRounds, awaitingAnswers, progress, memoryLayers, mirrorReview,
-    debateAutoPlay, setDebateAutoPlay, handleSkipToSummary,
     handleRestart, handleStart, handleUserAdvance, handleSkipClarify, handleConfirmAgents,
-    handleRunAnotherRound, handleChoiceClick, handleRevealFate,
+    handleInterject,
+    handleResume,
+    handleChoiceClick, handleRevealFate,
     handleShowChoices, handleCommit, handleStartOracle,
     handleProceedToChoices, handleSkipOracle, handleAgentClick,
     handleSaveToCollection, handleConfirmCaseFile, handleBackFromCaseFile,
-    infoProgress, MAX_CLARIFY_ROUNDS, saveGameState, fateRevealed,
+    saveGameState, fateRevealed,
   } = flow;
 
   // ★ Fix: 全局反馈 toast — 受用/失言按钮按下后任何阶段都立刻显示"生效了"
@@ -468,34 +209,47 @@ export default function Game() {
         </div>
       )}
       <div className="flex-1 min-h-0 overflow-hidden relative">
-        <div className="w-full h-full relative">
-          <Board
+        {!showInput && !['casting', 'yan_analyze', 'clarify_loop', 'case_file_confirm'].includes(phase) && (
+          <div className="w-full h-full relative">
+            <Board
+              phase={phase}
+              activeAgentIdx={activeAgentIdx}
+              activeAgents={activeAgents}
+              agentDialogues={agentDialogues}
+              onAgentClick={handleAgentClick}
+              userInput={userInput}
+              showQuestion={showQuestion}
+              selectedChoice={selectedChoice}
+              inference={inference}
+              fateRevealed={fateRevealed}
+            />
+          </div>
+        )}
+
+        {!showInput && <ProcessStepper phase={phase} />}
+
+        {!showInput && ['casting', 'yan_analyze', 'clarify_loop', 'agent_debate'].includes(phase) && (
+          <DeliberationConversation
             phase={phase}
-            activeAgentIdx={activeAgentIdx}
-            activeAgents={activeAgents}
-            agentDialogues={agentDialogues}
-            onAgentClick={handleAgentClick}
-            userInput={userInput}
-            showQuestion={showQuestion}
-            selectedChoice={selectedChoice}
-            inference={inference}
-            fateRevealed={fateRevealed}
+            question={userInput}
+            awaitingAnswers={awaitingAnswers}
+            answeredRounds={yanQuestionRounds}
+            currentResponse={currentResponse}
+            setCurrentResponse={setCurrentResponse}
+            projection={arenaProjection}
+            onAdvance={handleUserAdvance}
+            onSkipClarify={handleSkipClarify}
+            onInterject={handleInterject}
+            paused={isPaused}
+            onResume={handleResume}
           />
-        </div>
-
-        <ProcessStepper phase={phase} />
-        <LiveArenaOverlay projection={arenaProjection} />
-
-        {/* ★ 赛博算命感：全局扫描线 + 数据流 + 全息边框（所有阶段都有，视觉加强）*/}
-        <div className="cyber-crt-scanlines" />
-        <div className="cyber-data-rain" />
-        <div className="cyber-holo-frame" />
+        )}
 
         {/* ★ 永远可见的底部阶段导航条（关键修复：任何阶段都有明确的"下一步"按键）
              彻底解决"投铜钱/抉择阶段画面错乱，没按键"的问题。
              桌面端：底部半透明磨砂横条，左侧阶段信息，右侧下一步/当前动作按钮
              移动端(<768px)：顶部横条样式 */}
-        <div className="fixed z-[55]"
+        {['summary', 'oracle_prompt', 'oracle', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase) && <div className="fixed z-[55]"
           style={{
             left: '50%',
             transform: 'translateX(-50%)',
@@ -580,179 +334,8 @@ export default function Game() {
               }
             )}
           </div>
-        </div>
+        </div>}
 
-        {/* ★ 修复：信息收集/推演横幅浓缩到左下角（原顶部遮挡内容）
-            桌面端：左下角小卡片，悬浮不挡主视角；移动端：顶部半透明窄条 */}
-        {(phase === 'clarify_loop' || phase === 'agent_debate') && infoProgress > 5 && (
-          <div
-            className="fixed z-[60]"
-            style={{
-              // 桌面端：左下角；移动端(<768px)：顶部窄条
-              left: typeof window !== 'undefined' && window.innerWidth > 768 ? 16 : '50%',
-              bottom: typeof window !== 'undefined' && window.innerWidth > 768 ? 24 : 'auto',
-              top: typeof window !== 'undefined' && window.innerWidth > 768 ? 'auto' : 56,
-              transform: typeof window !== 'undefined' && window.innerWidth > 768 ? 'none' : 'translateX(-50%)',
-              width: typeof window !== 'undefined' && window.innerWidth > 768 ? 'auto' : 'min(520px, 92vw)',
-            }}
-          >
-            <div
-              className="px-3 py-2"
-              style={{
-                background: 'linear-gradient(135deg, rgba(30, 20, 10, 0.92) 0%, rgba(50, 34, 18, 0.96) 100%)',
-                border: '1px solid rgba(232, 198, 112, 0.3)',
-                borderRadius: 6,
-                boxShadow: '0 4px 18px rgba(0,0,0,0.45), inset 0 0 10px rgba(232,198,112,0.04)',
-                backdropFilter: 'blur(6px)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-              }}
-            >
-              {/* 浓缩标签 + 进度（百分比内联） */}
-              <div style={{
-                fontFamily: '"Ma Shan Zheng", serif',
-                color: infoProgress >= 80 ? '#F5D488' : '#D7B466',
-                letterSpacing: '0.1em',
-                fontSize: 11,
-                whiteSpace: 'nowrap',
-              }}>
-                {phase === 'agent_debate'
-                  ? `☯ 推演 ${infoProgress}%`
-                  : `析理 ${infoProgress}%`}
-              </div>
-              {/* 迷你进度条 */}
-              <div style={{
-                width: typeof window !== 'undefined' && window.innerWidth > 768 ? 60 : '100%',
-                flex: typeof window !== 'undefined' && window.innerWidth > 768 ? 'none' : 1,
-                height: 3,
-                background: 'rgba(232,198,112,0.12)',
-                borderRadius: 2,
-                overflow: 'hidden',
-              }}>
-                <motion.div
-                  animate={{ width: `${infoProgress}%` }}
-                  transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-                  style={{
-                    height: '100%',
-                    background: infoProgress >= 80
-                      ? 'linear-gradient(90deg, #E8A050, #F5D488)'
-                      : 'linear-gradient(90deg, #806A4A, #E8C670)',
-                    boxShadow: infoProgress >= 80 ? '0 0 8px rgba(245,212,136,0.5)' : 'none',
-                  }}
-                />
-              </div>
-              {/* 跳过按钮（仅桌面端内联；移动端单独处理） */}
-              {typeof window !== 'undefined' && window.innerWidth > 768 && (
-                phase === 'clarify_loop' ? (
-                  <button
-                    onClick={handleSkipClarify}
-                    title="跳过澄清，直接召智囊"
-                    style={{
-                      padding: '2px 8px',
-                      fontSize: 10,
-                      fontFamily: '"Ma Shan Zheng", serif',
-                      letterSpacing: '0.08em',
-                      color: '#1A1410',
-                      background: 'linear-gradient(135deg, #E8C670, #D7A44A)',
-                      border: 'none',
-                      borderRadius: 3,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    跳过→
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleSkipToSummary}
-                    title="跳过辩论，看演的总结"
-                    style={{
-                      padding: '2px 8px',
-                      fontSize: 10,
-                      fontFamily: '"Ma Shan Zheng", serif',
-                      letterSpacing: '0.08em',
-                      color: '#1A1410',
-                      background: 'linear-gradient(135deg, #E8C670, #D7A44A)',
-                      border: 'none',
-                      borderRadius: 3,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    总结→
-                  </button>
-                )
-              )}
-              {/* 移动端单独显示跳过按钮 */}
-              {typeof window !== 'undefined' && window.innerWidth <= 768 && (
-                phase === 'clarify_loop' ? (
-                  <button onClick={handleSkipClarify}
-                    style={{
-                      padding: '2px 8px', fontSize: 10,
-                      fontFamily: '"Ma Shan Zheng", serif',
-                      color: '#1A1410',
-                      background: 'linear-gradient(135deg, #E8C670, #D7A44A)',
-                      border: 'none', borderRadius: 3, cursor: 'pointer',
-                    }}>跳过→</button>
-                ) : (
-                  <button onClick={handleSkipToSummary}
-                    style={{
-                      padding: '2px 8px', fontSize: 10,
-                      fontFamily: '"Ma Shan Zheng", serif',
-                      color: '#1A1410',
-                      background: 'linear-gradient(135deg, #E8C670, #D7A44A)',
-                      border: 'none', borderRadius: 3, cursor: 'pointer',
-                    }}>总结→</button>
-                )
-              )}
-            </div>
-          </div>
-        )}
-
-        <AnimatePresence>
-          {phase === 'yan_analyze' && !showHistoryPanel && (
-            <motion.div
-              className="absolute z-20 hidden md:block"
-              style={{ left: '12px', top: '100px' }}
-              initial={{ opacity: 0, x: -30 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -30 }}
-              transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            >
-              <ConfirmedInfoPanel
-                caseFile={caseFile}
-                progress={progress || { done: 0, total: 4, missing: [] }}
-                roundCount={yanQuestionRounds?.length || 0}
-                minRounds={2}
-                maxRounds={5}
-                onManualJump={() => {
-                  if (typeof handleUserAdvance === 'function') handleUserAdvance();
-                }}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {phase === 'yan_analyze' && !showHistoryPanel && (
-            <motion.div
-              className="absolute z-20 md:hidden"
-              style={{ left: '8px', right: '8px', top: '76px' }}
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.5 }}
-            >
-              <ConfirmedInfoPanel
-                compact
-                caseFile={caseFile}
-                progress={progress || { done: 0, total: 4, missing: [] }}
-                roundCount={yanQuestionRounds?.length || 0}
-                minRounds={2}
-                maxRounds={5}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         <AnimatePresence>
           {phase === 'case_file_confirm' && (
@@ -781,152 +364,9 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        <AnimatePresence>
-          {phaseLabel && !showInput && phase === 'agent_debate' && activeAgentIdx >= 0 && (
-            <motion.div
-              className="absolute left-1/2 -translate-x-1/2 z-20"
-              style={{ top: '92px' }}
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.6, ease: 'easeOut' }}
-            >
-              <div style={{
-                padding: '4px 14px',
-                background: 'rgba(8,8,12,0.7)',
-                backdropFilter: 'blur(8px)',
-                color: GLOW_COLOR,
-                fontSize: '10px',
-                fontFamily: '"Ma Shan Zheng", serif',
-                letterSpacing: '0.25em',
-                border: `1px solid ${BORDER_COLOR}40`,
-              }}>
-                {phaseLabel}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
 
-        <AnimatePresence>
-          {phase === 'casting' && (
-            <motion.div
-              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20"
-              style={{ marginTop: '80px', width: 'min(560px, 86vw)', textAlign: 'center' }}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              {(() => {
-                const cyberGua = inference?.cyberGua;
-                if (cyberGua?.gua) {
-                  const g = cyberGua.gua;
-                  const gz = cyberGua.ganzhi?.short || '';
-                  const verse = (g.verse || '').split('\n')[0] || '';
-                  return (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-                      <motion.div
-                        key={`gua-disc-${g.name}-${gz}`}
-                        initial={{ opacity: 0, y: 16, scale: 0.92 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        transition={{ duration: 0.85, ease: [0.16, 1, 0.3, 1] }}
-                      >
-                        <GuaMirror
-                          size={300}
-                          name={g.name}
-                          symbol={g.symbol}
-                          trigram={g.symbol}
-                          palace={g.palace}
-                          wuxing={g.wuxing}
-                          ganzhi={gz}
-                          movingLine={g.movingLine}
-                          verse={verse}
-                        />
-                      </motion.div>
 
-                      {verse && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.8, delay: 0.7 }}
-                          style={{
-                            fontSize: '11px',
-                            fontFamily: '"Noto Serif SC", serif',
-                            letterSpacing: '0.15em',
-                            color: '#E6D4A8',
-                            opacity: 0.9,
-                            maxWidth: '460px',
-                            textAlign: 'center',
-                            lineHeight: 1.9,
-                            padding: '8px 14px',
-                            borderTop: `1px solid ${BORDER_COLOR}44`,
-                            borderBottom: `1px solid ${BORDER_COLOR}44`,
-                            background: 'rgba(16,10,4,0.4)',
-                          }}
-                        >
-                          【卦辞】{verse}
-                        </motion.div>
-                      )}
-
-                      <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: [0, 1, 0.7, 1] }}
-                        transition={{ duration: 2.2, delay: 1.1 }}
-                        style={{
-                          fontSize: '12px',
-                          color: GLOW_COLOR,
-                          fontFamily: '"Noto Serif SC", serif',
-                          letterSpacing: '0.18em',
-                          opacity: 0.92,
-                          lineHeight: 1.9,
-                        }}
-                      >
-                        三枚铜钱已落 · 卦镜已明<br />
-                        {g.movingLine ? `第${g.movingLine}爻动 · ` : ''}静待智囊启卷……
-                      </motion.div>
-                    </div>
-                  );
-                }
-                return (
-                  <div style={{
-                    color: GLOW_COLOR,
-                    fontSize: '12px',
-                    fontFamily: '"Ma Shan Zheng", serif',
-                    letterSpacing: '0.3em',
-                    textShadow: `0 0 10px ${GLOW_COLOR}`,
-                    opacity: 0.85,
-                  }}>
-                    投三枚铜钱,立此一卦……
-                  </div>
-                );
-              })()}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {phase === 'reflecting' && (
-            <motion.div
-              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20"
-              style={{ marginTop: '120px' }}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              <div style={{
-                color: GLOW_COLOR,
-                fontSize: '11px',
-                fontFamily: '"Noto Serif SC", serif',
-                letterSpacing: '0.3em',
-                textShadow: `0 0 8px ${GLOW_COLOR}`,
-                opacity: 0.8,
-              }}>
-                演 · 反思汇聚中……
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AgentDialogueOverlay
+        {!['casting', 'yan_analyze', 'clarify_loop', 'agent_debate', 'case_file_confirm'].includes(phase) && <AgentDialogueOverlay
           phase={phase}
           question={userInput}
           activeAgentIdx={activeAgentIdx}
@@ -953,25 +393,8 @@ export default function Game() {
           mentions={mentionMessages}
           toolCallState={toolCallState}
           onSaveGameState={saveGameState}
-        />
+        />}
 
-        {phase === 'agent_debate' && debateConvergence && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            style={{
-              position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)',
-              padding: '4px 14px', background: 'rgba(10,10,15,0.6)', borderRadius: '14px',
-              border: '1px solid #C8A85030', zIndex: 25,
-            }}
-          >
-            <span style={{ color: debateConvergence.converged ? '#80C8A8' : '#F0D890', fontSize: '11px', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.15em' }}>
-              {debateConvergence.converged
-                ? `第${debateRound}轮已收敛 · ${debateConvergence.reason === 'consensus' ? '共识达成' : '循环停止'}`
-                : `第${debateRound}轮 · 共识度 ${(debateConvergence.consensusScore ?? 0.5).toFixed(2)}`}
-            </span>
-          </motion.div>
-        )}
 
         <ChoiceHud
           phase={phase}
@@ -1139,243 +562,6 @@ export default function Game() {
           )}
         </AnimatePresence>
 
-        <AnimatePresence>
-          {shouldShowInteractionDock({ phase, awaitingUser, awaitingAnswers }) && (
-            <motion.div
-              className="sandbox-interaction-dock absolute z-[60] flex flex-col items-center"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 16 }}
-              transition={{ duration: 0.6, ease: 'easeOut' }}
-            >
-              {phase === 'clarify_loop' && (() => {
-                const clarificationQuestion = currentClarificationQuestion(awaitingAnswers, yanQuestionRounds);
-                return (
-                  <motion.div
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    style={{
-                      width: '100%',
-                      marginBottom: '16px',
-                      padding: '16px 20px',
-                      background: 'rgba(232, 198, 112, 0.06)',
-                      border: '1px solid rgba(232, 198, 112, 0.35)',
-                      borderRadius: '4px',
-                      boxShadow: '0 0 20px rgba(232, 198, 112, 0.15)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{
-                          width: '28px', height: '28px',
-                          borderRadius: '50%',
-                          background: 'radial-gradient(circle at 30% 30%, #FFE89A, #E8C670)',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          color: '#231A10', fontWeight: 700, fontSize: '13px',
-                          fontFamily: '"Ma Shan Zheng", serif',
-                          boxShadow: '0 0 12px #FFE89A80',
-                        }}>演</div>
-                        <span style={{ color: '#E8C670', fontSize: '13px', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.15em' }}>
-                          澄清追问
-                        </span>
-                      </div>
-                      <button
-                        onClick={handleSkipClarify}
-                        style={{
-                          fontSize: '10px',
-                          color: '#F0EBDD',
-                          opacity: 0.65,
-                          background: 'transparent',
-                          border: '1px solid rgba(240, 235, 221, 0.3)',
-                          borderRadius: '3px',
-                          padding: '4px 10px',
-                          cursor: 'pointer',
-                          fontFamily: '"Noto Serif SC", serif',
-                          letterSpacing: '0.1em',
-                        }}
-                      >跳过 · 直接召唤智囊</button>
-                      </div>
-                    <div style={{
-                      color: '#F0EBDD',
-                      fontSize: '13px',
-                      fontFamily: '"Noto Serif SC", serif',
-                      lineHeight: 1.9,
-                      letterSpacing: '0.06em',
-                    }}>
-                      {clarificationQuestion || '正在斟酌提问...'}
-                    </div>
-                  </motion.div>
-                );
-              })()}
-
-              {(phase === 'clarify_loop' || phase === 'yan_analyze' || phase === 'agent_debate') && (
-                <div className="w-full mb-2 flex items-center gap-2">
-                  <textarea
-                    value={currentResponse}
-                    onChange={(e) => setCurrentResponse(e.target.value.slice(0, 200))}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        if (e.nativeEvent.isComposing) return;
-                        e.preventDefault();
-                        handleUserAdvance();
-                      }
-                    }}
-                    placeholder={
-                      phase === 'clarify_loop' ? '在此回答演的澄清问题...（ENTER 提交，最多200字）' :
-                      phase === 'yan_analyze' ? '回答演的问题，帮助智囊团更好分析...' :
-                      '可以补充信息,也可留空直接翻牌'
-                    }
-                    rows={2}
-                    style={{
-                      flex: 1,
-                      maxHeight: '18vh',
-                      minHeight: '38px',
-                      overflowY: 'auto',
-                      padding: '8px 12px',
-                      background: 'rgba(8,8,12,0.7)',
-                      backdropFilter: 'blur(8px)',
-                      color: '#F0EBDD',
-                      fontSize: '11px',
-                      fontFamily: '"Noto Serif SC", serif',
-                      border: `1px solid ${BORDER_COLOR}40`,
-                      outline: 'none',
-                      letterSpacing: '0.05em',
-                      lineHeight: 1.7,
-                      resize: 'none',
-                      scrollbarWidth: 'thin',
-                      scrollbarColor: 'var(--gold-deep, #C8A850) transparent',
-                    }}
-                  />
-                </div>
-              )}
-
-              {/* B5: agent_debate 阶段体验优化：自动播放 + 跳过到总结 */}
-              {phase === 'agent_debate' && (
-                <div style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  marginBottom: '10px', width: '100%', maxWidth: '440px',
-                  gap: '8px',
-                }}>
-                  {/* 左：自动播放开关 */}
-                  <label
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: '6px',
-                      cursor: 'pointer', userSelect: 'none',
-                      fontSize: '11px', letterSpacing: '0.1em',
-                      color: debateAutoPlay ? GLOW_COLOR : '#888',
-                      fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
-                      padding: '6px 10px',
-                      border: `1px solid ${debateAutoPlay ? `${BORDER_COLOR}80` : '#3A3530'}`,
-                      borderRadius: '4px',
-                      background: debateAutoPlay ? `${GLOW_COLOR}10` : 'rgba(60,55,50,0.4)',
-                      transition: 'all 0.3s ease',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={debateAutoPlay}
-                      onChange={(e) => setDebateAutoPlay(e.target.checked)}
-                      style={{
-                        accentColor: GLOW_COLOR,
-                        width: '13px', height: '13px',
-                        cursor: 'pointer',
-                      }}
-                    />
-                    {debateAutoPlay ? '⏵ 自动播放中（自动下一位）' : '⏸ 自动播放（手滑救星）'}
-                  </label>
-
-                  {/* 右：跳过到总结按钮（人多了说不过来） */}
-                  <button
-                    onClick={handleSkipToSummary}
-                    style={{
-                      padding: '6px 12px',
-                      background: 'rgba(138, 57, 37, 0.2)',
-                      color: '#E8A888',
-                      fontSize: '11px',
-                      fontFamily: '"Ma Shan Zheng", serif',
-                      letterSpacing: '0.2em',
-                      border: '1px solid #8A392580',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'all 0.3s ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'rgba(138, 57, 37, 0.4)';
-                      e.currentTarget.style.boxShadow = '0 0 16px rgba(138, 57, 37, 0.5)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'rgba(138, 57, 37, 0.2)';
-                      e.currentTarget.style.boxShadow = 'none';
-                    }}
-                  >
-                    ⏭ 跳过至·演总结
-                  </button>
-                </div>
-              )}
-
-              <button
-                onClick={phase === 'summary' ? handleShowChoices : handleUserAdvance}
-                style={{
-                  padding: '12px 36px',
-                  background: 'rgba(8,8,12,0.85)',
-                  backdropFilter: 'blur(10px)',
-                  color: GLOW_COLOR,
-                  fontSize: '13px',
-                  fontFamily: '"Ma Shan Zheng", serif',
-                  letterSpacing: '0.3em',
-                  border: `1px solid ${BORDER_COLOR}`,
-                  cursor: 'pointer',
-                  boxShadow: `0 0 24px ${GLOW_COLOR}40`,
-                  transition: 'all 0.3s ease',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.boxShadow = `0 0 32px ${GLOW_COLOR}80`;
-                  e.currentTarget.style.background = 'rgba(8,8,12,0.95)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.boxShadow = `0 0 24px ${GLOW_COLOR}40`;
-                  e.currentTarget.style.background = 'rgba(8,8,12,0.85)';
-                }}
-              >
-                {
-                  phase === 'clarify_loop' ? '继续回答 · 或点跳过召智囊' :
-                  phase === 'yan_analyze' ? '召唤智囊' :
-                  phase === 'summary' ? '看分岔 · 抉择' :
-                  (activeAgentIdx < activeAgents.filter(a => a.role !== 'master').length - 1 ? '下一位发言' : '请演总结')
-                }
-                <span style={{ marginLeft: '12px', opacity: 0.6, fontSize: '11px' }}>·  ENTER</span>
-              </button>
-
-              {phase === 'agent_debate' && debateConvergence && !debateConvergence.converged && debateRound < 3 && activeAgentIdx >= activeAgents.filter(a => a.role !== 'master').length - 1 && (
-                <motion.button
-                  initial={{ opacity: 0, y: -6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.4, duration: 0.5 }}
-                  onClick={handleRunAnotherRound}
-                  style={{
-                    marginTop: '12px',
-                    padding: '6px 18px',
-                    background: 'transparent',
-                    color: '#F0D890',
-                    fontSize: '11px',
-                    fontFamily: '"Ma Shan Zheng", serif',
-                    letterSpacing: '0.25em',
-                    border: `1px solid ${BORDER_COLOR}60`,
-                    borderRadius: '2px',
-                    cursor: 'pointer',
-                    opacity: 0.85,
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.borderColor = GLOW_COLOR; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.85'; e.currentTarget.style.borderColor = `${BORDER_COLOR}60`; }}
-                  title={`共识度 ${(debateConvergence.consensusScore ?? 0.5).toFixed(2)}，可让智囊再深入辩一轮`}
-                >
-                  ⟳ 再辩一轮 · 第 {debateRound + 1} 轮
-                </motion.button>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         <AnimatePresence>
           {(phase === 'path_reveal' || (phase === 'final' && fateContent)) && selectedChoice && (
@@ -1504,13 +690,11 @@ export default function Game() {
                     transition={{ duration: 0.7, ease: 'easeOut' }}
                     className="flex flex-col items-center gap-5"
                   >
-                    <GuaMirror
-                      size={210}
-                      name={oracleResult.gua || '大有'}
-                      symbol={oracleResult.trigram || '☰'}
-                      trigram={oracleResult.trigram || '☰'}
-                      wuxing={oracleResult.element}
-                    />
+                    <div className="oracle-result-mark" aria-label={`${oracleResult.gua || '本'}卦`}>
+                      <span>{oracleResult.trigram || '☰'}</span>
+                      <strong>{oracleResult.gua || '本'}卦</strong>
+                      {oracleResult.element && <small>{oracleResult.element}</small>}
+                    </div>
                     <motion.button
                       whileHover={{ y: -2, boxShadow: `0 0 26px ${GLOW_COLOR}AA, 0 0 8px ${GLOW_COLOR}` }}
                       whileTap={{ scale: 0.96 }}

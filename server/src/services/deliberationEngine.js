@@ -824,8 +824,49 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
     return {
       sessionId,
       state: 'CLARIFY',
+      clarifyRequired: true,
       askUser: reactResult.askUser,
       findings: session.findings,
+    };
+  }
+
+  if (reactResult.state === 'PAUSED' || reactResult.state === 'READY') {
+    const command = reactResult.command || {};
+    const correctedContext = reactResult.state === 'READY'
+      ? `${reactState.questionContext}\n用户纠正：${command.content || ''}`.trim()
+      : reactState.questionContext;
+    const plan = {
+      ...(session.plan || {}),
+      ...(reactResult.state === 'READY' && session.plan?.caseFile
+        ? { caseFile: { ...session.plan.caseFile, confirmedByUser: false } }
+        : {}),
+    };
+    const completeExecute = dependencies.completeExecuteFn || memoryService.completeExecute;
+    await completeExecute(sessionId, {
+      actionId: executionCtx.actionId,
+      claimToken: executionCtx.claimToken,
+      state: reactResult.state,
+      patch: {
+        question_context: correctedContext,
+        findings: session.findings,
+        tool_results: session.tool_results,
+        plan,
+      },
+    });
+    await emit(sessionId, {
+      type: 'STATE_CHANGE',
+      data: { from: 'DELIBERATE', to: reactResult.state, reason: command.command_type || 'user_interjection' },
+      actor: 'yan',
+      correlationId: actionId,
+      visibility: 'public',
+    });
+    return {
+      sessionId,
+      state: reactResult.state,
+      findings: session.findings,
+      interruption: { commandType: command.command_type, content: command.content },
+      caseConfirmationRequired: reactResult.state === 'READY',
+      caseFile: plan.caseFile || null,
     };
   }
 
@@ -955,6 +996,13 @@ export async function runExecuteClaimLifecycle(session, agentIds, executionCtx =
 
 export async function execute(sessionId, agentIds, executionCtx = {}, dependencies = {}) {
   const session = await assertSessionOwner(sessionId, executionCtx.userId);
+  if (session.state === STATES.PAUSED) {
+    return normalizeExecuteResponse({
+      ...buildResponseFromSession(session),
+      state: STATES.PAUSED,
+      reason: '推演已由用户暂停',
+    });
+  }
   const persistedPlan = session.cognitive_plan ?? session.cognitivePlan ?? null;
   const persistedReview = session.lens_review ?? session.lensReview ?? persistedPlan?.review ?? null;
   if (session.state === STATES.ORACLE && persistedReview?.started === true) {

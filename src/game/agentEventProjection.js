@@ -28,6 +28,11 @@ function activityFor(event) {
     CASE_DRAFTED: ['案卷已形成', `${payload.factCount || 0} 项事实、${payload.unknownCount || 0} 项未知，等待你确认`],
     MEMORY_RECALLED: ['发现相关历史信息', `${payload.count || 0} 条记忆待你决定是否用于本轮`],
     CASE_CONFIRMED: ['案卷已确认', `${payload.factCount || 0} 项事实已封存，开始推演`],
+    USER_INTERJECTED: [
+      payload.commandType === 'CORRECTION' ? '你纠正了案卷' : payload.commandType === 'QUESTION' ? '你追问了智囊' : payload.commandType === 'PAUSE' ? '你要求暂停' : '你补充了事实',
+      payload.content || '指令已进入推演队列',
+    ],
+    USER_CONTEXT_APPLIED: ['Agent 已读入你的补充', payload.content || '推演上下文已更新'],
     AGENT_ASSIGNED: [`${payload.agentName || '智囊'}加入推演`, payload.reason || payload.perspective || '已分配负责事项'],
     AGENT_STARTED: [`${payload.agentName || '智囊'}开始处理`, payload.taskLabel || payload.taskId || '正在执行任务'],
     AGENT_COMPLETED: [`${payload.agentName || '智囊'}完成任务`, payload.summary || payload.finding || '贡献已写入案卷'],

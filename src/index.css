@@ -9,34 +9,21 @@
   min-height: 44px;
 }
 
-.sandbox-interaction-dock {
-  left: 50%;
-  bottom: 92px;
-  width: min(640px, calc(100vw - 40px));
-  translate: -50% 0;
+.oracle-result-mark {
+  width: 168px;
+  aspect-ratio: 1;
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  text-align: center;
+  border: 1px solid rgb(213 177 88 / 48%);
+  border-radius: 50%;
+  color: #efd47d;
+  background: rgb(11 9 8 / 92%);
 }
-
-@media (min-width: 768px) and (max-width: 1024px) and (orientation: landscape) {
-  .sandbox-interaction-dock {
-    left: calc(50% + 160px);
-    width: min(560px, calc(100vw - 360px));
-    bottom: 88px;
-  }
-}
-
-@media (min-width: 768px) and (max-width: 1024px) and (orientation: portrait) {
-  .sandbox-interaction-dock {
-    bottom: max(88px, calc(env(safe-area-inset-bottom) + 76px));
-    width: calc(100vw - 32px);
-  }
-}
-
-@media (max-width: 767px) {
-  .sandbox-interaction-dock {
-    bottom: max(84px, calc(env(safe-area-inset-bottom) + 72px));
-    width: calc(100vw - 24px);
-  }
-}
+.oracle-result-mark span { font-size: 42px; line-height: 1; }
+.oracle-result-mark strong { font-size: 15px; letter-spacing: .18em; }
+.oracle-result-mark small { color: #958a76; font-size: 10px; }
 
 /* Reset & Base */
 *, *::before, *::after {

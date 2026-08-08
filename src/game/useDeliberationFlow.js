@@ -5,11 +5,13 @@ import {
   answerDeliberation,
   confirmCaseDeliberation,
   executeDeliberation,
+  interjectDeliberation,
   commitDeliberation,
   getMemories,
   getDeliberation,
   saveSnapshot,
   probeBackend,
+  resumeStream,
   setRunMode,
 } from '../services/deliberationClient';
 import { useDeliberationStream } from '../hooks/useDeliberationStream';
@@ -83,6 +85,7 @@ export function useDeliberationFlow(initialQuestion = "") {
   const [activeAgentIdx, setActiveAgentIdx] = useState(-1);
   const [awaitingUser, setAwaitingUser] = useState(false);
   const [currentResponse, setCurrentResponse] = useState('');
+  const [isPaused, setIsPaused] = useState(false);
   const [backendError, setBackendError] = useState(null);
   const [showQuestion, setShowQuestion] = useState(false);
   const [selectedChoice, setSelectedChoice] = useState(null);
@@ -420,6 +423,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     setShowHistoryPanel(false);
     setAwaitingUser(false);
     setCurrentResponse('');
+    setIsPaused(false);
     setInference(null);
     setDebateRound(1);
     setDebateConvergence(null);
@@ -612,10 +616,17 @@ export function useDeliberationFlow(initialQuestion = "") {
       setDeliberationFindings(result.findings);
       setDeliberationOracle(result.oracle);
       setInference((previous) => ({ ...(previous || {}), ...result }));
-      if (result.clarifyRequired) {
+      if (result.clarifyRequired || result.state === 'CLARIFY') {
         clarifyActiveRef.current = true;
         setAwaitingAnswers(result.askUser);
         setPhase(PHASE.CLARIFY);
+      } else if (result.state === 'READY') {
+        setPhase(PHASE.READY);
+        showFloatTip('你的纠正已收到，请重新确认案卷');
+      } else if (result.state === 'PAUSED') {
+        setIsPaused(true);
+        setAwaitingUser(true);
+        showFloatTip('推演已暂停，你可以继续补充后再开演');
       } else {
         const dynamicChoices = Array.isArray(result.dynamicChoices) ? result.dynamicChoices : [];
         setChoices(dynamicChoices);
@@ -631,9 +642,9 @@ export function useDeliberationFlow(initialQuestion = "") {
             },
           }));
         }
+        showFloatTip(null);
       }
       setAwaitingUser(true);
-      showFloatTip(null);
     } catch (e) {
       lastFailedActionRef.current = {
         type: 'execute',
@@ -646,6 +657,51 @@ export function useDeliberationFlow(initialQuestion = "") {
       setStreamError(e.message);
     }
   }, [deliberationSessionId, debateRound, selectedAgentIds, showFloatTip, plannedAgents, LOG]);
+
+  const handleInterject = useCallback(async (commandType = 'SUPPLEMENT') => {
+    if (!deliberationSessionId) return;
+    const content = String(currentResponse || '').trim();
+    if (commandType !== 'PAUSE' && !content) {
+      showFloatTip('先写下你要补充、纠正或追问的内容');
+      return;
+    }
+    try {
+      await interjectDeliberation(deliberationSessionId, { commandType, content });
+      if (commandType !== 'PAUSE') {
+        setAgentDialogues((previous) => ({
+          ...previous,
+          history: {
+            ...(previous.history || {}),
+            user: [...((previous.history || {}).user || []), content],
+          },
+        }));
+        setCurrentResponse('');
+      }
+      const message = {
+        SUPPLEMENT: '补充已进入推演上下文',
+        CORRECTION: '纠正已提交，Agent 将停下并重整案卷',
+        QUESTION: '追问已交给智囊团',
+        PAUSE: '暂停指令已提交',
+      }[commandType] || '已提交';
+      showFloatTip(message);
+    } catch (error) {
+      setBackendError(error.message || '提交失败');
+      showFloatTip('提交失败，请重试');
+    }
+  }, [currentResponse, deliberationSessionId, showFloatTip]);
+
+  const handleResume = useCallback(async () => {
+    if (!deliberationSessionId) return;
+    try {
+      const result = await resumeStream(deliberationSessionId);
+      if (result?.resumed || result?.state !== 'PAUSED') {
+        setIsPaused(false);
+        showFloatTip('推演已恢复，可以继续');
+      }
+    } catch (error) {
+      setBackendError(error.message || '恢复推演失败');
+    }
+  }, [deliberationSessionId, showFloatTip]);
 
   const handleCommitChoice = useCallback(async (choice, feedback = currentCommit) => {
     if (!deliberationSessionId || commitInFlightRef.current) return;
@@ -728,6 +784,7 @@ export function useDeliberationFlow(initialQuestion = "") {
         answer,
       })));
     }
+    if (phase === PHASE.DEBATE && String(currentResponse || '').trim()) return handleInterject('SUPPLEMENT');
     if (phase === PHASE.SUMMONING || phase === PHASE.DEBATE) return handleExecuteDebate();
     if (phase === PHASE.CHOICE) return handleShowChoices();
     if (phase === PHASE.REVEAL && fateRevealed && selectedChoice) {
@@ -745,6 +802,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     handleStart,
     handleSubmitAnswers,
     handleExecuteDebate,
+    handleInterject,
     handleShowChoices,
     showFloatTip,
   ]);
@@ -879,6 +937,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     activeAgentIdx,
     awaitingUser,
     currentResponse,
+    isPaused,
     backendError,
     showQuestion,
     selectedChoice,
@@ -949,6 +1008,8 @@ export function useDeliberationFlow(initialQuestion = "") {
     handleSaveToCollection,
     handleRejectRetry,
     handleExecuteDebate,
+    handleInterject,
+    handleResume,
     handleCommitChoice,
     handleAgentClick,
     handleShowChoices,

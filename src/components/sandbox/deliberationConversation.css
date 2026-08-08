@@ -1,0 +1,79 @@
+.deliberation-conversation {
+  position: fixed;
+  z-index: 60;
+  left: 50%;
+  top: max(86px, calc(env(safe-area-inset-top) + 62px));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  width: min(720px, calc(100vw - 32px));
+  translate: -50% 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgb(213 177 88 / 34%);
+  background: rgb(10 8 7 / 94%);
+  color: #eee5d2;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 42%);
+}
+
+.deliberation-conversation > header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgb(213 177 88 / 18%);
+}
+
+.deliberation-conversation header span:last-child,
+.deliberation-conversation__process summary span:first-child {
+  min-width: 0;
+  display: grid;
+}
+
+.deliberation-conversation header strong { font-size: 14px; letter-spacing: .12em; }
+.deliberation-conversation header small { color: #8f8676; font: 10px/1.5 "Noto Serif SC", serif; }
+.deliberation-conversation__seal { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid #d5b158; color: #efd47d; }
+
+.deliberation-conversation__thread {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 16px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.deliberation-conversation__message { max-width: 88%; padding: 11px 13px; border-left: 2px solid rgb(213 177 88 / 45%); background: rgb(255 255 255 / 3%); }
+.deliberation-conversation__message.is-user { margin-left: auto; border-left: 0; border-right: 2px solid rgb(213 177 88 / 45%); }
+.deliberation-conversation__message.is-agent { background: rgb(213 177 88 / 8%); }
+.deliberation-conversation__message span,.deliberation-conversation__message small { color: #9b907d; font: 10px/1.5 "Noto Serif SC", serif; }
+.deliberation-conversation__message p { margin-top: 4px; color: #eee5d2; font: 13px/1.75 "Noto Serif SC", serif; white-space: pre-wrap; }
+
+.deliberation-conversation__process { border-top: 1px solid rgb(213 177 88 / 18%); }
+.deliberation-conversation__process summary { min-height: 48px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; }
+.deliberation-conversation__process summary::-webkit-details-marker { display: none; }
+.deliberation-conversation__process summary strong { color: #d8c58c; font-size: 11px; }
+.deliberation-conversation__process summary small,.deliberation-conversation__process summary > span:last-child { color: #857c6e; font: 9px/1.5 "Noto Serif SC", serif; }
+.deliberation-conversation__process ol { max-height: 150px; overflow-y: auto; padding: 0 16px 12px 34px; }
+.deliberation-conversation__process li { padding: 4px 0; color: #9b907d; font: 10px/1.55 "Noto Serif SC", serif; }
+.deliberation-conversation__process li strong { display: block; color: #cfc2aa; }
+
+.deliberation-conversation__composer { padding: 12px 16px 16px; border-top: 1px solid rgb(213 177 88 / 18%); background: #0b0908; }
+.deliberation-conversation__modes { display: flex; gap: 6px; margin-bottom: 8px; overflow-x: auto; }
+.deliberation-conversation__modes button,.deliberation-conversation__actions button { min-height: 44px; border: 1px solid rgb(213 177 88 / 28%); background: transparent; color: #a99d87; padding: 0 13px; cursor: pointer; white-space: nowrap; }
+.deliberation-conversation__modes button[aria-pressed="true"] { border-color: #d5b158; color: #efd47d; background: rgb(213 177 88 / 10%); }
+.deliberation-conversation textarea { display: block; width: 100%; min-height: 76px; max-height: 150px; resize: vertical; padding: 11px 12px; border: 1px solid rgb(213 177 88 / 28%); outline: none; background: #080706; color: #f1eadc; font: 12px/1.65 "Noto Serif SC", serif; }
+.deliberation-conversation textarea:focus { border-color: #d5b158; }
+.deliberation-conversation__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 9px; }
+.deliberation-conversation__actions .is-primary { border-color: #d5b158; background: #d5b158; color: #171009; }
+.deliberation-conversation__actions button:disabled { opacity: .35; cursor: not-allowed; }
+
+@media (max-width: 767px), (max-height: 700px) {
+  .deliberation-conversation { top: max(70px, calc(env(safe-area-inset-top) + 54px)); bottom: max(8px, env(safe-area-inset-bottom)); width: calc(100vw - 16px); }
+  .deliberation-conversation__thread { padding: 12px; }
+  .deliberation-conversation__message { max-width: 96%; }
+  .deliberation-conversation__composer { padding: 10px 12px 12px; }
+  .deliberation-conversation textarea { min-height: 64px; }
+  .deliberation-conversation__actions { justify-content: stretch; }
+  .deliberation-conversation__actions button { flex: 1; }
+}

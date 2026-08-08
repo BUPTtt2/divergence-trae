@@ -35,6 +35,7 @@ import * as deliberationEngine from '../services/deliberationEngine.js';
 import * as memoryService from '../services/memoryService.js';
 import * as customAdvisorService from '../services/customAdvisorService.js';
 import eventBus from '../services/eventBus.js';
+import { enqueueCommand } from '../services/deliberationCommandService.js';
 import {
   normalizeExecuteResponse,
   parseExecuteRequest,
@@ -46,7 +47,7 @@ const router = Router();
 const RESERVED_KEYWORDS = new Set([
   'health', 'start', 'memories', 'advisors',
   'plan', 'answer', 'execute', 'commit', 'pause', 'resume',
-  'snapshot', 'events', 'confirm-case',
+  'snapshot', 'events', 'confirm-case', 'interject',
 ]);
 
 function isReservedSegment(seg) {
@@ -322,6 +323,29 @@ router.post(
  * POST /api/deliberation/:sessionId/execute
  * 执行智囊推演
  */
+router.post(
+  '/:sessionId/interject',
+  requirePrincipal,
+  requireOwnedDeliberation,
+  asyncHandler(async (req, res, next) => {
+    const { sessionId } = req.params;
+    if (isReservedSegment(sessionId)) return next('route');
+    const command = await enqueueCommand(sessionId, req.principal.userId, req.body || {});
+    await eventBus.emit(sessionId, {
+      type: 'USER_INTERJECTED',
+      data: {
+        commandId: command.id,
+        commandType: command.command_type,
+        content: command.content,
+        targetAgentId: command.target_agent_id,
+      },
+      actor: req.principal.userId,
+      visibility: 'public',
+    });
+    res.status(202).json({ accepted: true, commandId: command.id, commandType: command.command_type });
+  }),
+);
+
 router.post(
   '/:sessionId/execute',
   requirePrincipal,

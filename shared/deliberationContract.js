@@ -3,6 +3,8 @@ export const DELIBERATION_EXECUTE_STATE = Object.freeze({
   REFLECT: 'REFLECT',
   ORACLE: 'ORACLE',
   FAILED: 'FAILED',
+  PAUSED: 'PAUSED',
+  READY: 'READY',
 });
 
 function nonEmptyString(value, field) {
@@ -59,5 +61,6 @@ export function normalizeExecuteResponse(input = {}) {
     caseConfirmationRequired: input.caseConfirmationRequired === true,
     caseFile: input.caseFile || null,
     askUser: Array.isArray(input.askUser) ? input.askUser : [],
+    interruption: input.interruption || null,
   };
 }

@@ -28,6 +28,7 @@ import logger from './logger.js';
 import eventBus from './eventBus.js';
 import { evidenceDomainEvent } from './agentEventSemantics.js';
 import * as memoryService from './memoryService.js';
+import { consumePendingCommands } from './deliberationCommandService.js';
 
 const MAX_ROUNDS = 4;
 const MAX_LLM_CALLS = 12;
@@ -218,6 +219,29 @@ function parseThinkAction(text) {
  * @param {object} state 推演状态（可变，会追加 findings/toolResults/dialogue）
  * @returns {Promise<object>} { state: 'REFLECT'|'CLARIFY', askUser?: [...] }
  */
+async function applyUserCommands(sessionId, state) {
+  const commands = await consumePendingCommands(sessionId, state.userId);
+  for (const command of commands) {
+    const type = command.command_type;
+    if (type === 'PAUSE') return { state: 'PAUSED', command };
+    if (type === 'CORRECTION') return { state: 'READY', command };
+
+    const prefix = type === 'QUESTION'
+      ? `用户向${command.target_agent_id || '智囊团'}追问`
+      : '用户补充事实';
+    state.questionContext = `${state.questionContext}\n${prefix}：${command.content}`.trim();
+    state.dialogue.push({ role: 'user', content: `${prefix}：${command.content}`, round: 0 });
+    await eventBus.emit(sessionId, {
+      type: 'USER_CONTEXT_APPLIED',
+      data: { commandId: command.id, commandType: type, content: command.content },
+      actor: state.userId,
+      correlationId: state.actionId,
+      visibility: 'public',
+    });
+  }
+  return null;
+}
+
 export async function runReActLoop(sessionId, state) {
   const startTime = Date.now();
   state.llmCallCount = state.llmCallCount || 0;
@@ -267,6 +291,8 @@ export async function runReActLoop(sessionId, state) {
   };
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const interruption = await applyUserCommands(sessionId, state);
+    if (interruption) return interruption;
     // 超时检查
     if (Date.now() - startTime > DELIBERATE_TIMEOUT_MS) {
       logger.warn('[ReAct] DELIBERATE 超时，强制 output', { sessionId, round, elapsed: Date.now() - startTime });
@@ -494,6 +520,8 @@ export async function runReActLoop(sessionId, state) {
                 data: { error: `智囊发言失败: ${failed[0].reason?.message || '未知'}` },
               });
             }
+            const interruption = await applyUserCommands(sessionId, state);
+            if (interruption) return interruption;
           }
           observation = `${agents.length}位智囊已发言`;
           break;

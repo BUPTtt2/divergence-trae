@@ -284,6 +284,21 @@ export async function executeDeliberation(sessionId, command) {
   return normalizeExecuteResponse(data);
 }
 
+export async function interjectDeliberation(sessionId, command = {}) {
+  const resp = await _deliberationFetch(`/api/deliberation/${sessionId}/interject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      commandType: String(command.commandType || 'SUPPLEMENT').toUpperCase(),
+      content: String(command.content || ''),
+      targetAgentId: command.targetAgentId || null,
+    }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `interject 失败: ${resp.status}`);
+  return data;
+}
+
 /**
  * 提交用户抉择 / 落卦
  * POST /api/deliberation/:sessionId/commit
