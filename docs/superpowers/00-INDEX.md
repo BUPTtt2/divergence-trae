@@ -7,7 +7,7 @@
 - 当前 `/sandbox` 不是生产级 Multi-Agent，用户主链仍是 `useGameFlow.js` 旧轨。
 - 目标是“东方仪式语言 + 可验证 Agent Runtime + 决策账本 + 结果校准”。
 - 不先增加新动画、智囊数量或外围页面。
-- 当前执行阶段：**06 卦象认知扰动器已完成代码与自动回归，等待真实 iPad 横竖屏验收后关闭阶段**。
+- 当前执行阶段：**06 卦象认知扰动器已完成代码、并发安全审查与 iPad 尺寸浏览器验收；真实 iPad Safari 留作现场终验**。
 
 ## 01 · 权威设计
 
@@ -23,7 +23,7 @@
 | 03 | Tool/Evidence Gateway | mock 不进入证据链，工具有权限、来源和时间 | 完成（2026-08-07） |
 | 04 | `/sandbox` 唯一 Agent 主链 | 后端 Session 驱动业务，旧轨只作为可回滚版本 | 完成（2026-08-07） |
 | 05 | Agent Event 与活推演阵 | 动画只消费真实事件，支持断线重放和减弱动画 | 完成（2026-08-07） |
-| 06 | 卦象认知扰动器 | 卦象改变审查角度，不改变事实或安全边界，并完成 iPad 横竖屏适配 | 自动验收完成，待真实 iPad 验收（2026-08-08） |
+| 06 | 卦象认知扰动器 | 卦象改变审查角度，不改变事实或安全边界，并完成 iPad 横竖屏适配 | 开发完成，待真实 iPad Safari 现场终验（2026-08-08） |
 | 07 | 决策账本与结果校准 | 3/7/30/90 天结果可回写并校准 Agent | 06 完成后设计 |
 | 08 | Agent Studio | Agent Contract 可测试、评估、发布和回滚 | 产品门槛通过后设计 |
 
@@ -120,3 +120,8 @@
 10. Fix round 1：真实 iPad 首轮发现父容器 `scrollLeft=30` 会把 absolute overlay 裁到 viewport 左侧之外；两个 iPad media 区间现改为 fixed，待重载复验。正式审查同时修复已保存 standard 覆盖系统 Reduce Motion 的问题，off 保持完全静态。
 11. iPad 复验跟进：fixed 坐标和 44px 触控尺寸已符合预期，但阶段层仍覆盖顶部动画按钮；iPad overlay 现使用 z-index 60，高于阶段内容 55 且低于错误提示 100，待真实点击复验后关闭。
 12. 刷新恢复修复：通用 auth middleware 已能验证服务端签发的 anonymous/registered access JWT，非法 Bearer 不再回退到自报身份；匿名用户持合法 refresh token 时不再跳过刷新。自动回归为 server 79/79、frontend 44/44，待真实刷新确认 Session ownership 保持。
+13. 真实 Agent 执行：Lens 任务经 AgentRunner 执行受控 JSON 结果；无模型或输出不合规时保持 pending，不伪造完成、证据或结论。Lens 来源、六爻形成、主卦/变卦、因果引用和待执行状态均进入前端信息卡。
+14. 多实例安全：execute 与 answer 均使用数据库 CAS lease 和 fencing token；旧 owner 不能覆盖接管者，失败可回滚、过期可接管，完整 execute/answer 投影在完成事件前原子落库。独立复审连续发现并关闭中间写入、事件顺序、并发 answer 与崩溃窗口。
+15. 最终自动验证：服务端 122/122、前端 47/47、production build 通过；64 项文王卦序、双实例竞争、stale owner、持久化失败和 answer 崩溃恢复均有回归测试。
+16. iPad 尺寸浏览器验收：768×1024 为 x=16/right=752 的 fixed 单列，1024×768 为 320px 受限侧栏；两者 `document.scrollWidth === viewport width`、纵向独立滚动、可见按钮均不小于 44px。standard/reduced/off 可点击，系统 Reduce Motion 生效，完整规则降级推演与刷新恢复成功。
+17. 终验边界：以上为桌面浏览器的 iPad 尺寸与 reduced-motion 仿真，不替代真实 iPad Safari 对动态安全区、软键盘和现场网络的最终检查；未执行生产部署。
