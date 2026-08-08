@@ -24,6 +24,7 @@
 
 import logger from './logger.js';
 import { callLLM } from './llmRouter.js';
+import * as agentEngine from './agentEngine.js';
 import {
   createCognitivePerturbationPlan,
 } from './cognitivePerturbationService.js';
@@ -526,12 +527,89 @@ function buildControlledBusinessChoices(question) {
   ];
 }
 
-function disabledCognitivePlan(error) {
+const EVIDENCE_CHOICE_PALETTE = Object.freeze([
+  { color: '#E8B880', icon: '◇' },
+  { color: '#A8C0E8', icon: '□' },
+  { color: '#80C8A8', icon: '△' },
+]);
+const UNSAFE_CHOICE_TEXT = /(?:\b(?:lens|lens-task|prompt)\b|卦象|卦辞|乾卦|坤卦|吉|凶|可进|宜止|命运|马上签约|立即执行|建议推进|建议停止)/i;
+
+function normalizeBusinessText(value, maxLength) {
+  const normalized = String(value || '')
+    .normalize('NFC')
+    .replace(/\p{Cc}|[<>]/gu, ' ')
+    .replace(/[^\p{L}\p{N}\s，。！？、；：,.!?·（）()《》“”'"—\-/%]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+  return normalized && !UNSAFE_CHOICE_TEXT.test(normalized) ? normalized : '';
+}
+
+function preLensDialogue(findings) {
+  const dialogueHistory = {};
+  const agentIds = [];
+  for (const finding of Array.isArray(findings) ? findings : []) {
+    if (!finding || finding.lensTaskId || finding.source === 'lens-review') continue;
+    const agentId = String(finding.agentId || '').trim();
+    const content = String(finding.content || '').trim();
+    if (!agentId || !content) continue;
+    if (!dialogueHistory[agentId]) {
+      dialogueHistory[agentId] = [];
+      agentIds.push(agentId);
+    }
+    dialogueHistory[agentId].push(content);
+  }
+  return { agentIds, dialogueHistory };
+}
+
+function normalizeEvidenceDerivedSummary(generated) {
+  const summary = normalizeBusinessText(generated?.summary, 360);
+  if (!summary || !Array.isArray(generated?.options) || generated.options.length === 0) return null;
+  const choices = [];
+  for (const [index, option] of generated.options.slice(0, 3).entries()) {
+    const label = normalizeBusinessText(option?.label, 24);
+    const rawKeyPoints = (Array.isArray(option?.keyPoints) ? option.keyPoints : []).slice(0, 3);
+    const keyPoints = rawKeyPoints.map((point) => normalizeBusinessText(point, 90));
+    if (!label || keyPoints.length === 0 || keyPoints.some((point) => !point)) return null;
+    const palette = EVIDENCE_CHOICE_PALETTE[index];
+    choices.push({
+      id: `business_evidence_${index + 1}`,
+      label,
+      color: palette.color,
+      glowColor: palette.color,
+      icon: palette.icon,
+      gua: '',
+      keyPoints,
+      provenance: 'evidence-derived',
+      generatedAdvice: null,
+      isDynamic: true,
+    });
+  }
+  return choices.length > 0 ? { summary, choices } : null;
+}
+
+async function buildBusinessDecisionProjection(session, findings, generateMasterSummaryFn) {
+  const question = session?.questionContext || session?.question_context || session?.question || '';
+  const { agentIds, dialogueHistory } = preLensDialogue(findings);
+  try {
+    const generated = await generateMasterSummaryFn(question, agentIds, dialogueHistory);
+    const normalized = normalizeEvidenceDerivedSummary(generated);
+    if (normalized) return normalized;
+  } catch (error) {
+    logger.warn('[Reflector] Agent 总结失败，使用受控业务回退', { sessionId: session?.id, error: error.message });
+  }
+  const topic = deriveBusinessTopic(session?.question || '');
+  return {
+    choices: buildControlledBusinessChoices(session?.question || ''),
+    summary: `围绕“${topic.label}”形成三条可提交业务路径；审查镜头不构成裁决，最终路径由你确认。`,
+  };
+}
+
+function disabledCognitivePlan() {
   return {
     status: 'disabled',
     reason: 'lens-unavailable',
     message: '本轮未进行认知扰动',
-    detail: String(error?.message || 'unknown').slice(0, 120),
     reviewTasks: [],
     invariants: { ...LOCKED_INVARIANTS },
   };
@@ -634,7 +712,7 @@ export async function reflect(session, dependencies = {}) {
       });
     } catch (error) {
       logger.warn('[Reflector] Lens 失败，不阻断基础推演', { sessionId: session?.id, error: error.message });
-      cognitivePlan = disabledCognitivePlan(error);
+      cognitivePlan = disabledCognitivePlan();
     }
   }
 
@@ -644,10 +722,13 @@ export async function reflect(session, dependencies = {}) {
     dependencies.reviewLensTimeoutMs,
   );
 
-  // Lens 任务和用户最终选择保持分离；业务选项只使用原问题中的受控主题。
-  const businessTopic = deriveBusinessTopic(session?.question || '');
-  const dynamicChoices = buildControlledBusinessChoices(session?.question || '');
-  const masterSummaryText = `围绕“${businessTopic.label}”形成三条可提交业务路径；审查镜头不构成裁决，最终路径由你确认。`;
+  const businessDecision = await buildBusinessDecisionProjection(
+    session,
+    findings,
+    dependencies.generateMasterSummaryFn || agentEngine.generateMasterSummary,
+  );
+  const dynamicChoices = businessDecision.choices;
+  const masterSummaryText = businessDecision.summary;
 
   session.oracle = oracle;
   session.cognitivePlan = cognitivePlan;

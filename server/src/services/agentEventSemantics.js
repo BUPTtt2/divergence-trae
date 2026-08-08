@@ -52,6 +52,36 @@ function normalizeCausalReferences(sources) {
     .map((source) => `ref_${createHash('sha256').update(source).digest('hex').slice(0, 20)}`))];
 }
 
+const TRIGRAM_NAMES = new Set(['乾', '坤', '震', '巽', '坎', '离', '艮', '兑', '?']);
+const KNOWLEDGE_STATES = new Set(['verified', 'unknown', 'contested']);
+
+function normalizeLensFormation(formation) {
+  if (!formation || !Array.isArray(formation.lines) || formation.lines.length !== 6) return null;
+  const trigramPair = (value) => {
+    const lowerTrigram = TRIGRAM_NAMES.has(value?.lowerTrigram) ? value.lowerTrigram : '?';
+    const upperTrigram = TRIGRAM_NAMES.has(value?.upperTrigram) ? value.upperTrigram : '?';
+    return { lowerTrigram, upperTrigram };
+  };
+  const lines = formation.lines.map((line, index) => ({
+    position: index + 1,
+    yinYang: line?.yinYang === 'yang' ? 'yang' : 'yin',
+    knowledgeState: KNOWLEDGE_STATES.has(line?.knowledgeState) ? line.knowledgeState : 'unknown',
+    perspective: normalizeTargetPerspective(line?.perspective),
+    dynamic: line?.dynamic === true,
+  }));
+  return {
+    primary: trigramPair(formation.primary),
+    changed: trigramPair(formation.changed),
+    lines,
+  };
+}
+
+function isExecutedNoChange(impact) {
+  return impact?.outcome === 'no-change'
+    && /^lens-execution-[a-z0-9_-]{8,80}$/i.test(String(impact.executionId || ''))
+    && /^[a-z0-9_-]{1,64}$/i.test(String(impact.agentId || ''));
+}
+
 function lensDomainEvents(result = {}) {
   const plan = result.cognitivePlan;
   if (!Number.isInteger(plan?.lensId) || plan.lensId < 1 || plan.lensId > 64) return [];
@@ -63,18 +93,21 @@ function lensDomainEvents(result = {}) {
     ? result.findings
     : (Array.isArray(result.session?.findings) ? result.session.findings : []);
   const completedImpacts = impacts.filter((impact) => (
-    Array.isArray(impact.findingIds) && impact.findingIds.some((findingId) => findings.some((finding) => (
+    isExecutedNoChange(impact)
+    || (Array.isArray(impact.findingIds) && impact.findingIds.some((findingId) => findings.some((finding) => (
       finding?.id === findingId
       && finding?.lensTaskId === impact.taskId
       && finding?.lensId === plan.lensId
-    )))
+    ))))
   ));
+  const formation = normalizeLensFormation(plan.formation);
   const events = [descriptor('LENS_SELECTED', {
     lensId: plan.lensId,
     lensName: typeof plan.lensName === 'string' ? plan.lensName : '',
     source: 'session-derived',
     sourceDigest: typeof plan.sourceDigest === 'string' ? plan.sourceDigest : '',
     invariants: lensInvariants(plan.invariants),
+    ...(formation ? { formation } : {}),
   }, 'summary')];
 
   for (const task of tasks) {
@@ -100,6 +133,10 @@ function lensDomainEvents(result = {}) {
         ? impact.findingIds.filter((findingId) => typeof findingId === 'string')
         : [],
       summary: typeof impact.summary === 'string' ? impact.summary : '',
+      ...(isExecutedNoChange(impact) ? {
+        executionId: impact.executionId,
+        agentId: impact.agentId,
+      } : {}),
     }));
   }
 

@@ -37,14 +37,49 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function semanticCollection(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => item)
+    .sort((left, right) => {
+      const leftSerialized = stableSerialize(left);
+      const rightSerialized = stableSerialize(right);
+      if (leftSerialized === rightSerialized) return 0;
+      return leftSerialized < rightSerialized ? -1 : 1;
+    });
+}
+
 function normalizedInput({ oracle, findings, conflicts, gaps, dimensions, sessionSeed } = {}) {
   return {
     oracle: oracle || null,
-    findings: Array.isArray(findings) ? findings : [],
-    conflicts: Array.isArray(conflicts) ? conflicts : [],
-    gaps: Array.isArray(gaps) ? gaps : [],
-    dimensions: Array.isArray(dimensions) ? dimensions : [],
+    findings: semanticCollection(findings),
+    conflicts: semanticCollection(conflicts),
+    gaps: semanticCollection(gaps),
+    dimensions: semanticCollection(dimensions),
     sessionSeed: sessionSeed ?? null,
+  };
+}
+
+function createFormation(oracle) {
+  if (!Array.isArray(oracle?.lineMeta) || oracle.lineMeta.length !== 6) return null;
+  const trigramNames = new Set(['乾', '坤', '震', '巽', '坎', '离', '艮', '兑']);
+  const trigramPair = (hexagram) => ({
+    lowerTrigram: trigramNames.has(hexagram?.lower?.name) ? hexagram.lower.name : '?',
+    upperTrigram: trigramNames.has(hexagram?.upper?.name) ? hexagram.upper.name : '?',
+  });
+  return {
+    primary: trigramPair(oracle.primary),
+    changed: trigramPair(oracle.changed),
+    lines: oracle.lineMeta.map((line, index) => ({
+      position: index + 1,
+      yinYang: line?.isYang === true ? 'yang' : 'yin',
+      knowledgeState: ['verified', 'unknown', 'contested'].includes(line?.knowledgeState)
+        ? line.knowledgeState
+        : 'unknown',
+      perspective: /^[a-z0-9_-]{1,64}$/i.test(String(line?.perspective || ''))
+        ? String(line.perspective).toLowerCase()
+        : 'unspecified',
+      dynamic: line?.isDynamic === true,
+    })),
   };
 }
 
@@ -91,6 +126,7 @@ export function createCognitivePerturbationPlan(input = {}) {
   const sourceDigest = sha256(stableSerialize(normalized));
   const lensId = selectLensId(normalized.oracle, sourceDigest);
   const lens = HEXAGRAM_LENSES[lensId - 1];
+  const formation = createFormation(normalized.oracle);
   const reviewTasks = [];
   const add = (kind, field, causedBy, targetPerspective) => {
     if (reviewTasks.length >= 3 || causedBy.length === 0) return;
@@ -137,6 +173,7 @@ export function createCognitivePerturbationPlan(input = {}) {
     lensName: lens.name,
     source: 'session-derived',
     sourceDigest,
+    ...(formation ? { formation } : {}),
     reviewTasks,
     invariants: { ...INVARIANTS },
   };
@@ -211,6 +248,30 @@ function stableTaskActionId(baseActionId, sessionId, taskId) {
   return `${root}:lens:${taskId}`;
 }
 
+function stableExecutionId(sessionId, lensId, taskId, agentId) {
+  return `lens-execution-${sha256(`${sessionId}|${lensId}|${taskId}|${agentId}`).slice(0, 20)}`;
+}
+
+const LENS_OUTCOMES = new Set(['claim-challenged', 'exit-condition-added', 'no-change']);
+const UNSAFE_LENS_SUMMARY = /(?:\b(?:lens|prompt)\b|卦象|卦辞|吉|凶|可进|宜止|命运|立即执行|马上签约|建议推进|建议停止)/i;
+const REFUSAL_LENS_SUMMARY = /(?:\b(?:i cannot|i can't|unable to comply|i refuse|sorry)\b|无法(?:完成|执行|遵循)(?:这项|该项|本次)?审查|不能提供|拒绝(?:执行|回答)|抱歉)/i;
+
+function parseLensReviewResult(raw) {
+  if (typeof raw !== 'string' || raw.length > 500) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (Object.keys(parsed).sort().join(',') !== 'outcome,summary') return null;
+  if (!LENS_OUTCOMES.has(parsed.outcome) || typeof parsed.summary !== 'string') return null;
+  const summary = String(parsed.summary || '').normalize('NFC').replace(/\p{Cc}/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!summary || summary.length > 300 || UNSAFE_LENS_SUMMARY.test(summary) || REFUSAL_LENS_SUMMARY.test(summary)) return null;
+  return { outcome: parsed.outcome, summary };
+}
+
 class LensAdvisorAdapter extends BaseAgent {
   constructor(advisor, task, callLLMFn) {
     super({ id: advisor.id, name: advisor.name, role: 'advisor', timeoutMs: 12000, retries: 0 });
@@ -224,7 +285,7 @@ class LensAdvisorAdapter extends BaseAgent {
     const messages = [
       {
         role: 'system',
-        content: `${this.advisor.persona || this.advisor.identity || this.advisor.name}\n你正在执行认知扰动审查。只输出一条待核验的 claim challenge 或退出条件；不得声称获得新证据，不得改变风险、审批、用户选择或给出行动裁决。`,
+        content: `${this.advisor.persona || this.advisor.identity || this.advisor.name}\n你正在执行认知扰动审查。只返回严格 JSON：{"outcome":"claim-challenged|exit-condition-added|no-change","summary":"不超过300字的中性审查摘要"}。不得增加字段，不得声称获得新证据，不得改变风险、审批、用户选择或给出行动裁决。`,
       },
       {
         role: 'user',
@@ -245,22 +306,21 @@ class LensAdvisorAdapter extends BaseAgent {
       signal: ctx.signal,
     });
     if (ctx.signal?.aborted) throw new Error('Lens advisor aborted');
-    const normalized = String(text || '').trim().slice(0, 800);
-    if (!normalized) throw new Error('Lens advisor unavailable');
-    return { text: normalized };
+    const review = parseLensReviewResult(text);
+    if (!review) throw new Error('Lens advisor returned invalid controlled result');
+    return { review };
   }
 }
 
-function impactForFinding(plan, task, finding) {
-  const outcome = task.kind === 'exit-condition' ? 'exit-condition-added' : 'claim-challenged';
+function impactForExecution(plan, task, review, executionId, agentId, findingId = null) {
   return {
     taskId: task.id,
     lensId: plan.lensId,
-    outcome,
-    findingIds: [finding.id],
-    summary: outcome === 'exit-condition-added'
-      ? '新增一条待核验的退出条件。'
-      : '新增一条待核验的主张挑战。',
+    outcome: review.outcome,
+    findingIds: findingId ? [findingId] : [],
+    summary: review.summary,
+    executionId,
+    agentId,
   };
 }
 
@@ -286,8 +346,11 @@ export async function executeLensReviewTasks({ session, plan, actionId } = {}, d
     const existingFinding = findings.find((finding) => (
       finding?.lensTaskId === task.id && finding?.lensId === plan?.lensId
     ));
-    const existingImpact = impacts.find((impact) => impact?.taskId === task.id && impact?.findingIds?.includes(existingFinding?.id));
-    if (existingFinding && existingImpact) {
+    const existingImpact = impacts.find((impact) => impact?.taskId === task.id && (
+      impact?.findingIds?.includes(existingFinding?.id)
+      || (impact?.outcome === 'no-change' && impact?.executionId && impact?.agentId)
+    ));
+    if (existingImpact) {
       statusByTaskId.set(task.id, 'completed');
       continue;
     }
@@ -314,30 +377,42 @@ export async function executeLensReviewTasks({ session, plan, actionId } = {}, d
           },
         },
       });
-      const outputText = String(runResult?.output?.text || '').trim();
-      if (!runResult?.ok || !outputText) throw new Error('Lens advisor returned no review');
+      const review = runResult?.output?.review;
+      if (!runResult?.ok || !review || !LENS_OUTCOMES.has(review.outcome)) {
+        throw new Error('Lens advisor returned no controlled review');
+      }
+      const executionId = stableExecutionId(session.id, plan.lensId, task.id, advisor.id);
+      if (review.outcome === 'no-change') {
+        if (!impacts.some((impact) => impact.taskId === task.id)) {
+          impacts.push(impactForExecution(plan, task, review, executionId, advisor.id));
+        }
+        statusByTaskId.set(task.id, 'completed');
+        continue;
+      }
       const finding = {
         id: stableFindingId(session.id, plan.lensId, task.id),
         agentId: advisor.id,
         agentName: advisor.name,
         perspective: task.targetPerspective || 'unspecified',
         dimension: task.targetPerspective || 'unspecified',
-        content: task.kind === 'exit-condition'
-          ? `待核验退出条件：${outputText}`
-          : `待核验主张挑战：${outputText}`,
+        content: review.outcome === 'exit-condition-added'
+          ? `待核验退出条件：${review.summary}`
+          : `待核验主张挑战：${review.summary}`,
         stance: 'neutral',
         evidenceStatus: 'unknown',
         verificationStatus: 'unverified',
         lensTaskId: task.id,
         lensId: plan.lensId,
         source: 'lens-review',
-        ...(task.kind === 'exit-condition'
-          ? { exitCondition: outputText }
+        ...(review.outcome === 'exit-condition-added'
+          ? { exitCondition: review.summary }
           : { claimChallenged: true }),
         ts: Date.now(),
       };
       if (!findings.some((item) => item.id === finding.id)) findings.push(finding);
-      if (!impacts.some((impact) => impact.taskId === task.id)) impacts.push(impactForFinding(plan, task, finding));
+      if (!impacts.some((impact) => impact.taskId === task.id)) {
+        impacts.push(impactForExecution(plan, task, review, executionId, advisor.id, finding.id));
+      }
       statusByTaskId.set(task.id, 'completed');
     } catch (error) {
       statusByTaskId.set(task.id, 'pending');

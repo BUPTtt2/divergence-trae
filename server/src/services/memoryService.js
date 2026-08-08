@@ -168,6 +168,41 @@ export async function updateSessionState(sessionId, state, patch = {}) {
   return getSession(sessionId);
 }
 
+/**
+ * 原子抢占一次性 Lens 审查。只有 lens_review 仍为空的调用者可以成为执行者。
+ * PostgreSQL 使用条件 UPDATE；内存模式在同一同步临界区执行等价 CAS。
+ */
+export async function claimLensReview(sessionId, { cognitivePlan, actionId } = {}) {
+  const tasks = Array.isArray(cognitivePlan?.reviewTasks) ? cognitivePlan.reviewTasks.slice(0, 3) : [];
+  const lensReview = {
+    started: true,
+    status: 'running',
+    actionId: String(actionId || '').trim(),
+    totalTaskCount: tasks.length,
+    completedTaskCount: 0,
+    pendingTaskIds: tasks.map((task) => task.id).filter(Boolean),
+  };
+  const claimedPlan = {
+    ...cognitivePlan,
+    reviewTasks: Array.isArray(cognitivePlan?.reviewTasks)
+      ? cognitivePlan.reviewTasks.map((task, index) => (index < 3 ? { ...task, status: 'pending' } : task))
+      : [],
+    review: lensReview,
+  };
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: { lens_review: null },
+    data: {
+      cognitive_plan: claimedPlan,
+      lens_review: lensReview,
+    },
+  });
+  if (result.rowCount === 1) return { claimed: true, session: result.rows[0] };
+  return { claimed: false, session: await getSession(sessionId) };
+}
+
 // ============ L2: 会话摘要 ============
 
 /**

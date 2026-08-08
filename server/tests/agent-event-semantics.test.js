@@ -150,6 +150,44 @@ test('Lens completion events require a linked finding and review completes only 
   assert.equal(reflection.some((event) => event.type === 'LENS_REVIEW_COMPLETED'), false);
 });
 
+test('controlled no-change completion requires a stable Agent execution record, not a finding', () => {
+  const reflection = reflectionDomainEvents({
+    cognitivePlan: {
+      lensId: 24,
+      lensName: '复',
+      sourceDigest: '9'.repeat(64),
+      invariants: {},
+      reviewTasks: [{ id: 'lens-task-no-change', kind: 'assumption', question: '核验前提', causedBy: ['finding:1'] }],
+    },
+    lensImpacts: [{
+      taskId: 'lens-task-no-change',
+      lensId: 24,
+      outcome: 'no-change',
+      findingIds: [],
+      summary: '已执行，未产生可证明变化。',
+      executionId: 'lens-execution-1234567890abcdefabcd',
+      agentId: 'fengyan',
+    }],
+    findings: [],
+  });
+
+  assert.deepEqual(reflection.map((event) => event.type), [
+    'LENS_SELECTED',
+    'LENS_TASK_CREATED',
+    'LENS_TASK_COMPLETED',
+    'LENS_REVIEW_COMPLETED',
+  ]);
+  assert.deepEqual(reflection[2].data, {
+    taskId: 'lens-task-no-change',
+    lensId: 24,
+    outcome: 'no-change',
+    findingIds: [],
+    summary: '已执行，未产生可证明变化。',
+    executionId: 'lens-execution-1234567890abcdefabcd',
+    agentId: 'fengyan',
+  });
+});
+
 test('Lens public task payload normalizes untrusted perspective and causal references', () => {
   const reflection = reflectionDomainEvents({
     cognitivePlan: {
@@ -217,4 +255,42 @@ test('Lens public task payload preserves every authoritative perspective through
     perspectives.map(() => [opaqueReference('conflict:risk vs financial')]),
   );
   assert.doesNotMatch(JSON.stringify(taskEvents), /risk vs financial/);
+});
+
+test('LENS_SELECTED publishes only the safe six-line formation whitelist', () => {
+  const [selected] = reflectionDomainEvents({
+    cognitivePlan: {
+      lensId: 29,
+      lensName: '坎',
+      sourceDigest: 'f'.repeat(64),
+      invariants: {},
+      formation: {
+        primary: { lowerTrigram: '离', upperTrigram: '坎', prompt: 'hidden' },
+        changed: { lowerTrigram: '乾', upperTrigram: '坤', rawModelContent: 'hidden' },
+        lines: [
+          { position: 1, yinYang: 'yang', knowledgeState: 'verified', perspective: 'strategic', dynamic: false, privateText: 'hidden' },
+          { position: 2, yinYang: 'yin', knowledgeState: 'contested', perspective: 'risk', dynamic: true },
+          { position: 3, yinYang: 'yang', knowledgeState: 'unknown', perspective: '<private>', dynamic: false },
+          { position: 4, yinYang: 'yin', knowledgeState: 'verified', perspective: 'action', dynamic: false },
+          { position: 5, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'communication', dynamic: false },
+          { position: 6, yinYang: 'yin', knowledgeState: 'verified', perspective: 'practical', dynamic: false },
+        ],
+      },
+      reviewTasks: [],
+    },
+  });
+
+  assert.deepEqual(selected.data.formation, {
+    primary: { lowerTrigram: '离', upperTrigram: '坎' },
+    changed: { lowerTrigram: '乾', upperTrigram: '坤' },
+    lines: [
+      { position: 1, yinYang: 'yang', knowledgeState: 'verified', perspective: 'strategic', dynamic: false },
+      { position: 2, yinYang: 'yin', knowledgeState: 'contested', perspective: 'risk', dynamic: true },
+      { position: 3, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'unspecified', dynamic: false },
+      { position: 4, yinYang: 'yin', knowledgeState: 'verified', perspective: 'action', dynamic: false },
+      { position: 5, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'communication', dynamic: false },
+      { position: 6, yinYang: 'yin', knowledgeState: 'verified', perspective: 'practical', dynamic: false },
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(selected), /prompt|rawModelContent|privateText|hidden|private/);
 });

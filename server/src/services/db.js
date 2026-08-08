@@ -181,6 +181,17 @@ function memUpdate(table, id, data) {
   return { rows: [updated], rowCount: 1 };
 }
 
+function memCompareAndSet(table, id, data, expected = {}) {
+  const t = getTable(table);
+  const existing = t.get(id);
+  if (!existing) return { rows: [], rowCount: 0 };
+  const matches = Object.entries(expected).every(([key, value]) => (
+    value === null ? existing[key] == null : Object.is(existing[key], value)
+  ));
+  if (!matches) return { rows: [], rowCount: 0 };
+  return memUpdate(table, id, data);
+}
+
 /**
  * 内存模式：删除记录
  */
@@ -201,7 +212,7 @@ function memDelete(table, id) {
  * @param {string} options.table 表名（内存模式必填）
  * @param {string} options.sql SQL 语句（PostgreSQL 模式）
  * @param {Array} options.params SQL 参数
- * @param {string} options.action 操作类型: 'insert'|'select'|'update'|'delete'|'raw'
+ * @param {string} options.action 操作类型: 'insert'|'select'|'update'|'compare-and-set'|'delete'|'raw'
  * @param {object} options.data 插入/更新的数据
  * @param {object} options.filter 查询过滤条件
  * @param {object} options.queryOptions 排序/限制
@@ -214,7 +225,7 @@ export async function query(options) {
       return pgQuery(options.sql, options.params || []);
     }
     // 根据操作类型构建 SQL
-    const { table, action, data, filter, queryOptions, id } = options;
+    const { table, action, data, filter, queryOptions, id, expected } = options;
 
     // 表名白名单校验
     const ALLOWED_TABLES = ['users', 'refresh_tokens', 'cards', 'community_posts', 'community_replies', 'community_likes', 'achievements', 'user_memories', 'conversations', 'conversation_messages', 'custom_advisors', 'daily_divinations', 'user_levels', 'decision_follow_ups', 'inference_sessions', 'shared_agents', 'agent_usage_log', 'deliberation_sessions', 'session_summaries', 'user_memory', 'deliberation_events', 'deliberation_snapshots', 'session_eval'];
@@ -262,6 +273,27 @@ export async function query(options) {
       const sql = `UPDATE ${table} SET ${setClause}, updated_at = NOW() WHERE id = $${keys.length + 1} RETURNING *`;
       return pgQuery(sql, [...Object.values(data), id]);
     }
+    if (action === 'compare-and-set' && id && data && expected && Object.keys(expected).length > 0) {
+      const dataKeys = Object.keys(data);
+      const expectedKeys = Object.keys(expected);
+      if (![...dataKeys, ...expectedKeys].every(validFieldName)) throw new Error('非法字段名');
+      const values = Object.values(data);
+      const setClause = dataKeys.map((key, index) => `${key} = $${index + 1}`).join(', ');
+      const idParam = values.length + 1;
+      const conditions = [`id = $${idParam}`];
+      const params = [...values, id];
+      for (const key of expectedKeys) {
+        const value = expected[key];
+        if (value === null) {
+          conditions.push(`${key} IS NULL`);
+        } else {
+          params.push(value);
+          conditions.push(`${key} = $${params.length}`);
+        }
+      }
+      const sql = `UPDATE ${table} SET ${setClause}, updated_at = NOW() WHERE ${conditions.join(' AND ')} RETURNING *`;
+      return pgQuery(sql, params);
+    }
     if (action === 'delete' && id) {
       return pgQuery(`DELETE FROM ${table} WHERE id = $1`, [id]);
     }
@@ -269,7 +301,7 @@ export async function query(options) {
   }
 
   // 内存模式
-  const { table, action, data, filter, queryOptions, id } = options;
+  const { table, action, data, filter, queryOptions, id, expected } = options;
   switch (action) {
     case 'insert':
       return memInsert(table, data);
@@ -277,6 +309,8 @@ export async function query(options) {
       return memSelect(table, filter || {}, queryOptions || {});
     case 'update':
       return memUpdate(table, id, data);
+    case 'compare-and-set':
+      return memCompareAndSet(table, id, data, expected);
     case 'delete':
       return memDelete(table, id);
     case 'raw':

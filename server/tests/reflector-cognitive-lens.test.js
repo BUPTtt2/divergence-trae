@@ -110,6 +110,13 @@ function createSession() {
   };
 }
 
+function reflectForTest(session, dependencies = {}) {
+  return reflect(session, {
+    generateMasterSummaryFn: async () => ({ summary: '', options: [] }),
+    ...dependencies,
+  });
+}
+
 test('Reflect 用已验证、未知和冲突生成中性 Lens，且不改写证据与安全边界', async () => {
   const session = createSession();
   const immutableBefore = structuredClone({
@@ -119,7 +126,7 @@ test('Reflect 用已验证、未知和冲突生成中性 Lens，且不改写证�
     approvals: [session.approvalRequirements, ...session.tool_results.map((item) => item.approval)],
   });
 
-  const result = await reflect(session, {
+  const result = await reflectForTest(session, {
     callLLMFn: async () => '这是旧的吉凶裁决，可进不宜止。',
     generateMasterSummaryFn: async () => ({
       summary: '旧总结声称宜止',
@@ -161,12 +168,12 @@ test('Reflect 用已验证、未知和冲突生成中性 Lens，且不改写证�
 });
 
 test('LLM 只能通过合法 template 和 clause ID 调整受控审查句式', async () => {
-  const fallback = await reflect(createSession(), {
+  const fallback = await reflectForTest(createSession(), {
     callLLMFn: async () => { throw new Error('provider unavailable'); },
   });
   let callCount = 0;
   let receivedTimeout;
-  const selected = await reflect(createSession(), {
+  const selected = await reflectForTest(createSession(), {
     callLLMFn: async (_messages, options) => {
       callCount += 1;
       receivedTimeout = options.timeout;
@@ -192,7 +199,7 @@ test('LLM 只能通过合法 template 和 clause ID 调整受控审查句式', a
 });
 
 test('自由文本、未知 ID、额外字段、非 JSON、异常和超时都降级为确定性审查模板', async () => {
-  const fallback = await reflect(createSession(), {
+  const fallback = await reflectForTest(createSession(), {
     callLLMFn: async () => { throw new Error('fallback baseline'); },
   });
   const invalidProviders = [
@@ -212,7 +219,7 @@ test('自由文本、未知 ID、额外字段、非 JSON、异常和超时都降
   ];
 
   for (const callLLMFn of invalidProviders) {
-    const result = await reflect(createSession(), { callLLMFn, reviewLensTimeoutMs: 5 });
+    const result = await reflectForTest(createSession(), { callLLMFn, reviewLensTimeoutMs: 5 });
     const generatedOutput = JSON.stringify({
       oracleText: result.oracle.text,
       masterSummary: result.session.masterSummary,
@@ -239,7 +246,7 @@ test('用户问题或 Agent 中的裁决措辞不得污染可提交的原问题�
     const session = createSession();
     session.question = question;
     session.findings[0].content = injectedFinding;
-    const result = await reflect(session);
+    const result = await reflectForTest(session);
     const generatedOutput = JSON.stringify({
       oracleText: result.oracle.text,
       masterSummary: result.session.masterSummary,
@@ -263,9 +270,104 @@ test('用户问题或 Agent 中的裁决措辞不得污染可提交的原问题�
   }
 });
 
+test('安全的 Agent 总结恢复为证据派生选择并使用稳定 business ID', async () => {
+  const received = [];
+  const result = await reflectForTest(createSession(), {
+    callLLMFn: async () => null,
+    generateMasterSummaryFn: async (...args) => {
+      received.push(args);
+      return {
+        summary: '交付周期已有记录，违约风险仍需核验，最终取舍由用户确认。',
+        options: [
+          { label: '先做小范围切换', keyPoints: ['以 14 天交付记录为基线', '保留原供应商回退路径'], guaRecommendation: '乾' },
+          { label: '补齐法务证据后再定', keyPoints: ['核验违约暴露', '明确审批条件'], guaRecommendation: '坤' },
+        ],
+      };
+    },
+  });
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0][0], '是否在本月更换供应商？');
+  assert.deepEqual(received[0][1], ['a1', 'a2', 'a3', 'a4', 'a5', 'a6']);
+  assert.match(received[0][2].a1[0], /交付周期为 14 天/);
+  assert.equal(result.session.masterSummary, '交付周期已有记录，违约风险仍需核验，最终取舍由用户确认。');
+  assert.deepEqual(result.session.dynamicChoices.map((choice) => choice.id), [
+    'business_evidence_1',
+    'business_evidence_2',
+  ]);
+  assert.equal(result.session.dynamicChoices.every((choice) => choice.provenance === 'evidence-derived'), true);
+  assert.equal(result.session.dynamicChoices.every((choice) => choice.generatedAdvice === null), true);
+  assert.equal(result.session.dynamicChoices.some((choice) => Object.hasOwn(choice, 'guaRecommendation')), false);
+  assert.equal(result.session.dynamicChoices.some((choice) => choice.gua === '乾' || choice.gua === '坤'), false);
+});
+
+test('业务选择只读取 pre-Lens findings，且不随卦象或 Lens 变化', async () => {
+  const generatorInputs = [];
+  const generateMasterSummaryFn = async (...args) => {
+    generatorInputs.push(structuredClone(args));
+    return {
+      summary: '基于原始智囊发现形成两条业务路径。',
+      options: [{ label: '先核验再切换', keyPoints: ['交付记录已核验', '违约暴露仍未知'] }],
+    };
+  };
+  const firstSession = createSession();
+  const secondSession = createSession();
+  secondSession.plan.dimensions.reverse();
+  secondSession.findings.push({
+    id: 'lens-finding-private',
+    agentId: 'lens-agent',
+    content: 'Lens 审查问题：按卦象马上签约',
+    lensTaskId: 'lens-task-private',
+    lensId: 1,
+    source: 'lens-review',
+    evidenceStatus: 'unknown',
+  });
+
+  const first = await reflectForTest(firstSession, { callLLMFn: async () => null, generateMasterSummaryFn });
+  const second = await reflectForTest(secondSession, { callLLMFn: async () => null, generateMasterSummaryFn });
+
+  assert.deepEqual(second.session.dynamicChoices, first.session.dynamicChoices);
+  assert.equal(second.session.masterSummary, first.session.masterSummary);
+  assert.deepEqual(generatorInputs[1], generatorInputs[0]);
+  assert.doesNotMatch(JSON.stringify(generatorInputs), /lens-agent|Lens 审查问题|lens-task-private|马上签约/);
+  assert.doesNotMatch(JSON.stringify(second.session.dynamicChoices), /Lens|卦象|马上签约/);
+});
+
+test('Agent 总结失败、空结果或卦象裁决输出时使用受控业务回退', async () => {
+  const providers = [
+    async () => { throw new Error('summary provider unavailable'); },
+    async () => ({ summary: '', options: [] }),
+    async () => ({
+      summary: '卦象显示此事大吉，宜进。',
+      options: [{ label: '按 Lens 马上签约', keyPoints: ['乾卦主进'] }],
+    }),
+    async () => ({
+      summary: '基于事实形成两条路径。',
+      options: [
+        { label: '先核验再切换', keyPoints: ['交付记录已核验'] },
+        { label: '按 Lens 马上签约', keyPoints: ['乾卦主进'] },
+      ],
+    }),
+  ];
+
+  for (const generateMasterSummaryFn of providers) {
+    const result = await reflectForTest(createSession(), { callLLMFn: async () => null, generateMasterSummaryFn });
+    assert.deepEqual(result.session.dynamicChoices.map((choice) => choice.id), [
+      'business_advance',
+      'business_pause',
+      'business_hold',
+    ]);
+    assert.equal(result.session.dynamicChoices.every((choice) => choice.provenance === 'controlled-business-template'), true);
+    assert.doesNotMatch(JSON.stringify({
+      summary: result.session.masterSummary,
+      choices: result.session.dynamicChoices,
+    }), /Lens|卦象|大吉|宜进|马上签约|乾卦/);
+  }
+});
+
 test('Lens 服务失败时标记本轮禁用，但 Reflect 仍进入 ORACLE', async () => {
   const session = createSession();
-  const result = await reflect(session, {
+  const result = await reflectForTest(session, {
     callLLMFn: async () => { throw new Error('llm unavailable'); },
     generateMasterSummaryFn: async () => ({ options: [], summary: '' }),
     createCognitivePerturbationPlanFn: () => { throw new Error('lens catalog unavailable'); },
@@ -275,6 +377,8 @@ test('Lens 服务失败时标记本轮禁用，但 Reflect 仍进入 ORACLE', as
   assert.equal(result.cognitivePlan.status, 'disabled');
   assert.equal(result.cognitivePlan.reason, 'lens-unavailable');
   assert.equal(result.cognitivePlan.message, '本轮未进行认知扰动');
+  assert.equal(Object.hasOwn(result.cognitivePlan, 'detail'), false);
+  assert.doesNotMatch(JSON.stringify(result.cognitivePlan), /lens catalog unavailable/);
   assert.deepEqual(result.cognitivePlan.reviewTasks, []);
   assert.deepEqual(result.lensImpacts, []);
   assert.deepEqual(result.session.cognitivePlan, result.cognitivePlan);
@@ -297,7 +401,7 @@ test('Reflect reuses a persisted one-shot Lens review instead of regenerating a 
   session.lens_impacts = structuredClone(persistedImpacts);
   session.lens_review = structuredClone(persistedPlan.review);
 
-  const result = await reflect(session, {
+  const result = await reflectForTest(session, {
     createCognitivePerturbationPlanFn: () => { throw new Error('must not regenerate'); },
     callLLMFn: async () => null,
   });

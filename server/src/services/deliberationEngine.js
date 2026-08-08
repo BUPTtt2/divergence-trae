@@ -167,7 +167,13 @@ async function performLensReviewLifecycle(result, context = {}, dependencies = {
   const totalTaskCount = Math.min(3, plan.reviewTasks.length);
   const reviewedTaskIds = new Set(plan.reviewTasks.slice(0, totalTaskCount).map((task) => task.id));
   const completedTaskIds = new Set(executed.impacts.flatMap((impact) => {
-    if (!reviewedTaskIds.has(impact?.taskId) || !Array.isArray(impact?.findingIds)) return [];
+    if (!reviewedTaskIds.has(impact?.taskId)) return [];
+    if (
+      impact?.outcome === 'no-change'
+      && typeof impact?.executionId === 'string'
+      && typeof impact?.agentId === 'string'
+    ) return [impact.taskId];
+    if (!Array.isArray(impact?.findingIds)) return [];
     const linked = impact.findingIds.some((findingId) => executed.findings.some((finding) => (
       finding?.id === findingId
       && finding?.lensTaskId === impact.taskId
@@ -204,6 +210,17 @@ async function performLensReviewLifecycle(result, context = {}, dependencies = {
       lensReview,
     },
   };
+  const persist = dependencies.persistFn || (async (id, value) => memoryService.updateSessionState(
+    id,
+    value.session.state,
+    {
+      findings: value.session.findings,
+      cognitive_plan: value.cognitivePlan,
+      lens_impacts: value.lensImpacts,
+      lens_review: value.lensReview,
+    },
+  ));
+  await persist(sessionId, next);
   for (const event of lensCompletionDomainEvents(next)) {
     await emit(sessionId, { ...event, actor: 'reflector', correlationId: actionId });
   }
@@ -218,12 +235,59 @@ export async function runLensReviewLifecycle(result, context = {}, dependencies 
   if (plan.review?.started === true) return result;
 
   const sessionId = String(context.sessionId || result?.session?.id || '').trim();
-  if (!sessionId) return performLensReviewLifecycle(result, context, dependencies);
+  if (!sessionId) throw new Error('LENS_REVIEW_SESSION_REQUIRED');
 
   const active = lensReviewFlights.get(sessionId);
   if (active) return active;
 
-  const flight = performLensReviewLifecycle(result, context, dependencies);
+  const flight = (async () => {
+    const actionId = String(context.actionId || '').trim();
+    const tasks = plan.reviewTasks.slice(0, 3);
+    const lensReview = {
+      started: true,
+      status: 'running',
+      actionId,
+      totalTaskCount: tasks.length,
+      completedTaskCount: 0,
+      pendingTaskIds: tasks.map((task) => task.id).filter(Boolean),
+    };
+    const claimedPlan = {
+      ...plan,
+      reviewTasks: plan.reviewTasks.map((task, index) => (index < 3 ? { ...task, status: 'pending' } : task)),
+      review: lensReview,
+    };
+    const claim = dependencies.claimFn || memoryService.claimLensReview;
+    const claimResult = await claim(sessionId, { cognitivePlan: claimedPlan, lensReview, actionId });
+    if (!claimResult?.claimed) {
+      const persisted = claimResult?.session;
+      if (!persisted) throw new Error('LENS_REVIEW_CLAIM_STATE_UNAVAILABLE');
+      const persistedPlan = persisted.cognitive_plan ?? persisted.cognitivePlan ?? null;
+      const persistedImpacts = persisted.lens_impacts ?? persisted.lensImpacts ?? [];
+      const persistedReview = persisted.lens_review ?? persisted.lensReview ?? persistedPlan?.review ?? null;
+      return {
+        ...result,
+        session: { ...result.session, ...persisted },
+        cognitivePlan: persistedPlan,
+        lensImpacts: persistedImpacts,
+        lensReview: persistedReview,
+        lensReviewRecovered: true,
+      };
+    }
+    const persisted = claimResult.session || {};
+    const durablePlan = persisted.cognitive_plan ?? persisted.cognitivePlan ?? claimedPlan;
+    const claimedResult = {
+      ...result,
+      cognitivePlan: durablePlan,
+      lensReview: persisted.lens_review ?? persisted.lensReview ?? lensReview,
+      session: {
+        ...persisted,
+        ...result.session,
+        cognitivePlan: durablePlan,
+        lensReview: persisted.lens_review ?? persisted.lensReview ?? lensReview,
+      },
+    };
+    return performLensReviewLifecycle(claimedResult, context, dependencies);
+  })();
   lensReviewFlights.set(sessionId, flight);
   try {
     return await flight;
@@ -646,6 +710,7 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
   }
 
   result = await runLensReviewLifecycle(result, { sessionId, actionId });
+  if (result.lensReviewRecovered === true) return buildExecuteResponse(sessionId, result);
 
   // emit 反思结果
   if (result.oracle) {
@@ -727,6 +792,7 @@ export async function persistExecuteResult(sessionId, result, dependencies = {})
     });
   } catch (e) {
     logger.warn('[Deliberation] execute 持久化失败', { sessionId, error: e.message });
+    throw e;
   }
 }
 

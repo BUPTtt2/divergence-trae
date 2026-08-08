@@ -94,6 +94,64 @@ test('语义相同但键插入顺序不同的输入生成同一计划', () => {
   assert.deepEqual(createCognitivePerturbationPlan(source), createCognitivePerturbationPlan(reordered));
 });
 
+test('事实、冲突、缺口和维度作为语义集合重排时摘要与任务保持稳定', () => {
+  const semanticSource = structuredClone(source);
+  semanticSource.conflicts.push({ id: 'conflict_timing', reason: '时间窗口存在分歧', perspective: 'risk' });
+  semanticSource.gaps.push({ id: 'gap_timing', perspective: 'strategic', name: '时间窗口' });
+  const reorderedCollections = structuredClone(semanticSource);
+  reorderedCollections.findings.reverse();
+  reorderedCollections.conflicts.reverse();
+  reorderedCollections.gaps.reverse();
+  reorderedCollections.dimensions.reverse();
+
+  assert.deepEqual(
+    createCognitivePerturbationPlan(semanticSource),
+    createCognitivePerturbationPlan(reorderedCollections),
+  );
+});
+
+test('扰动计划保存六爻形成信息且保持初爻到上爻顺序', () => {
+  const input = structuredClone(source);
+  input.oracle = {
+    ...input.oracle,
+    primary: {
+      binaryKey: 21,
+      lower: { name: '离<script>', symbol: '☲', privateNote: '不得暴露' },
+      upper: { name: '坎', symbol: '☵' },
+      lines: [1, 0, 1, 0, 1, 0],
+    },
+    changed: {
+      lower: { name: '乾', symbol: '☰' },
+      upper: { name: '坤', symbol: '☷' },
+      lines: [1, 1, 1, 0, 0, 0],
+    },
+    lineMeta: [
+      { position: 0, perspective: 'strategic', knowledgeState: 'verified', isYang: true, isDynamic: false, privateText: 'secret' },
+      { position: 1, perspective: 'risk', knowledgeState: 'contested', isYang: false, isDynamic: true },
+      { position: 2, perspective: 'financial', knowledgeState: 'unknown', isYang: true, isDynamic: false },
+      { position: 3, perspective: 'action', knowledgeState: 'verified', isYang: false, isDynamic: false },
+      { position: 4, perspective: 'communication', knowledgeState: 'unknown', isYang: true, isDynamic: false },
+      { position: 5, perspective: 'practical', knowledgeState: 'verified', isYang: false, isDynamic: false },
+    ],
+  };
+
+  const plan = createCognitivePerturbationPlan(input);
+
+  assert.deepEqual(plan.formation, {
+    primary: { lowerTrigram: '?', upperTrigram: '坎' },
+    changed: { lowerTrigram: '乾', upperTrigram: '坤' },
+    lines: [
+      { position: 1, yinYang: 'yang', knowledgeState: 'verified', perspective: 'strategic', dynamic: false },
+      { position: 2, yinYang: 'yin', knowledgeState: 'contested', perspective: 'risk', dynamic: true },
+      { position: 3, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'financial', dynamic: false },
+      { position: 4, yinYang: 'yin', knowledgeState: 'verified', perspective: 'action', dynamic: false },
+      { position: 5, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'communication', dynamic: false },
+      { position: 6, yinYang: 'yin', knowledgeState: 'verified', perspective: 'practical', dynamic: false },
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(plan.formation), /privateNote|privateText|secret|symbol/);
+});
+
 test('扰动计划最多三项且每项可追溯到 Lens 和原始未知或冲突', () => {
   const plan = createCognitivePerturbationPlan(source);
 
