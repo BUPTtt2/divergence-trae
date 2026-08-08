@@ -210,16 +210,10 @@ async function performLensReviewLifecycle(result, context = {}, dependencies = {
       lensReview,
     },
   };
-  const persist = dependencies.persistFn || (async (id, value) => memoryService.updateSessionState(
-    id,
-    value.session.state,
-    {
-      findings: value.session.findings,
-      cognitive_plan: value.cognitivePlan,
-      lens_impacts: value.lensImpacts,
-      lens_review: value.lensReview,
-    },
-  ));
+  const persist = dependencies.persistFn || ((id, value) => persistExecuteResult(id, value, {
+    actionId,
+    claimToken: context.claimToken,
+  }));
   await persist(sessionId, next);
   for (const event of lensCompletionDomainEvents(next)) {
     await emit(sessionId, { ...event, actor: 'reflector', correlationId: actionId });
@@ -503,6 +497,10 @@ export async function answer(sessionId, answers, executionCtx = {}) {
   logger.info('[Deliberation] answer 收到', { sessionId, answerCount: Array.isArray(answers) ? answers.length : 0 });
 
   const session = await assertSessionOwner(sessionId, executionCtx.userId);
+  session.execute_action_id = null;
+  session.execute_status = null;
+  session.execute_claim_token = null;
+  session.execute_lease_expires_at = null;
 
   // round 从持久化的 plan.round 读取，+1 进入下一轮判定
   const prevRound = Number((session.plan && session.plan.round) || session.round) || 1;
@@ -550,29 +548,6 @@ export async function answer(sessionId, answers, executionCtx = {}) {
 async function performExecute(sessionId, agentIds, executionCtx, session) {
   const actionId = String(executionCtx.actionId || '').trim();
   logger.info('[Deliberation] execute 开始', { sessionId, agentIds, actionId });
-
-  // === ★ P0 守卫：澄清未完成绝不允许启动 ReAct 循环（之前前端 SSE 抢跑 EXECUTE → DELIBERATE，就靠这一条后端双保险）
-  const askUser = session.askUser || (session.plan && session.plan.askUser) || [];
-  const stillNeedClarify = Array.isArray(askUser) && askUser.length > 0 && (session.state === STATES.WAIT || session.state === STATES.PLAN);
-  if (stillNeedClarify) {
-    // SEV2 审计记录
-    try {
-      if (typeof AuditAgentSingleton?.record === 'function') {
-        AuditAgentSingleton.record({
-          sev: 2,
-          rule: 'STATE_LEAP',
-          evidence: `execute 被调用但 session 仍在澄清 (state=${session.state} askUser=${askUser.length})`,
-          sessionId,
-        });
-      }
-    } catch { /* noop */ }
-    logger.warn('[Deliberation] execute 被拒绝：仍在澄清阶段，需先 answerDeliberation 完成追问', { sessionId, state: session.state, askUserCount: askUser.length });
-    const resp = buildResponseFromSession(session);
-    resp.clarifyRequired = true;
-    resp.state = 'CLARIFY';
-    resp.askUser = askUser;
-    return normalizeExecuteResponse(resp);
-  }
 
   const question = session.question_context || session.questionContext || session.question || '';
 
@@ -709,8 +684,28 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
     return performExecute(sessionId, [], executionCtx, result.session);
   }
 
-  result = await runLensReviewLifecycle(result, { sessionId, actionId });
-  if (result.lensReviewRecovered === true) return buildExecuteResponse(sessionId, result);
+  let executeProjectionPersisted = false;
+  result = await runLensReviewLifecycle(result, {
+    sessionId,
+    actionId,
+    claimToken: executionCtx.claimToken,
+  }, {
+    persistFn: async (id, value) => {
+      await persistExecuteResult(id, value, {
+        actionId,
+        claimToken: executionCtx.claimToken,
+      });
+      executeProjectionPersisted = true;
+    },
+  });
+  if (result.lensReviewRecovered === true) throw new Error('LENS_REVIEW_CLAIM_LOST');
+
+  if (!executeProjectionPersisted) {
+    await persistExecuteResult(sessionId, result, {
+      actionId,
+      claimToken: executionCtx.claimToken,
+    });
+  }
 
   // emit 反思结果
   if (result.oracle) {
@@ -722,9 +717,6 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
     });
   }
   eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'REFLECT', to: result.session?.state || 'ORACLE' } });
-
-  // 6. 持久化
-  await persistExecuteResult(sessionId, result);
 
   const reflectionProjection = {
     ...result,
@@ -738,7 +730,43 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
   return buildExecuteResponse(sessionId, result);
 }
 
-export async function execute(sessionId, agentIds, executionCtx = {}) {
+export async function runExecuteClaimLifecycle(session, agentIds, executionCtx = {}, dependencies = {}) {
+  const actionId = String(executionCtx.actionId || '').trim();
+  const claim = dependencies.claimFn || memoryService.claimExecute;
+  const release = dependencies.releaseFn || memoryService.releaseExecuteClaim;
+  const executeFn = dependencies.executeFn || performExecute;
+  const now = dependencies.nowFn ? dependencies.nowFn() : Date.now();
+  const claimResult = await claim(session.id, {
+    actionId,
+    now,
+    ...(dependencies.leaseMs ? { leaseMs: dependencies.leaseMs } : {}),
+  });
+  if (!claimResult?.claimed) {
+    if (!claimResult?.session) throw new Error('EXECUTE_CLAIM_STATE_UNAVAILABLE');
+    return normalizeExecuteResponse(buildResponseFromSession(claimResult.session));
+  }
+
+  const claimedContext = {
+    ...executionCtx,
+    actionId,
+    claimToken: claimResult.claimToken,
+  };
+  try {
+    return await executeFn(session.id, agentIds, claimedContext, claimResult.session);
+  } catch (error) {
+    try {
+      await release(session.id, { actionId, claimToken: claimResult.claimToken });
+    } catch (releaseError) {
+      logger.warn('[Deliberation] execute claim 释放失败，等待租约过期', {
+        sessionId: session.id,
+        error: releaseError.message,
+      });
+    }
+    throw error;
+  }
+}
+
+export async function execute(sessionId, agentIds, executionCtx = {}, dependencies = {}) {
   const session = await assertSessionOwner(sessionId, executionCtx.userId);
   const persistedPlan = session.cognitive_plan ?? session.cognitivePlan ?? null;
   const persistedReview = session.lens_review ?? session.lensReview ?? persistedPlan?.review ?? null;
@@ -746,15 +774,43 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
     return normalizeExecuteResponse(buildResponseFromSession(session));
   }
 
-  const active = executeFlights.get(sessionId);
+  const askUser = session.askUser || session.plan?.askUser || [];
+  const stillNeedClarify = Array.isArray(askUser)
+    && askUser.length > 0
+    && (session.state === STATES.WAIT || session.state === STATES.PLAN);
+  if (stillNeedClarify) {
+    try {
+      AuditAgentSingleton?.record?.({
+        sev: 2,
+        rule: 'STATE_LEAP',
+        evidence: `execute 被调用但 session 仍在澄清 (state=${session.state} askUser=${askUser.length})`,
+        sessionId,
+      });
+    } catch { /* noop */ }
+    logger.warn('[Deliberation] execute 被拒绝：仍在澄清阶段，需先 answerDeliberation 完成追问', {
+      sessionId,
+      state: session.state,
+      askUserCount: askUser.length,
+    });
+    const response = buildResponseFromSession(session);
+    return normalizeExecuteResponse({
+      ...response,
+      clarifyRequired: true,
+      state: 'CLARIFY',
+      askUser,
+    });
+  }
+
+  const flights = dependencies.flightRegistry || executeFlights;
+  const active = flights.get(sessionId);
   if (active) return active;
 
-  const flight = performExecute(sessionId, agentIds, executionCtx, session);
-  executeFlights.set(sessionId, flight);
+  const flight = runExecuteClaimLifecycle(session, agentIds, executionCtx, dependencies);
+  flights.set(sessionId, flight);
   try {
     return await flight;
   } finally {
-    if (executeFlights.get(sessionId) === flight) executeFlights.delete(sessionId);
+    if (flights.get(sessionId) === flight) flights.delete(sessionId);
   }
 }
 
@@ -763,9 +819,9 @@ export async function execute(sessionId, agentIds, executionCtx = {}) {
  */
 export async function persistExecuteResult(sessionId, result, dependencies = {}) {
   try {
-    const updateSessionState = dependencies.updateSessionStateFn || memoryService.updateSessionState;
     const patch = {
       findings: result.session.findings || [],
+      tool_results: result.session.tool_results || [],
       oracle: result.session.oracle || null,
       conflicts: result.conflicts || [],
       gaps: result.gaps || [],
@@ -775,12 +831,23 @@ export async function persistExecuteResult(sessionId, result, dependencies = {})
       lens_review: result.lensReview ?? result.session.lensReview ?? null,
     };
     // P1-1：持久化动态抉择选项和全局总结（下次恢复推演时不丢失）
-    if (result.session.dynamicChoices) patch.dynamic_choices = result.session.dynamicChoices;
-    if (result.session.masterSummary != null) patch.master_summary = result.session.masterSummary;
+    patch.dynamic_choices = result.session.dynamicChoices ?? result.session.dynamic_choices ?? [];
+    patch.master_summary = result.session.masterSummary ?? result.session.master_summary ?? '';
     if (result.session.plan) {
       patch.plan = result.session.plan;
     }
-    await updateSessionState(sessionId, result.session.state, patch);
+    if (dependencies.actionId && dependencies.claimToken) {
+      const completeExecute = dependencies.completeExecuteFn || memoryService.completeExecute;
+      await completeExecute(sessionId, {
+        actionId: dependencies.actionId,
+        claimToken: dependencies.claimToken,
+        state: result.session.state,
+        patch,
+      });
+    } else {
+      const updateSessionState = dependencies.updateSessionStateFn || memoryService.updateSessionState;
+      await updateSessionState(sessionId, result.session.state, patch);
+    }
     logger.info('[Deliberation] execute 持久化完成', {
       sessionId,
       state: result.session.state,
@@ -1267,6 +1334,7 @@ export default {
   start,
   answer,
   execute,
+  runExecuteClaimLifecycle,
   commit,
   pause,
   resume,

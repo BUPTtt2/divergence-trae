@@ -305,6 +305,144 @@ test('durable Lens claim allows exactly one winner and stores the winning action
   assert.deepEqual(persisted.cognitive_plan.review, persisted.lens_review);
 });
 
+test('execute lease has one cross-instance winner and an expired owner can be replaced', async () => {
+  const sessionId = `sess_execute_lease_${Date.now()}`;
+  await memoryService.saveSession({
+    ...createSession(sessionId),
+    state: 'EXECUTE',
+    plan: { agents: [], askUser: [] },
+  });
+
+  const [first, second] = await Promise.all([
+    memoryService.claimExecute(sessionId, { actionId: 'shared-action', now: 1_000, leaseMs: 500 }),
+    memoryService.claimExecute(sessionId, { actionId: 'shared-action', now: 1_000, leaseMs: 500 }),
+  ]);
+  assert.equal([first, second].filter((claim) => claim.claimed).length, 1);
+
+  const beforeExpiry = await memoryService.claimExecute(sessionId, {
+    actionId: 'replacement-before-expiry',
+    now: 1_499,
+    leaseMs: 500,
+  });
+  assert.equal(beforeExpiry.claimed, false);
+
+  const afterExpiry = await memoryService.claimExecute(sessionId, {
+    actionId: 'replacement-after-expiry',
+    now: 1_501,
+    leaseMs: 500,
+  });
+  assert.equal(afterExpiry.claimed, true);
+  assert.equal(afterExpiry.session.execute_action_id, 'replacement-after-expiry');
+  assert.equal(afterExpiry.session.execute_status, 'running');
+  assert.equal(afterExpiry.session.execute_lease_expires_at, 2_001);
+});
+
+test('two engine instances execute one session/action only once and loser restores persisted state', async () => {
+  assert.equal(typeof deliberationEngine.runExecuteClaimLifecycle, 'function');
+  const sessionId = `sess_execute_cross_instance_${Date.now()}`;
+  const session = await memoryService.saveSession({
+    ...createSession(sessionId),
+    state: 'EXECUTE',
+    plan: { agents: [], askUser: [] },
+  });
+  let workCount = 0;
+  let releaseWork;
+  const gate = new Promise((resolve) => { releaseWork = resolve; });
+  const executeFn = async (_sessionId, _agentIds, executionCtx, claimedSession) => {
+    workCount += 1;
+    await gate;
+    await memoryService.completeExecute(sessionId, {
+      actionId: executionCtx.actionId,
+      claimToken: executionCtx.claimToken,
+      state: 'ORACLE',
+      patch: { findings: [{ id: 'winner-finding' }], oracle: { id: 'winner-oracle' } },
+    });
+    return { sessionId, state: 'ORACLE', findings: [{ id: 'winner-finding' }], claimedSession };
+  };
+
+  const first = deliberationEngine.runExecuteClaimLifecycle(
+    session,
+    [],
+    { userId: session.user_id, actionId: 'shared-action' },
+    { executeFn, nowFn: () => 10_000 },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = deliberationEngine.runExecuteClaimLifecycle(
+    session,
+    [],
+    { userId: session.user_id, actionId: 'shared-action' },
+    { executeFn, nowFn: () => 10_000 },
+  );
+  const restored = await second;
+
+  assert.equal(workCount, 1);
+  assert.equal(restored.state, 'EXECUTE');
+  assert.deepEqual(restored.findings, session.findings);
+  releaseWork();
+  const completed = await first;
+  assert.equal(completed.state, 'ORACLE');
+});
+
+test('execute persistence failure emits no Lens completion and releases the lease for retry', async () => {
+  assert.equal(typeof deliberationEngine.runExecuteClaimLifecycle, 'function');
+  const sessionId = `sess_execute_recover_${Date.now()}`;
+  const session = await memoryService.saveSession({
+    ...createSession(sessionId),
+    state: 'EXECUTE',
+    plan: { agents: [], askUser: [] },
+  });
+  const emitted = [];
+  const executeFn = async (_sessionId, _agentIds, executionCtx, claimedSession) => (
+    deliberationEngine.runLensReviewLifecycle({
+      session: {
+        ...claimedSession,
+        state: 'ORACLE',
+        oracle: { id: 'oracle-before-failure' },
+        dynamicChoices: [{ id: 'business_evidence_1' }],
+        masterSummary: '完整总结',
+      },
+      oracle: { id: 'oracle-before-failure' },
+      conflicts: [{ id: 'conflict-before-failure' }],
+      gaps: [{ id: 'gap-before-failure' }],
+      cognitivePlan: { ...structuredClone(PLAN), reviewTasks: [structuredClone(PLAN.reviewTasks[0])] },
+      lensImpacts: [],
+    }, { sessionId, actionId: executionCtx.actionId }, {
+      emitFn: async (_id, event) => emitted.push(event.type),
+      executeFn: async ({ plan }) => {
+        const finding = { id: 'lens-finding-recover', lensTaskId: plan.reviewTasks[0].id, lensId: plan.lensId };
+        return {
+          plan,
+          findings: [...claimedSession.findings, finding],
+          impacts: [{ taskId: finding.lensTaskId, lensId: plan.lensId, outcome: 'claim-challenged', findingIds: [finding.id], summary: '已挑战。' }],
+        };
+      },
+      persistFn: async () => { throw new Error('atomic projection unavailable'); },
+    })
+  );
+
+  await assert.rejects(
+    deliberationEngine.runExecuteClaimLifecycle(
+      session,
+      [],
+      { userId: session.user_id, actionId: 'recoverable-action' },
+      { executeFn, nowFn: () => 20_000 },
+    ),
+    /atomic projection unavailable/,
+  );
+
+  assert.equal(emitted.includes('LENS_TASK_COMPLETED'), false);
+  assert.equal(emitted.includes('LENS_REVIEW_COMPLETED'), false);
+  const afterFailure = await memoryService.getSession(sessionId);
+  assert.equal(afterFailure.execute_action_id, null);
+  assert.equal(afterFailure.execute_status, null);
+  const retry = await memoryService.claimExecute(sessionId, {
+    actionId: 'recoverable-action',
+    now: 20_001,
+    leaseMs: 500,
+  });
+  assert.equal(retry.claimed, true);
+});
+
 test('a lost durable claim restores persisted Lens state without Agent or events', async () => {
   const session = createSession('sess_lens_claim_lost');
   const persistedReview = { started: true, status: 'running', actionId: 'winner', totalTaskCount: 1, completedTaskCount: 0, pendingTaskIds: ['lens-task-risk'] };
@@ -432,4 +570,53 @@ test('persistExecuteResult propagates write failure instead of returning success
     }),
     /durable write unavailable/,
   );
+});
+
+test('persistExecuteResult atomically writes the complete execute projection exactly once', async () => {
+  const calls = [];
+  await deliberationEngine.persistExecuteResult('sess_complete_projection', {
+    session: {
+      state: 'ORACLE',
+      findings: [{ id: 'finding-complete' }],
+      tool_results: [{ tool: 'search', ok: true }],
+      oracle: { id: 'oracle-complete' },
+      dynamicChoices: [{ id: 'business_evidence_1' }],
+      masterSummary: '证据总结',
+      plan: { dimensions: [{ perspective: 'risk' }] },
+      replan_count: 1,
+    },
+    conflicts: [{ id: 'conflict-complete' }],
+    gaps: [{ id: 'gap-complete' }],
+    cognitivePlan: { lensId: 24 },
+    lensImpacts: [{ taskId: 'lens-task-complete' }],
+    lensReview: { started: true, status: 'completed' },
+  }, {
+    actionId: 'complete-action',
+    claimToken: 'complete-claim-token',
+    completeExecuteFn: async (...args) => {
+      calls.push(args);
+      return { completed: true };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ['sess_complete_projection', {
+    actionId: 'complete-action',
+    claimToken: 'complete-claim-token',
+    state: 'ORACLE',
+    patch: {
+      findings: [{ id: 'finding-complete' }],
+      tool_results: [{ tool: 'search', ok: true }],
+      oracle: { id: 'oracle-complete' },
+      conflicts: [{ id: 'conflict-complete' }],
+      gaps: [{ id: 'gap-complete' }],
+      replan_count: 1,
+      cognitive_plan: { lensId: 24 },
+      lens_impacts: [{ taskId: 'lens-task-complete' }],
+      lens_review: { started: true, status: 'completed' },
+      dynamic_choices: [{ id: 'business_evidence_1' }],
+      master_summary: '证据总结',
+      plan: { dimensions: [{ perspective: 'risk' }] },
+    },
+  }]);
 });

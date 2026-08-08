@@ -449,7 +449,7 @@ test('mapToHexagram 不会把立场强度当作知识真假', () => {
   );
 });
 
-test('Session 投影和 execute 响应保留 Lens 结果，持久化补丁不覆盖 tool_results', async () => {
+test('Session 投影和 execute 响应保留 Lens 结果，完整持久化包含 tool_results', async () => {
   assert.equal(typeof deliberationEngine.persistExecuteResult, 'function');
   assert.equal(typeof deliberationEngine.buildExecuteResponse, 'function');
   assert.equal(typeof deliberationEngine.buildResponseFromSession, 'function');
@@ -501,7 +501,7 @@ test('Session 投影和 execute 响应保留 Lens 结果，持久化补丁不覆
   assert.deepEqual(persisted.patch.cognitive_plan, cognitivePlan);
   assert.deepEqual(persisted.patch.lens_impacts, lensImpacts);
   assert.deepEqual(persisted.patch.lens_review, lensReview);
-  assert.equal(Object.hasOwn(persisted.patch, 'tool_results'), false);
+  assert.deepEqual(persisted.patch.tool_results, session.tool_results);
 
   const executeResponse = deliberationEngine.buildExecuteResponse('sess_cognitive_lens', result);
   assert.deepEqual(executeResponse.cognitivePlan, cognitivePlan);
@@ -541,13 +541,25 @@ test('PostgreSQL 迁移和 memoryService 映射都持久化 Lens Session 字段'
   assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS cognitive_plan JSONB/i.test(sql)));
   assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS lens_impacts JSONB/i.test(sql)));
   assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS lens_review JSONB/i.test(sql)));
+  assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS execute_action_id TEXT/i.test(sql)));
+  assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS execute_status TEXT/i.test(sql)));
+  assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS execute_claim_token TEXT/i.test(sql)));
+  assert.ok(statements.some(({ sql }) => /ADD COLUMN IF NOT EXISTS execute_lease_expires_at BIGINT/i.test(sql)));
   assert.equal(typeof memoryService.toSessionPersistenceData, 'function');
   const mapped = memoryService.toSessionPersistenceData({
     cognitivePlan: { lensId: 1 },
     lensImpacts: [{ taskId: 'lens-task-1' }],
     lensReview: { status: 'completed' },
+    executeActionId: 'execute-action-1',
+    executeStatus: 'running',
+    executeClaimToken: 'claim-token-1',
+    executeLeaseExpiresAt: 12345,
   });
   assert.deepEqual(mapped.cognitive_plan, { lensId: 1 });
   assert.deepEqual(mapped.lens_impacts, [{ taskId: 'lens-task-1' }]);
   assert.deepEqual(mapped.lens_review, { status: 'completed' });
+  assert.equal(mapped.execute_action_id, 'execute-action-1');
+  assert.equal(mapped.execute_status, 'running');
+  assert.equal(mapped.execute_claim_token, 'claim-token-1');
+  assert.equal(mapped.execute_lease_expires_at, 12345);
 });

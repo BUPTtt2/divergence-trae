@@ -137,6 +137,18 @@ export function toSessionPersistenceData(session = {}) {
     cognitive_plan: session.cognitive_plan ?? session.cognitivePlan,
     lens_impacts: session.lens_impacts ?? session.lensImpacts,
     lens_review: session.lens_review ?? session.lensReview,
+    execute_action_id: session.execute_action_id !== undefined
+      ? session.execute_action_id
+      : session.executeActionId,
+    execute_status: session.execute_status !== undefined
+      ? session.execute_status
+      : session.executeStatus,
+    execute_claim_token: session.execute_claim_token !== undefined
+      ? session.execute_claim_token
+      : session.executeClaimToken,
+    execute_lease_expires_at: session.execute_lease_expires_at !== undefined
+      ? session.execute_lease_expires_at
+      : session.executeLeaseExpiresAt,
     memory_used: session.memory_used,
     commit_result: session.commit_result,
     replan_count: session.replan_count ?? 0,
@@ -166,6 +178,122 @@ export async function updateSessionState(sessionId, state, patch = {}) {
   await query({ table: SESSIONS_TABLE, action: 'update', id: sessionId, data });
   logger.info('会话状态变更', { sessionId, state, patchKeys: Object.keys(patch) });
   return getSession(sessionId);
+}
+
+const DEFAULT_EXECUTE_LEASE_MS = 15 * 60 * 1000;
+
+function executeClaimData(actionId, claimToken, leaseExpiresAt) {
+  return {
+    execute_action_id: actionId,
+    execute_status: 'running',
+    execute_claim_token: claimToken,
+    execute_lease_expires_at: leaseExpiresAt,
+    cognitive_plan: null,
+    lens_impacts: [],
+    lens_review: null,
+  };
+}
+
+/**
+ * 在任何 execute 副作用前抢占带租约的会话执行权；过期租约可被原子替换。
+ */
+export async function claimExecute(sessionId, {
+  actionId,
+  now = Date.now(),
+  leaseMs = DEFAULT_EXECUTE_LEASE_MS,
+  claimToken = generateUUID(),
+} = {}) {
+  const normalizedActionId = String(actionId || '').trim();
+  if (!normalizedActionId) throw new Error('EXECUTE_ACTION_REQUIRED');
+  const normalizedNow = Number(now);
+  const normalizedLeaseMs = Number(leaseMs);
+  if (!Number.isFinite(normalizedNow) || !Number.isFinite(normalizedLeaseMs) || normalizedLeaseMs <= 0) {
+    throw new Error('EXECUTE_LEASE_INVALID');
+  }
+  const leaseExpiresAt = normalizedNow + normalizedLeaseMs;
+  const data = executeClaimData(normalizedActionId, claimToken, leaseExpiresAt);
+  let result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: { execute_action_id: null },
+    data,
+  });
+  if (result.rowCount === 1) {
+    return { claimed: true, claimToken, session: result.rows[0] };
+  }
+
+  const persisted = await getSession(sessionId);
+  const expired = persisted?.execute_status === 'running'
+    && Number(persisted.execute_lease_expires_at) <= normalizedNow;
+  if (!expired) return { claimed: false, claimToken: null, session: persisted };
+
+  result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      execute_action_id: persisted.execute_action_id,
+      execute_status: 'running',
+      execute_claim_token: persisted.execute_claim_token,
+      execute_lease_expires_at: persisted.execute_lease_expires_at,
+    },
+    data,
+  });
+  if (result.rowCount === 1) {
+    return { claimed: true, claimToken, session: result.rows[0] };
+  }
+  return { claimed: false, claimToken: null, session: await getSession(sessionId) };
+}
+
+/** 使用 claim token 作为 fencing token，原子写入完整 execute 投影并结束租约。 */
+export async function completeExecute(sessionId, { actionId, claimToken, state, patch = {} } = {}) {
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      execute_action_id: String(actionId || '').trim(),
+      execute_status: 'running',
+      execute_claim_token: String(claimToken || '').trim(),
+    },
+    data: dropUndefined({
+      state,
+      ...patch,
+      execute_status: 'completed',
+      execute_lease_expires_at: null,
+    }),
+  });
+  if (result.rowCount !== 1) {
+    const error = new Error('EXECUTE_CLAIM_LOST');
+    error.code = 'EXECUTE_CLAIM_LOST';
+    throw error;
+  }
+  return { completed: true, session: result.rows[0] };
+}
+
+/** 失败时仅由当前 fencing token 释放租约；同时清理未完成的 Lens 子状态。 */
+export async function releaseExecuteClaim(sessionId, { actionId, claimToken } = {}) {
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      execute_action_id: String(actionId || '').trim(),
+      execute_status: 'running',
+      execute_claim_token: String(claimToken || '').trim(),
+    },
+    data: {
+      execute_action_id: null,
+      execute_status: null,
+      execute_claim_token: null,
+      execute_lease_expires_at: null,
+      cognitive_plan: null,
+      lens_impacts: [],
+      lens_review: null,
+    },
+  });
+  return { released: result.rowCount === 1, session: result.rows[0] || await getSession(sessionId) };
 }
 
 /**
