@@ -56,6 +56,8 @@ export function normalizeExecuteResponse(input = {}) {
     lensReview: input.lensReview || null,
     fallback: input.fallback === true,
     clarifyRequired: input.clarifyRequired === true,
+    caseConfirmationRequired: input.caseConfirmationRequired === true,
+    caseFile: input.caseFile || null,
     askUser: Array.isArray(input.askUser) ? input.askUser : [],
   };
 }

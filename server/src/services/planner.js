@@ -27,12 +27,12 @@ import eventBus from './eventBus.js';
 import { evidenceDomainEvent, planDomainEvents } from './agentEventSemantics.js';
 import { withRetry } from './retryHelper.js';
 import { buildQuickPlan, routeDeliberationDepth } from './deliberationDepthRouter.js';
+import { buildDecisionCase } from './decisionCaseService.js';
 
 // ============ 常量 ============
 
 const LLM_TIMEOUT_MS = 20000;
 const MIN_FINDINGS = 3;
-const MAX_ROUND = 2;
 
 export async function callPlannerLLM(messages, options = {}, runtime = {}) {
   const call = runtime.call || callLLM;
@@ -577,7 +577,9 @@ export async function plan(session, dependencies = {}) {
   session.tool_results = toolResults;
 
   // 4. LLM 驱动维度生成（v3.0 零预设：失败抛错，不降级规则映射）
-  let dimensions = await llmGenerateDimensions(question, memories, toolResults);
+  // 召回只形成候选项；用户确认前不得把历史记忆当作本次事实。
+  const confirmedMemories = [];
+  let dimensions = await llmGenerateDimensions(question, confirmedMemories, toolResults);
   logger.info('[Planner] LLM维度生成成功', { count: dimensions.length });
 
   // 4.5 演·自评（Self-Critique）— ReAct 循环第 5 步
@@ -586,7 +588,7 @@ export async function plan(session, dependencies = {}) {
   //     依据: docs/重设.md 3.1 节 YanAgent.run 第 5 步
   const currentReplanCount = Number(session.replan_count) || 0;
   if (currentReplanCount < 1) {
-    const critique = await selfCritiquePlan(question, dimensions, toolResults, memories);
+    const critique = await selfCritiquePlan(question, dimensions, toolResults, confirmedMemories);
     if (!critique.ok && Array.isArray(critique.suggestions) && critique.suggestions.length > 0) {
       logger.info('[Planner] selfCritique 触发 replan', { reason: critique.reason, suggestions: critique.suggestions });
       eventBus.emit(session.id, {
@@ -598,7 +600,7 @@ export async function plan(session, dependencies = {}) {
       const reEnhanced = await llmEnhanceDimensions(
         `${question} ${critiqueContext}`,
         dimensions,
-        memories,
+        confirmedMemories,
         toolResults,
       );
       dimensions = reEnhanced;
@@ -629,6 +631,9 @@ export async function plan(session, dependencies = {}) {
   // 5. 生成 DeliberationPlan（按文档 4.3.2 节）
   //    toolProbes 填入探测摘要；askUser/round/openingLine 由 Step 4 autonomyGate 决定后回填
   const deliberationPlan = {
+    depth: depthRoute.depth,
+    depthReason: depthRoute.reason,
+    maxQuestions: depthRoute.maxQuestions,
     dimensions,
     agents: agentsForPlan,
     toolProbes: toolResults.map((r) => ({
@@ -651,11 +656,11 @@ export async function plan(session, dependencies = {}) {
   session.plan = deliberationPlan;
   session.questionType = questionType;
   session.round = Number(session.round) || 1;
-  session.memory_used = memories;
+  session.memory_used = [];
   session.replan_count = session.replan_count ?? 0;
 
   // v3.0 零预设：autonomyGate 失败抛错，不降级到 EXECUTE
-  const autonomy = await evaluateAutonomy(session, memories, toolResults);
+  const autonomy = await evaluateAutonomy(session, confirmedMemories, toolResults);
   let askUser = [];
   let openingLine = autonomy.openingLine || '';
   if (autonomy.action === 'ASK') {
@@ -668,8 +673,7 @@ export async function plan(session, dependencies = {}) {
       question: autonomy.questions[0]?.question,
     });
   } else {
-    // CONTINUE / STOP 均进入 EXECUTE
-    session.state = 'EXECUTE';
+    session.state = 'READY';
     session.askUser = [];
     askUser = [];
     logger.info('[Planner] 自主性判定 → EXECUTE', {
@@ -683,6 +687,7 @@ export async function plan(session, dependencies = {}) {
   deliberationPlan.askUser = askUser;
   deliberationPlan.round = session.round;
   deliberationPlan.openingLine = openingLine;
+  deliberationPlan.caseFile = buildDecisionCase({ session, plan: deliberationPlan, memories, depthRoute });
 
   // 7. 持久化（saveSession 会自动生成 id 若缺失）
   try {
@@ -731,7 +736,7 @@ export async function plan(session, dependencies = {}) {
   // 7.6 LLM 驱动演分析文本（v3.0 零预设：失败抛错，不降级模板）
   deliberationPlan.analysis = await ensurePlannerAnalysis(
     deliberationPlan.analysis,
-    () => generateYanAnalysis(question, questionType, dimensions, toolResults, memories),
+    () => generateYanAnalysis(question, questionType, dimensions, toolResults, confirmedMemories),
   );
 
   const planCorrelationId = `plan_${session.id}_${session.round}`;
@@ -745,7 +750,7 @@ export async function plan(session, dependencies = {}) {
   }
 
   // 映射 L3 记忆为前端契约的 [{content, type}]
-  const memoryForClient = memories.map((m) => ({ content: m.content, type: m.memory_type }));
+  const memoryForClient = [];
 
   logger.info('[Planner] Plan 阶段完成', {
     sessionId: session.id,
@@ -765,7 +770,7 @@ export async function plan(session, dependencies = {}) {
     askUser,
     openingLine,
     round: session.round,
-    maxRound: MAX_ROUND,
+    maxRound: depthRoute.maxQuestions,
     memory: memoryForClient,
   };
 }

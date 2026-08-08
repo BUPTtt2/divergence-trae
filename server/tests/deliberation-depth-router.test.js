@@ -3,13 +3,20 @@ import assert from 'node:assert/strict';
 
 import { buildQuickPlan, routeDeliberationDepth } from '../src/services/deliberationDepthRouter.js';
 
-test('low-risk everyday choices use quick depth while consequential decisions stay standard', () => {
+test('question risk selects an explicit 1, 3 or 4 question information budget', () => {
   assert.deepEqual(routeDeliberationDepth('要不要吃饭'), {
     depth: 'quick',
     reason: '低风险、可逆的即时日常选择',
+    maxQuestions: 1,
   });
-  assert.equal(routeDeliberationDepth('要不要辞职去创业').depth, 'standard');
-  assert.equal(routeDeliberationDepth('胸口疼要不要吃药').depth, 'standard');
+  assert.deepEqual(routeDeliberationDepth('周末要不要去看展'), {
+    depth: 'standard',
+    reason: '需要拆解取舍并核对信息',
+    maxQuestions: 3,
+  });
+  assert.equal(routeDeliberationDepth('要不要辞职去创业').depth, 'deep');
+  assert.equal(routeDeliberationDepth('要不要辞职去创业').maxQuestions, 4);
+  assert.equal(routeDeliberationDepth('胸口疼要不要吃药').depth, 'deep');
 });
 
 test('quick food planning asks one useful body-signal question on round one', () => {
@@ -32,7 +39,8 @@ test('quick food planning proceeds after the user has answered once', () => {
     round: 2,
   });
 
-  assert.equal(result.session.state, 'EXECUTE');
+  assert.equal(result.session.state, 'READY');
+  assert.equal(result.plan.caseFile.confirmedByUser, false);
   assert.equal(result.askUser.length, 0);
   assert.match(result.plan.analysis, /快推演/);
 });

@@ -252,6 +252,20 @@ export async function answerDeliberation(sessionId, answers) {
   return data;
 }
 
+export async function confirmCaseDeliberation(sessionId, command = {}) {
+  const resp = await _deliberationFetch(`/api/deliberation/${sessionId}/confirm-case`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      acceptedMemoryIds: Array.isArray(command.acceptedMemoryIds) ? command.acceptedMemoryIds : [],
+      additionalContext: String(command.additionalContext || ''),
+    }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `confirm-case 失败: ${resp.status}`);
+  return data;
+}
+
 /**
  * 执行智囊发言 / 推演循环
  * POST /api/deliberation/:sessionId/execute

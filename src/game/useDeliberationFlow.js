@@ -3,6 +3,7 @@ import {
   startDeliberation,
   planDeliberation,
   answerDeliberation,
+  confirmCaseDeliberation,
   executeDeliberation,
   commitDeliberation,
   getMemories,
@@ -23,6 +24,7 @@ const PHASE = {
   CASTING: 'casting',
   SUMMONING: 'summoning',
   CLARIFY: 'clarify',
+  READY: 'ready',
   DEBATE: 'debate',
   CHOICE: 'choice',
   REVEAL: 'reveal',
@@ -37,6 +39,7 @@ const INTERNAL_TO_VIEW_PHASE = Object.freeze({
   [PHASE.CASTING]: 'casting',
   [PHASE.SUMMONING]: 'yan_analyze',
   [PHASE.CLARIFY]: 'clarify_loop',
+  [PHASE.READY]: 'case_file_confirm',
   [PHASE.DEBATE]: 'agent_debate',
   [PHASE.CHOICE]: 'summary',
   [PHASE.ORACLE]: 'oracle',
@@ -51,6 +54,7 @@ const VIEW_PHASE_LABEL = Object.freeze({
   casting: '演 · 建立会话',
   yan_analyze: '演 · 规划与召智',
   clarify_loop: '演 · 澄清关键事实',
+  case_file_confirm: '案卷 · 确认后开演',
   agent_debate: '诸智 · 推演中',
   summary: '演 · 汇聚结论',
   oracle: '卦象 · 认知镜面',
@@ -299,6 +303,12 @@ export function useDeliberationFlow(initialQuestion = "") {
         setPhase(PHASE.CLARIFY);
         setAwaitingUser(true);
         showFloatTip('发现关键信息缺口，请补充后继续');
+      } else if (session.state === 'READY') {
+        setAwaitingAnswers([]);
+        clarifyActiveRef.current = false;
+        setPhase(PHASE.READY);
+        setAwaitingUser(true);
+        showFloatTip('案卷已形成，请确认后开演');
       } else {
         setAwaitingAnswers([]);
         clarifyActiveRef.current = false;
@@ -495,6 +505,10 @@ export function useDeliberationFlow(initialQuestion = "") {
         setPhase(PHASE.CLARIFY);
         setAwaitingUser(true);
         showFloatTip('演 · 还需确认一轮信息……');
+      } else if (result?.state === 'READY') {
+        setPhase(PHASE.READY);
+        setAwaitingUser(true);
+        showFloatTip('信息已整理为案卷，请确认后开演');
       } else {
         setPhase(PHASE.DEBATE);
         setActiveAgentIdx(0);
@@ -510,6 +524,24 @@ export function useDeliberationFlow(initialQuestion = "") {
       setAwaitingUser(true);
     }
   }, [deliberationSessionId, showFloatTip, awaitingAnswers, LOG]);
+
+  const handleConfirmCaseFile = useCallback(async (command = {}) => {
+    if (!deliberationSessionId) return;
+    try {
+      setAwaitingUser(false);
+      showFloatTip('正在封存案卷并召集智囊……');
+      const result = await confirmCaseDeliberation(deliberationSessionId, command);
+      setInference((previous) => ({ ...(previous || {}), ...result }));
+      setPhase(PHASE.DEBATE);
+      setActiveAgentIdx(0);
+      setAwaitingUser(true);
+      showFloatTip('案卷已确认，诸智开始推演');
+    } catch (error) {
+      setBackendError(error.message || '案卷确认失败');
+      setAwaitingUser(true);
+      showFloatTip('案卷确认失败，请重试');
+    }
+  }, [deliberationSessionId, showFloatTip]);
 
   const handleSaveToCollection = useCallback(async () => {
     try {
@@ -821,11 +853,12 @@ export function useDeliberationFlow(initialQuestion = "") {
   const activeAgents = useMemo(() => plannedAgents, [plannedAgents]);
   const viewPhase = INTERNAL_TO_VIEW_PHASE[phase] || 'input';
   const phaseLabel = `${VIEW_PHASE_LABEL[viewPhase] || viewPhase}${inference?.fallback ? ' · 规则兜底' : ''}`;
-  const caseFile = useMemo(() => ({
-    question: userInput,
-    gates: {},
-    knownFacts: yanQuestionRounds.map((round, index) => ({ id: `answer_${index}`, text: round.userAnswer })),
-  }), [userInput, yanQuestionRounds]);
+  const caseFile = useMemo(() => inference?.caseFile || inference?.plan?.caseFile || ({
+    objective: userInput,
+    facts: yanQuestionRounds.map((round, index) => ({ id: `answer_${index}`, value: round.userAnswer, source: 'user' })),
+    unknowns: awaitingAnswers,
+    memoryCandidates: [],
+  }), [inference, userInput, yanQuestionRounds, awaitingAnswers]);
   const progress = useMemo(() => ({ done: yanQuestionRounds.length, total: Math.max(1, awaitingAnswers.length + yanQuestionRounds.length) }), [yanQuestionRounds, awaitingAnswers]);
   const infoProgress = Math.min(100, Math.round((progress.done / progress.total) * 100));
 
@@ -949,8 +982,8 @@ export function useDeliberationFlow(initialQuestion = "") {
     handleStartOracle,
     handleSkipToSummary,
     handleCommit,
-    handleConfirmCaseFile: handleSubmitAnswers,
-    handleBackFromCaseFile: () => setPhase(PHASE.CLARIFY),
+    handleConfirmCaseFile,
+    handleBackFromCaseFile: handleRestart,
     saveGameState,
     handleStart: () => handleStart(inputValue),
   };

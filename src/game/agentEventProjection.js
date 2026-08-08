@@ -2,6 +2,9 @@ const MOTION_BY_EVENT = Object.freeze({
   SESSION_CREATED: 'session',
   PLANNING_STARTED: 'planning',
   PLAN_CREATED: 'plan',
+  CASE_DRAFTED: 'case-review',
+  MEMORY_RECALLED: 'memory-review',
+  CASE_CONFIRMED: 'case-confirmed',
   TOOL_STARTED: 'evidence-search',
   EVIDENCE_ACCEPTED: 'evidence-accepted',
   EVIDENCE_REJECTED: 'evidence-rejected',
@@ -22,6 +25,9 @@ function activityFor(event) {
     PLANNING_STARTED: ['开始规划', payload.label || '正在辨认问题与推演深度'],
     PLAN_CREATED: ['任务已生成', payload.analysis || `已拆成 ${(payload.tasks || []).length} 项任务`],
     UNKNOWN_IDENTIFIED: ['发现信息缺口', payload.reason || payload.question || payload.label || '需要补充关键信息'],
+    CASE_DRAFTED: ['案卷已形成', `${payload.factCount || 0} 项事实、${payload.unknownCount || 0} 项未知，等待你确认`],
+    MEMORY_RECALLED: ['发现相关历史信息', `${payload.count || 0} 条记忆待你决定是否用于本轮`],
+    CASE_CONFIRMED: ['案卷已确认', `${payload.factCount || 0} 项事实已封存，开始推演`],
     AGENT_ASSIGNED: [`${payload.agentName || '智囊'}加入推演`, payload.reason || payload.perspective || '已分配负责事项'],
     AGENT_STARTED: [`${payload.agentName || '智囊'}开始处理`, payload.taskLabel || payload.taskId || '正在执行任务'],
     AGENT_COMPLETED: [`${payload.agentName || '智囊'}完成任务`, payload.summary || payload.finding || '贡献已写入案卷'],
@@ -193,6 +199,13 @@ export function applyAgentEvent(state, event, options = {}) {
       next.tasks = { ...state.tasks, [id]: { ...state.tasks[id], id, label: payload.label || payload.field || payload.question || '待补充信息', status: 'blocked', reason: payload.reason } };
       break;
     }
+    case 'CASE_DRAFTED':
+    case 'MEMORY_RECALLED':
+      next.status = 'awaiting-case-confirmation';
+      break;
+    case 'CASE_CONFIRMED':
+      next.status = 'executing';
+      break;
     case 'AGENT_ASSIGNED':
     case 'AGENT_STARTED':
     case 'AGENT_COMPLETED':

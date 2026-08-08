@@ -54,6 +54,50 @@ test('engine allows the verified owner to read the session', async () => {
   assert.equal(restored.replanCount, 2);
 });
 
+test('READY session cannot execute until the owner confirms facts and selected memories', async () => {
+  const session = await ownedSession({
+    state: 'READY',
+    plan: {
+      askUser: [],
+      caseFile: {
+        objective: '是否换工作',
+        facts: [{ id: 'f1', value: '只能承受三个月空窗', source: 'user', status: 'confirmed' }],
+        unknowns: [],
+        memoryCandidates: [
+          { id: 'm1', content: '过去偏好可逆方案', type: 'preference', status: 'pending' },
+          { id: 'm2', content: '旧城市信息', type: 'context', status: 'pending' },
+        ],
+        readiness: { status: 'review' },
+        confirmedByUser: false,
+      },
+    },
+  });
+
+  const blocked = await engine.execute(session.id, [], {
+    userId: 'engine_owner_a', actionId: 'before_case_confirmation',
+  });
+  assert.equal(blocked.state, 'READY');
+  assert.equal(blocked.caseConfirmationRequired, true);
+
+  await assert.rejects(
+    engine.confirmCase(session.id, {}, { userId: 'engine_owner_b' }),
+    (error) => error?.code === 'SESSION_NOT_FOUND',
+  );
+
+  const confirmed = await engine.confirmCase(session.id, {
+    acceptedMemoryIds: ['m1'],
+    additionalContext: '希望先试行两周',
+  }, { userId: 'engine_owner_a' });
+  const stored = await memoryService.getSession(session.id);
+
+  assert.equal(confirmed.state, 'EXECUTE');
+  assert.equal(confirmed.caseFile.confirmedByUser, true);
+  assert.equal(stored.memory_used.length, 1);
+  assert.match(stored.question_context, /只能承受三个月空窗/);
+  assert.match(stored.question_context, /过去偏好可逆方案/);
+  assert.doesNotMatch(stored.question_context, /旧城市信息/);
+});
+
 test('deferred start returns a persisted PLAN session before planner work begins', async () => {
   let plannerCalls = 0;
   const created = await engine.createSession('要不要吃饭', 'engine_deferred_owner', {
@@ -95,9 +139,9 @@ test('deferred planning verifies ownership and returns the authoritative planned
   );
 
   const result = await engine.plan(created.sessionId, { userId: 'engine_plan_owner' }, { planSessionFn });
-  assert.equal(result.state, 'EXECUTE');
+  assert.equal(result.state, 'READY');
   assert.equal(result.plan.dimensions[0].name, '身体信号');
-  assert.equal((await memoryService.getSession(created.sessionId)).state, 'EXECUTE');
+  assert.equal((await memoryService.getSession(created.sessionId)).state, 'READY');
 });
 
 test('commit reaches backend COMPLETE before the client can render final', async () => {
@@ -169,9 +213,9 @@ test('a failed planner attempt becomes one persisted fallback instead of overlap
 
   assert.equal(attempts, 1);
   assert.equal(result.fallback, true);
-  assert.equal(result.session.state, 'EXECUTE');
+  assert.equal(result.session.state, 'READY');
   assert.equal(result.askUser.length, 0);
-  assert.equal(restored.state, 'EXECUTE');
+  assert.equal(restored.state, 'READY');
   assert.equal(restored.plan.round, 2);
   assert.equal(restored.question_context, session.questionContext);
   assert.deepEqual(restored.answers, session.answers);
@@ -281,7 +325,7 @@ test('answer and execute cannot race past a completed CLARIFY handoff', async ()
   assert.equal(answerClaimCount, 1);
   assert.equal(executeCount, 0);
   const persisted = await memoryService.getSession(session.id);
-  assert.equal(persisted.state, 'EXECUTE');
+  assert.equal(persisted.state, 'READY');
   assert.equal(persisted.execute_status, null);
   assert.equal(persisted.execute_claim_token, null);
 });
@@ -382,7 +426,7 @@ test('planner output stays behind the answer lease until one atomic complete CAS
   unblockPlanner();
   await answerPromise;
   const completed = await memoryService.getSession(session.id);
-  assert.equal(completed.state, 'EXECUTE');
+  assert.equal(completed.state, 'READY');
   assert.deepEqual(completed.plan.askUser, []);
   assert.equal(completed.execute_status, null);
   assert.equal(completed.execute_claim_token, null);

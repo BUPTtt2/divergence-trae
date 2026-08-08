@@ -11,7 +11,7 @@
 
 .sandbox-interaction-dock {
   left: 50%;
-  bottom: 24px;
+  bottom: 92px;
   width: min(640px, calc(100vw - 40px));
   translate: -50% 0;
 }
@@ -20,19 +20,20 @@
   .sandbox-interaction-dock {
     left: calc(50% + 160px);
     width: min(560px, calc(100vw - 360px));
+    bottom: 88px;
   }
 }
 
 @media (min-width: 768px) and (max-width: 1024px) and (orientation: portrait) {
   .sandbox-interaction-dock {
-    bottom: calc(46dvh + 12px);
+    bottom: max(88px, calc(env(safe-area-inset-bottom) + 76px));
     width: calc(100vw - 32px);
   }
 }
 
 @media (max-width: 767px) {
   .sandbox-interaction-dock {
-    bottom: calc(48dvh + 12px);
+    bottom: max(84px, calc(env(safe-area-inset-bottom) + 72px));
     width: calc(100vw - 24px);
   }
 }

@@ -46,7 +46,7 @@ const router = Router();
 const RESERVED_KEYWORDS = new Set([
   'health', 'start', 'memories', 'advisors',
   'plan', 'answer', 'execute', 'commit', 'pause', 'resume',
-  'snapshot', 'events',
+  'snapshot', 'events', 'confirm-case',
 ]);
 
 function isReservedSegment(seg) {
@@ -304,6 +304,20 @@ router.post(
   })
 );
 
+router.post(
+  '/:sessionId/confirm-case',
+  requirePrincipal,
+  requireOwnedDeliberation,
+  asyncHandler(async (req, res, next) => {
+    const { sessionId } = req.params;
+    if (isReservedSegment(sessionId)) return next('route');
+    const result = await deliberationEngine.confirmCase(sessionId, req.body || {}, {
+      userId: req.principal.userId,
+    });
+    res.json(result);
+  }),
+);
+
 /**
  * POST /api/deliberation/:sessionId/execute
  * 执行智囊推演
@@ -324,7 +338,7 @@ router.post(
     }
     const result = await deliberationEngine.execute(sessionId, command.agentIds, {
       actionId: command.actionId,
-      userId: req.userId || null,
+      userId: req.principal.userId,
     });
     res.json(normalizeExecuteResponse(result));
   })

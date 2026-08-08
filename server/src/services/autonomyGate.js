@@ -601,6 +601,7 @@ export async function isInformationSufficient(question, qaHistory) {
  */
 export async function evaluate(session, memory, toolResults) {
   const round = Number(session && session.round) || 1;
+  const maxRound = Math.max(1, Math.min(4, Number(session?.plan?.maxQuestions) || MAX_ROUND));
   const question = String((session && (session.questionContext || session.question)) || '');
   const openingLine = await buildOpeningLine(memory, question);
   logger.info('[Autonomy] evaluate 开始', {
@@ -609,8 +610,8 @@ export async function evaluate(session, memory, toolResults) {
   });
 
   // 超过 2 轮：降级 EXECUTE
-  if (round > MAX_ROUND) {
-    logger.info('[Autonomy] 超过最大轮次，降级 EXECUTE', { round, maxRound: MAX_ROUND });
+  if (round > maxRound) {
+    logger.info('[Autonomy] 超过最大轮次，进入案卷确认', { round, maxRound });
     return {
       action: 'STOP',
       questions: [],

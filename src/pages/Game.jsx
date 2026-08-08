@@ -7,7 +7,7 @@ import ProcessStepper from '../components/board/ProcessStepper';
 import LiveArenaOverlay from '../components/board/LiveArenaOverlay';
 import FateCardPanel from '../components/fate/FateCardPanel';
 import ConfirmedInfoPanel from '../components/yan/ConfirmedInfoPanel';
-import CaseFilePanel from '../components/yan/CaseFilePanel';
+import DecisionCaseReviewPanel from '../components/yan/DecisionCaseReviewPanel';
 import { COLORS } from '../components/board/layoutConfig';
 import { detectQuestionType } from '../data/agents';
 import { generateDialoguesForAgents } from '../services/inferenceEngine';
@@ -382,7 +382,7 @@ function _renderNavButton(phase, ctx) {
     case 'yan_analyze':
       return mk('回答 · 继续', ctx.handleUserAdvance, true);
     case 'clarify_loop':
-      return mk('已作答 · 或 直接召智囊', ctx.handleSkipClarify, false);
+      return mk('跳过追问 · 按现有信息继续', ctx.handleSkipClarify, false);
     case 'agent_select':
       return mk('已选智囊 · 开辩', ctx.handleUserAdvance, true, (ctx.activeAgents||[]).filter(a=>a&&a.role!=='master').length===0, '请先选择至少一位智囊');
     case 'agent_debate': {
@@ -771,13 +771,10 @@ export default function Game() {
                 style={{ width: 'min(760px, 94vw)', maxHeight: 'clamp(56vh, 78vh, 86vh)', display: 'flex', flexDirection: 'column' }}
                 className="neon-border-gold scan-reveal"
               >
-                <CaseFilePanel
+                <DecisionCaseReviewPanel
                   caseFile={caseFile}
-                  keywords={[]}
-                  historyCards={memoryLayers?.l1Cards || []}
-                  bioL2={memoryLayers?.bioL2 || ''}
                   onConfirm={handleConfirmCaseFile}
-                  onBack={handleBackFromCaseFile}
+                  onRestart={handleBackFromCaseFile}
                 />
               </motion.div>
             </motion.div>
@@ -1145,7 +1142,7 @@ export default function Game() {
         <AnimatePresence>
           {shouldShowInteractionDock({ phase, awaitingUser, awaitingAnswers }) && (
             <motion.div
-              className="sandbox-interaction-dock absolute z-20 flex flex-col items-center"
+              className="sandbox-interaction-dock absolute z-[60] flex flex-col items-center"
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 16 }}

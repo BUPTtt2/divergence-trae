@@ -37,6 +37,8 @@ import {
 } from './agentEventSemantics.js';
 import { executeLensReviewTasks } from './cognitivePerturbationService.js';
 import { normalizeExecuteResponse } from '../../../shared/deliberationContract.js';
+import { acceptedCaseContext, buildDecisionCase, confirmDecisionCase } from './decisionCaseService.js';
+import { routeDeliberationDepth } from './deliberationDepthRouter.js';
 // 系统级 Agent（生产级 4 Agent）
 import AuditAgentSingleton from '../agents/system/AuditAgent.js';
 const _auditAttached = (() => { try { AuditAgentSingleton.ensureAttached(); } catch (e) { logger.warn('[DeliberationEngine] audit attach fail', e.message); } return true; })();
@@ -46,6 +48,7 @@ const _auditAttached = (() => { try { AuditAgentSingleton.ensureAttached(); } ca
 export const STATES = {
   PLAN: 'PLAN',
   WAIT: 'WAIT',
+  READY: 'READY',
   EXECUTE: 'EXECUTE',
   REFLECT: 'REFLECT',
   ORACLE: 'ORACLE',
@@ -74,17 +77,19 @@ const lensReviewFlights = new Map();
  * @returns {object} 数据契约响应
  */
 function buildResponse(plannedSession, plan, askUser, openingLine, round, memory) {
+  const maxRound = Number(plan?.maxQuestions) || MAX_ROUND;
   return {
     sessionId: plannedSession.id,
     state: plannedSession.state,
     askUser: Array.isArray(askUser) ? askUser : [],
     plan: plan || { dimensions: [], toolProbes: [], askUser: [], minFindings: 3 },
     round: round || 1,
-    maxRound: MAX_ROUND,
+    maxRound,
     openingLine: openingLine || '',
     memory: Array.isArray(memory) ? memory : [],
     questionType: plannedSession.questionType || '',
     analysis: plan?.analysis || '',
+    caseFile: plan?.caseFile || null,
   };
 }
 
@@ -108,7 +113,7 @@ export function buildResponseFromSession(session) {
     plan,
     round: (plan && plan.round) || (session && session.round) || 1,
     replanCount: Number(session?.replan_count || 0),
-    maxRound: MAX_ROUND,
+    maxRound: Number(plan?.maxQuestions) || MAX_ROUND,
     openingLine: (plan && plan.openingLine) || (session && session.openingLine) || '',
     memory: memoryUsed.map((m) => ({ content: m.content, type: m.memory_type })),
     toolResults: Array.isArray(session?.tool_results) ? session.tool_results : [],
@@ -124,7 +129,32 @@ export function buildResponseFromSession(session) {
       : (Array.isArray(session?.lensImpacts) ? session.lensImpacts : []),
     lensReview: session?.lens_review ?? session?.lensReview ?? session?.cognitive_plan?.review ?? null,
     commitResult: session?.commit_result || null,
+    caseFile: plan?.caseFile || null,
   };
+}
+
+function enforceCaseConfirmationGate(result) {
+  const session = result.session;
+  const plan = result.plan || session.plan || {};
+  const depthRoute = routeDeliberationDepth(session.question || '');
+  plan.maxQuestions = Number(plan.maxQuestions) || depthRoute.maxQuestions;
+  plan.depth = plan.depth || depthRoute.depth;
+  plan.depthReason = plan.depthReason || depthRoute.reason;
+  plan.caseFile = plan.caseFile || buildDecisionCase({
+    session,
+    plan,
+    memories: result.memory || [],
+    depthRoute,
+  });
+  session.plan = plan;
+  if (session.state === STATES.EXECUTE && !plan.caseFile.confirmedByUser) {
+    session.state = STATES.READY;
+    session.askUser = [];
+    plan.askUser = [];
+    result.askUser = [];
+  }
+  result.plan = plan;
+  return result;
 }
 
 /**
@@ -438,10 +468,11 @@ export async function plan(sessionId, executionCtx = {}, dependencies = {}) {
     visibility: 'public',
   });
 
-  const result = dependencies.planSessionFn
+  const rawResult = dependencies.planSessionFn
     ? await dependencies.planSessionFn(session)
     : await planSessionWithFallback(session, dependencies.planFn || planner.plan);
-  if (dependencies.planSessionFn) await memoryService.saveSession(result.session);
+  const result = enforceCaseConfirmationGate(rawResult);
+  await memoryService.saveSession(result.session);
 
   // 确保 sessionId 一致（兜底时可能用的是内存态对象）
   result.session.id = result.session.id || sessionId;
@@ -466,6 +497,26 @@ export async function plan(sessionId, executionCtx = {}, dependencies = {}) {
         type: 'THOUGHT',
         data: { step: 'clarify', thought: `演·追问：${result.askUser.length}个问题` },
       });
+    }
+    if (result.plan?.caseFile) {
+      eventBus.emit(sid, {
+        type: 'CASE_DRAFTED',
+        data: {
+          factCount: result.plan.caseFile.facts?.length || 0,
+          unknownCount: result.plan.caseFile.unknowns?.length || 0,
+          depth: result.plan.caseFile.depth,
+        },
+        actor: 'planner',
+        visibility: 'public',
+      });
+      if (result.plan.caseFile.memoryCandidates?.length > 0) {
+        eventBus.emit(sid, {
+          type: 'MEMORY_RECALLED',
+          data: { count: result.plan.caseFile.memoryCandidates.length, status: 'pending_user_consent' },
+          actor: 'memory',
+          visibility: 'public',
+        });
+      }
     }
     if (result.memory && result.memory.length > 0) {
       eventBus.emit(sid, {
@@ -545,7 +596,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     askUser.push({ question: '最坏情况是什么？你能接受吗？', reason: '先判底线再谈收益', source: 'P0-FB' });
   }
 
-  session.state = shouldClarify ? STATES.WAIT : STATES.EXECUTE;
+  session.state = shouldClarify ? STATES.WAIT : STATES.READY;
   session.round = round;
   session.askUser = askUser;
 
@@ -560,6 +611,8 @@ function _fallbackPlanResult(session, errorMsg = '') {
     analysis: `（LLM 暂不可用：${String(errorMsg || '').slice(0, 40)}，演已按规则生成维度与追问）`,
   };
   session.plan = plan;
+  plan.maxQuestions = routeDeliberationDepth(session.question || '').maxQuestions;
+  plan.caseFile = buildDecisionCase({ session, plan, memories: [], depthRoute: routeDeliberationDepth(session.question || '') });
 
   return {
     session,
@@ -604,8 +657,10 @@ export async function answer(sessionId, answers, executionCtx = {}, dependencies
     session.round = prevRound + 1;
 
     // 合并 answers 到 questionContext（作为补充信息，不改原问题），供 autonomyGate 重新扫描
-    session.questionContext = mergeAnswersToContext(session.question, answers);
-    session.answers = Array.isArray(answers) ? answers : [];
+    const priorAnswers = Array.isArray(session.answers) ? session.answers : [];
+    const currentAnswers = Array.isArray(answers) ? answers : [];
+    session.answers = [...priorAnswers, ...currentAnswers];
+    session.questionContext = mergeAnswersToContext(session.question, session.answers);
 
     logger.info('[Deliberation] answer 重新规划', {
       sessionId,
@@ -615,9 +670,10 @@ export async function answer(sessionId, answers, executionCtx = {}, dependencies
     });
 
     // 重新 plan；其保存动作继续受当前 answer token 保护。
-    const result = dependencies.planSessionFn
+    const rawResult = dependencies.planSessionFn
       ? await dependencies.planSessionFn(session, { saveSessionFn })
       : await planSessionWithFallback(session, dependencies.planFn || planner.plan, { saveSessionFn });
+    const result = enforceCaseConfirmationGate(rawResult);
     try {
       await answerTransition(sessionId, result.session, {
         mode: 'complete',
@@ -932,6 +988,16 @@ export async function execute(sessionId, agentIds, executionCtx = {}, dependenci
     });
   }
 
+  if (session.state === STATES.READY || (session.plan?.caseFile && !session.plan.caseFile.confirmedByUser)) {
+    const response = buildResponseFromSession(session);
+    return normalizeExecuteResponse({
+      ...response,
+      state: STATES.READY,
+      caseConfirmationRequired: true,
+      caseFile: session.plan?.caseFile || null,
+    });
+  }
+
   const flights = dependencies.flightRegistry || executeFlights;
   const active = flights.get(sessionId);
   if (active) return active;
@@ -943,6 +1009,46 @@ export async function execute(sessionId, agentIds, executionCtx = {}, dependenci
   } finally {
     if (flights.get(sessionId) === flight) flights.delete(sessionId);
   }
+}
+
+export async function confirmCase(sessionId, command = {}, executionCtx = {}) {
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
+  if (session.state === STATES.EXECUTE && session.plan?.caseFile?.confirmedByUser) {
+    return { ...buildResponseFromSession(session), idempotentReplay: true };
+  }
+  if (session.state !== STATES.READY || !session.plan?.caseFile) {
+    const error = new Error('当前会话尚未进入案卷确认阶段');
+    error.code = 'INVALID_SESSION_STATE';
+    error.status = 409;
+    throw error;
+  }
+  const caseFile = confirmDecisionCase(session.plan.caseFile, command);
+  const plan = { ...session.plan, caseFile, askUser: [] };
+  const acceptedMemories = (caseFile.memoryCandidates || [])
+    .filter((memory) => memory.status === 'accepted')
+    .map((memory) => ({ id: memory.id, content: memory.content, memory_type: memory.type }));
+  const context = acceptedCaseContext(caseFile);
+  const questionContext = context.length > 0 ? `${session.question}\n用户已确认案卷：\n- ${context.join('\n- ')}` : session.question;
+  await memoryService.updateSessionState(sessionId, STATES.EXECUTE, {
+    plan,
+    askUser: [],
+    memory_used: acceptedMemories,
+    question_context: questionContext,
+  });
+  await eventBus.emit(sessionId, {
+    type: 'CASE_CONFIRMED',
+    data: { factCount: caseFile.facts.length, acceptedMemoryCount: acceptedMemories.length },
+    actor: 'user',
+    visibility: 'public',
+  });
+  return buildResponseFromSession({
+    ...session,
+    state: STATES.EXECUTE,
+    plan,
+    askUser: [],
+    memory_used: acceptedMemories,
+    question_context: questionContext,
+  });
 }
 
 /**
