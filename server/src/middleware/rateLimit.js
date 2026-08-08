@@ -24,7 +24,8 @@ function cleanup() {
   }
 }
 
-setInterval(cleanup, WINDOW_MS);
+const cleanupTimer = setInterval(cleanup, WINDOW_MS);
+cleanupTimer.unref?.();
 
 function checkLimit(map, ip, max) {
   const now = Date.now();

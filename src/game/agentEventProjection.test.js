@@ -1,0 +1,362 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  applyAgentEvent,
+  createArenaProjection,
+  projectSessionSnapshot,
+} from './agentEventProjection.js';
+
+function event(sequence, type, payload = {}, extras = {}) {
+  return {
+    eventId: extras.eventId || `evt_${sequence}`,
+    sessionId: 'sess_projection',
+    sequence,
+    type,
+    actorId: extras.actorId || 'yan',
+    correlationId: 'corr_projection',
+    payload,
+    visibility: 'public',
+    createdAt: new Date(sequence * 1000).toISOString(),
+    schemaVersion: 1,
+    ...extras,
+  };
+}
+
+test('projection ignores duplicate and older events without replaying motion', () => {
+  const initial = createArenaProjection();
+  const first = applyAgentEvent(initial, event(2, 'PLAN_CREATED', { tasks: [{ id: 'task_1', label: '核验成本' }] }));
+  const duplicate = applyAgentEvent(first, event(2, 'PLAN_CREATED', {}, { eventId: 'evt_other' }));
+  const old = applyAgentEvent(first, event(1, 'PLAN_REVISED', {}));
+
+  assert.equal(first.lastSequence, 2);
+  assert.equal(first.motionCue.kind, 'plan');
+  assert.equal(duplicate, first);
+  assert.equal(old, first);
+});
+
+test('projection creates task, evidence, conflict, revision, approval and completion semantics', () => {
+  let state = createArenaProjection();
+  state = applyAgentEvent(state, event(1, 'PLAN_CREATED', { tasks: [{ id: 'task_1', label: '核验成本' }] }));
+  state = applyAgentEvent(state, event(2, 'AGENT_ASSIGNED', { agentId: 'risk', agentName: '风眼', taskId: 'task_1' }));
+  state = applyAgentEvent(state, event(3, 'EVIDENCE_ACCEPTED', { evidenceId: 'ev_1', summary: '成本可控', level: 'E2', sourceName: '公开信息' }));
+  state = applyAgentEvent(state, event(4, 'CLAIM_CHALLENGED', { claimId: 'claim_1', challengerId: 'risk', reason: '现金流假设偏乐观' }));
+  state = applyAgentEvent(state, event(5, 'PLAN_REVISED', { reason: '新证据改变优先级', tasks: [{ id: 'task_2', label: '压力测试' }] }));
+  state = applyAgentEvent(state, event(6, 'APPROVAL_REQUIRED', { prompt: '是否接受两周试行方案？' }));
+  state = applyAgentEvent(state, event(7, 'SESSION_COMPLETED', { summary: '形成可逆试行路径' }));
+
+  assert.equal(state.tasks.task_1.label, '核验成本');
+  assert.equal(state.tasks.task_2.label, '压力测试');
+  assert.equal(state.agents.risk.status, 'assigned');
+  assert.equal(state.evidence.ev_1.level, 'E2');
+  assert.equal(state.conflicts[0].reason, '现金流假设偏乐观');
+  assert.equal(state.revisions[0].reason, '新证据改变优先级');
+  assert.equal(state.approval.prompt, '是否接受两周试行方案？');
+  assert.equal(state.status, 'completed');
+  assert.equal(state.motionCue.kind, 'crystallize');
+});
+
+test('projection keeps a readable activity trail for the work hidden between input and result', () => {
+  let state = createArenaProjection();
+  state = applyAgentEvent(state, event(1, 'SESSION_CREATED', { question: '要不要吃饭' }));
+  state = applyAgentEvent(state, event(2, 'PLANNING_STARTED', { label: '辨认问题与推演深度' }));
+  state = applyAgentEvent(state, event(3, 'PLAN_CREATED', {
+    analysis: '这是低风险日常选择，先判断身体信号。',
+    tasks: [{ id: 'body_signal', label: '身体信号' }],
+  }));
+  state = applyAgentEvent(state, event(4, 'AGENT_ASSIGNED', {
+    agentId: 'health', agentName: '衡生', taskId: 'body_signal', reason: '负责身体状态判断',
+  }));
+
+  assert.deepEqual(state.activity.map((item) => item.title), [
+    '会话已建立', '开始规划', '任务已生成', '衡生加入推演',
+  ]);
+  assert.equal(state.activity[2].detail, '这是低风险日常选择，先判断身体信号。');
+  assert.equal(state.tasks.body_signal.label, '身体信号');
+  assert.equal(state.agents.health.reason, '负责身体状态判断');
+});
+
+test('advisor speech enters the readable activity trail as a public contribution', () => {
+  const state = applyAgentEvent(createArenaProjection(), event(1, 'ADVISOR_SPEAK', {
+    agentId: 'health', agentName: '衡生', content: '先确认饥饿程度和距离上次进食时间。', perspective: 'health',
+  }));
+
+  assert.equal(state.activity[0].title, '衡生提出判断');
+  assert.equal(state.activity[0].detail, '先确认饥饿程度和距离上次进食时间。');
+  assert.equal(state.agents.health.status, 'running');
+});
+
+test('replayed events restore structure without entrance motion', () => {
+  const state = applyAgentEvent(
+    createArenaProjection(),
+    event(4, 'EVIDENCE_ACCEPTED', { evidenceId: 'ev_replay', summary: '历史证据' }),
+    { replay: true },
+  );
+
+  assert.equal(state.evidence.ev_replay.summary, '历史证据');
+  assert.equal(state.motionCue, null);
+});
+
+test('Lens lifecycle events project source, task status, impact and review with distinct motion cues', () => {
+  let state = createArenaProjection();
+  assert.deepEqual(state.lens, { selected: null, tasks: {}, impacts: {}, review: null });
+
+  state = applyAgentEvent(state, event(1, 'LENS_SELECTED', {
+    lensId: 24,
+    lensName: '复',
+    source: 'session-derived',
+    sourceDigest: 'a'.repeat(64),
+    invariants: {
+      evidenceLocked: true,
+      riskLocked: true,
+      approvalLocked: true,
+      userDecisionLocked: true,
+    },
+  }));
+  assert.equal(state.lens.selected.lensName, '复');
+  assert.equal(state.lens.selected.source, 'session-derived');
+  assert.equal(state.motionCue.kind, 'lens-select');
+
+  state = applyAgentEvent(state, event(2, 'LENS_TASK_CREATED', {
+    taskId: 'lens-task-1',
+    lensId: 24,
+    kind: 'counterfactual',
+    question: '若关键假设反转，当前证据是否仍成立？',
+    targetPerspective: 'risk',
+    causedBy: ['ref_conflict'],
+  }));
+  assert.equal(state.lens.tasks['lens-task-1'].status, 'pending');
+  assert.equal(state.lens.tasks['lens-task-1'].question, '若关键假设反转，当前证据是否仍成立？');
+  assert.equal(state.motionCue.kind, 'lens-task');
+
+  state = applyAgentEvent(state, event(3, 'LENS_TASK_COMPLETED', {
+    taskId: 'lens-task-1',
+    lensId: 24,
+    outcome: 'evidence-added',
+    findingIds: ['finding-1'],
+    summary: '补充了一条可追溯证据。',
+  }));
+  assert.equal(state.lens.tasks['lens-task-1'].status, 'completed');
+  assert.equal(state.lens.impacts['lens-task-1'].summary, '补充了一条可追溯证据。');
+  assert.equal(state.motionCue.kind, 'lens-impact');
+
+  state = applyAgentEvent(state, event(4, 'LENS_REVIEW_COMPLETED', {
+    lensId: 24,
+    taskCount: 1,
+    impactCount: 1,
+    changedTaskCount: 1,
+    summary: '已完成 1 项审查任务，其中 1 项产生可追溯影响。',
+  }));
+  assert.equal(state.lens.review.summary, '已完成 1 项审查任务，其中 1 项产生可追溯影响。');
+  assert.equal(state.motionCue.kind, 'lens-review');
+});
+
+test('Lens event and snapshot projections preserve safe formation in line order', () => {
+  const formation = {
+    primary: { lowerTrigram: '离', upperTrigram: '坎' },
+    changed: { lowerTrigram: '乾', upperTrigram: '坤' },
+    lines: [
+      { position: 1, yinYang: 'yang', knowledgeState: 'verified', perspective: 'strategic', dynamic: false },
+      { position: 2, yinYang: 'yin', knowledgeState: 'contested', perspective: 'risk', dynamic: true },
+      { position: 3, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'financial', dynamic: false },
+      { position: 4, yinYang: 'yin', knowledgeState: 'verified', perspective: 'action', dynamic: false },
+      { position: 5, yinYang: 'yang', knowledgeState: 'unknown', perspective: 'communication', dynamic: false },
+      { position: 6, yinYang: 'yin', knowledgeState: 'verified', perspective: 'practical', dynamic: false },
+    ],
+  };
+  const eventState = applyAgentEvent(createArenaProjection(), event(1, 'LENS_SELECTED', {
+    lensId: 29,
+    lensName: '坎',
+    source: 'session-derived',
+    formation,
+  }));
+  const snapshotState = projectSessionSnapshot({
+    state: 'REFLECT',
+    cognitivePlan: {
+      lensId: 29,
+      lensName: '坎',
+      source: 'session-derived',
+      formation,
+      reviewTasks: [],
+    },
+  });
+
+  assert.deepEqual(eventState.lens.selected.formation, formation);
+  assert.deepEqual(snapshotState.lens.selected.formation, formation);
+  assert.deepEqual(eventState.lens.selected.formation.lines.map((line) => line.position), [1, 2, 3, 4, 5, 6]);
+});
+
+test('Lens duplicate, older and replayed events never retrigger motion', () => {
+  const selected = applyAgentEvent(createArenaProjection(), event(4, 'LENS_SELECTED', {
+    lensId: 24,
+    lensName: '复',
+    source: 'session-derived',
+  }));
+  const duplicate = applyAgentEvent(selected, event(4, 'LENS_SELECTED', {
+    lensId: 24,
+    lensName: '复',
+  }, { eventId: 'evt_duplicate_lens' }));
+  const older = applyAgentEvent(selected, event(3, 'LENS_TASK_CREATED', {
+    taskId: 'lens-task-old',
+    question: '过期问题',
+  }));
+  const replayed = applyAgentEvent(createArenaProjection(), event(1, 'LENS_TASK_CREATED', {
+    taskId: 'lens-task-replay',
+    lensId: 24,
+    question: '历史审查问题',
+    causedBy: ['ref_history'],
+  }), { replay: true });
+
+  assert.equal(selected.motionCue.kind, 'lens-select');
+  assert.equal(duplicate, selected);
+  assert.equal(older, selected);
+  assert.equal(replayed.lens.tasks['lens-task-replay'].question, '历史审查问题');
+  assert.equal(replayed.motionCue, null);
+});
+
+test('session snapshot restores arena structure before consuming missing events', () => {
+  const state = projectSessionSnapshot({
+    state: 'ORACLE',
+    plan: {
+      dimensions: [{ id: 'cost', name: '成本' }],
+      agents: [{ id: 'risk', name: '风眼' }],
+    },
+    toolResults: [{ evidence: { id: 'ev_snapshot', summary: '历史证据', accepted: true } }],
+    findings: [{ id: 'claim_snapshot', agentId: 'risk', content: '建议先试行' }],
+    conflicts: [{ reason: '存在冲突' }],
+    dynamicChoices: [{ id: 'trial', label: '先试行' }],
+    replanCount: 2,
+    masterSummary: '已形成三个路径',
+  }, { lastSequence: 12 });
+
+  assert.equal(state.lastSequence, 12);
+  assert.equal(state.tasks.cost.label, '成本');
+  assert.equal(state.agents.risk.agentName, '风眼');
+  assert.equal(state.evidence.ev_snapshot.summary, '历史证据');
+  assert.equal(state.claims.claim_snapshot.content, '建议先试行');
+  assert.equal(state.revisions.length, 2);
+  assert.equal(state.approval.choices[0].id, 'trial');
+  assert.equal(state.status, 'awaiting-approval');
+  assert.equal(state.motionCue, null);
+  assert.equal(state.activity[0].title, '案卷已恢复');
+  assert.match(state.activity[0].detail, /1 项任务、1 位智囊/);
+});
+
+test('session snapshot restores Lens projection without replaying its ceremony', () => {
+  const state = projectSessionSnapshot({
+    state: 'ORACLE',
+    cognitivePlan: {
+      lensId: 24,
+      lensName: '复',
+      source: 'session-derived',
+      sourceDigest: 'b'.repeat(64),
+      invariants: {
+        evidenceLocked: true,
+        riskLocked: true,
+        approvalLocked: true,
+        userDecisionLocked: true,
+      },
+      reviewTasks: [{
+        id: 'lens-task-snapshot',
+        kind: 'exit-condition',
+        question: '什么条件出现时应停止试行？',
+        targetPerspective: 'risk',
+        causedBy: ['ref_snapshot'],
+        prompt: '不得进入前端投影',
+      }],
+      rawModelContent: '不得进入前端投影',
+    },
+    lensImpacts: [{
+      taskId: 'lens-task-snapshot',
+      lensId: 24,
+      outcome: 'exit-condition-added',
+      findingIds: ['finding-exit'],
+      summary: '增加了可验证的退出条件。',
+      rawModelContent: '不得进入前端投影',
+    }],
+    lensReview: {
+      lensId: 24,
+      taskCount: 1,
+      impactCount: 1,
+      changedTaskCount: 1,
+      summary: '权威审查记录已完成。',
+    },
+  }, { lastSequence: 18 });
+
+  assert.deepEqual(state.lens.selected, {
+    lensId: 24,
+    lensName: '复',
+    source: 'session-derived',
+    sourceDigest: 'b'.repeat(64),
+    invariants: {
+      evidenceLocked: true,
+      riskLocked: true,
+      approvalLocked: true,
+      userDecisionLocked: true,
+    },
+  });
+  assert.equal(state.lens.tasks['lens-task-snapshot'].status, 'completed');
+  assert.equal(state.lens.impacts['lens-task-snapshot'].outcome, 'exit-condition-added');
+  assert.deepEqual(state.lens.review, {
+    lensId: 24,
+    taskCount: 1,
+    impactCount: 1,
+    changedTaskCount: 1,
+    summary: '权威审查记录已完成。',
+    restored: true,
+  });
+  assert.doesNotMatch(JSON.stringify(state.lens), /rawModelContent|prompt|不得进入前端投影/);
+  assert.equal(state.motionCue, null);
+});
+
+test('session snapshot keeps unfinished Lens tasks pending and does not synthesize review from partial impacts', () => {
+  const state = projectSessionSnapshot({
+    state: 'REFLECT',
+    cognitivePlan: {
+      lensId: 24,
+      lensName: '复',
+      source: 'session-derived',
+      reviewTasks: [
+        { id: 'lens-task-done', kind: 'assumption', question: '已完成的问题', causedBy: ['ref_done'] },
+        { id: 'lens-task-pending', kind: 'counterfactual', question: '尚未完成的问题', causedBy: ['ref_pending'] },
+      ],
+    },
+    lensImpacts: [{
+      taskId: 'lens-task-done',
+      lensId: 24,
+      outcome: 'claim-challenged',
+      findingIds: ['finding-done'],
+      summary: '一项主张已被挑战。',
+    }],
+  });
+
+  assert.equal(state.lens.tasks['lens-task-done'].status, 'completed');
+  assert.equal(state.lens.tasks['lens-task-pending'].status, 'pending');
+  assert.deepEqual(Object.keys(state.lens.impacts), ['lens-task-done']);
+  assert.equal(state.lens.review, null);
+  assert.equal(state.motionCue, null);
+});
+
+test('session snapshot with zero Lens impacts leaves every task pending and review absent', () => {
+  const state = projectSessionSnapshot({
+    state: 'REFLECT',
+    cognitivePlan: {
+      lensId: 2,
+      lensName: '坤',
+      source: 'session-derived',
+      reviewTasks: [
+        { id: 'lens-task-zero-1', kind: 'failure-mode', question: '失败模式是什么？', causedBy: ['ref_zero_1'] },
+        { id: 'lens-task-zero-2', kind: 'exit-condition', question: '退出条件是什么？', causedBy: ['ref_zero_2'] },
+      ],
+    },
+    lensImpacts: [],
+  });
+
+  assert.deepEqual(
+    Object.values(state.lens.tasks).map((task) => task.status),
+    ['pending', 'pending'],
+  );
+  assert.deepEqual(state.lens.impacts, {});
+  assert.equal(state.lens.review, null);
+  assert.equal(state.motionCue, null);
+});

@@ -10,12 +10,83 @@
  * 解决问题: db.js 无事务导致状态与事件脱节（deepseek 死穴1）
  */
 
+import { createHash } from 'node:crypto';
+
 import { query } from './db.js';
 import { generateUUID } from '../utils/id.js';
 import logger from './logger.js';
 
 const EVENTS_TABLE = 'deliberation_events';
 const SNAPSHOTS_TABLE = 'deliberation_snapshots';
+
+export const AGENT_EVENT_SCHEMA_VERSION = 1;
+export const AGENT_EVENT_VISIBILITIES = Object.freeze(['public', 'summary', 'internal']);
+export const AGENT_DOMAIN_EVENT_TYPES = Object.freeze([
+  'SESSION_CREATED', 'PLANNING_STARTED',
+  'PLAN_CREATED', 'PLAN_REVISED', 'UNKNOWN_IDENTIFIED',
+  'AGENT_ASSIGNED', 'AGENT_STARTED', 'AGENT_COMPLETED', 'AGENT_FAILED',
+  'TOOL_STARTED', 'EVIDENCE_ACCEPTED', 'EVIDENCE_REJECTED', 'ACTION_FAILED',
+  'CLAIM_CHALLENGED', 'CONSENSUS_FORMED', 'AUDIT_FAILED',
+  'APPROVAL_REQUIRED', 'DECISION_COMMITTED', 'SESSION_COMPLETED',
+  'LENS_SELECTED', 'LENS_TASK_CREATED', 'LENS_TASK_COMPLETED', 'LENS_REVIEW_COMPLETED',
+]);
+
+export function deterministicEventId(sessionId, correlationId, type, idempotencyKey) {
+  const digest = createHash('sha256')
+    .update(JSON.stringify([sessionId, correlationId, type, idempotencyKey]))
+    .digest('hex');
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(12, 15)}-8${digest.slice(15, 18)}-${digest.slice(18, 30)}`;
+}
+
+const APPEND_OUTCOME = Symbol('agentEventAppendOutcome');
+
+export function wasEventInserted(event) {
+  return event?.[APPEND_OUTCOME] === true;
+}
+
+function stableSerialize(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  return `{${Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`)
+    .join(',')}}`;
+}
+
+function withAppendOutcome(event, inserted) {
+  Object.defineProperty(event, APPEND_OUTCOME, { value: inserted });
+  return event;
+}
+
+function assertMatchingEventIdentity(existing, identity) {
+  const mismatches = [];
+  if (existing.sessionId !== identity.sessionId) mismatches.push('sessionId');
+  if (existing.type !== identity.type) mismatches.push('type');
+  if (existing.actorId !== identity.actorId) mismatches.push('actorId');
+  if ((existing.taskId || null) !== identity.taskId) mismatches.push('taskId');
+  if ((existing.causationId || null) !== identity.causationId) mismatches.push('causationId');
+  if (existing.correlationId !== identity.correlationId) mismatches.push('correlationId');
+  if (existing.visibility !== identity.visibility) mismatches.push('visibility');
+  if (existing.schemaVersion !== AGENT_EVENT_SCHEMA_VERSION) mismatches.push('schemaVersion');
+  if (stableSerialize(existing.payload) !== stableSerialize(identity.payload)) mismatches.push('payload');
+  if (mismatches.length > 0) {
+    const error = new Error(`EVENT_ID_COLLISION: existing event differs by ${mismatches.join(', ')}`);
+    error.code = 'EVENT_ID_COLLISION';
+    throw error;
+  }
+}
+
+function replayExistingEvent(row, identity) {
+  const existing = rowToAgentEvent(row, 1);
+  assertMatchingEventIdentity(existing, identity);
+  return withAppendOutcome(existing, false);
+}
+
+const INTERNAL_BY_DEFAULT = new Set(['THOUGHT', 'ACTION', 'REACT_THINK', 'REACT_ACT', 'REACT_OBSERVE', 'AUDIT_EVENT']);
+const SUMMARY_BY_DEFAULT = new Set(['OBSERVATION', 'ERROR', 'AUDIT_ALERT']);
+const appendQueues = new Map();
+const MAX_SEQUENCE_RETRIES = 5;
 
 // 每多少个事件写一次快照（平衡恢复速度与写入开销）
 const SNAPSHOT_INTERVAL = 10;
@@ -29,21 +100,103 @@ const SNAPSHOT_INTERVAL = 10;
  * @param {string|null} actor
  * @returns {Promise<object>} 完整事件对象
  */
-export async function appendEvent(sessionId, type, data = {}, actor = null) {
-  const id = generateUUID();
-  const timestamp = new Date().toISOString();
-  await query({
-    table: EVENTS_TABLE,
-    action: 'insert',
-    data: {
-      id,
-      session_id: sessionId,
+export async function appendEvent(sessionId, type, data = {}, actor = null, metadata = {}) {
+  if (!sessionId || !type) throw new TypeError('appendEvent requires sessionId and type');
+  const previous = appendQueues.get(sessionId) || Promise.resolve();
+  const operation = previous.catch(() => {}).then(async () => {
+    const eventId = metadata.eventId || generateUUID();
+    const payload = data && typeof data === 'object' ? data : {};
+    const identity = {
+      sessionId,
       type,
-      payload: JSON.stringify(data),
-      actor,
-    },
+      actorId: metadata.actorId || actor || 'system',
+      taskId: metadata.taskId || null,
+      causationId: metadata.causationId || null,
+      correlationId: metadata.correlationId || payload.correlationId || `corr_${eventId}`,
+      payload,
+      visibility: normalizeVisibility(metadata.visibility, type),
+    };
+    const existing = await query({
+      table: EVENTS_TABLE,
+      action: 'select',
+      filter: { id: eventId },
+      queryOptions: { limit: 1 },
+    });
+    if (existing.rows?.[0]) return replayExistingEvent(existing.rows[0], identity);
+    const createdAt = metadata.createdAt || new Date().toISOString();
+    for (let attempt = 0; attempt < MAX_SEQUENCE_RETRIES; attempt += 1) {
+      const latest = await query({
+        table: EVENTS_TABLE,
+        action: 'select',
+        filter: { session_id: sessionId },
+        queryOptions: { orderBy: 'sequence:desc', limit: 1 },
+      });
+      const sequence = Number(latest.rows?.[0]?.sequence || 0) + 1;
+      const event = withLegacyAliases({
+        eventId,
+        sessionId,
+        sequence,
+        type,
+        actorId: identity.actorId,
+        ...(identity.taskId ? { taskId: identity.taskId } : {}),
+        ...(identity.causationId ? { causationId: identity.causationId } : {}),
+        correlationId: identity.correlationId,
+        payload: identity.payload,
+        visibility: identity.visibility,
+        createdAt,
+        schemaVersion: AGENT_EVENT_SCHEMA_VERSION,
+      });
+      try {
+        await query({
+          table: EVENTS_TABLE,
+          action: 'insert',
+          data: {
+            id: event.eventId,
+            session_id: event.sessionId,
+            sequence: event.sequence,
+            type: event.type,
+            payload: JSON.stringify(event.payload),
+            actor: event.actorId,
+            actor_id: event.actorId,
+            task_id: event.taskId || null,
+            causation_id: event.causationId || null,
+            correlation_id: event.correlationId,
+            visibility: event.visibility,
+            schema_version: event.schemaVersion,
+            created_at: event.createdAt,
+          },
+        });
+        return withAppendOutcome(event, true);
+      } catch (error) {
+        if (isEventIdConflict(error)) {
+          const existingEvent = await query({
+            table: EVENTS_TABLE,
+            action: 'select',
+            filter: { id: eventId },
+            queryOptions: { limit: 1 },
+          });
+          if (existingEvent.rows?.[0]) return replayExistingEvent(existingEvent.rows[0], identity);
+        }
+        if (!isSequenceConflict(error) || attempt === MAX_SEQUENCE_RETRIES - 1) throw error;
+        await new Promise((resolve) => setTimeout(resolve, (2 ** attempt) + Math.floor(Math.random() * 5)));
+      }
+    }
+    throw new Error('Agent event sequence allocation exhausted');
   });
-  return { id, sessionId, type, data, actor, timestamp };
+  appendQueues.set(sessionId, operation);
+  try {
+    return await operation;
+  } finally {
+    if (appendQueues.get(sessionId) === operation) appendQueues.delete(sessionId);
+  }
+}
+
+export function isSequenceConflict(error) {
+  return error?.code === '23505' && error?.constraint === 'idx_events_session_sequence';
+}
+
+function isEventIdConflict(error) {
+  return error?.code === '23505' && error?.constraint === 'deliberation_events_pkey';
 }
 
 /**
@@ -52,29 +205,73 @@ export async function appendEvent(sessionId, type, data = {}, actor = null) {
  * @param {string|null} afterTimestamp 只读此时间之后的事件
  * @returns {Promise<Array>}
  */
-export async function getEvents(sessionId, afterTimestamp = null) {
+export async function getEvents(sessionId, options = {}) {
+  const normalizedOptions = typeof options === 'string' ? { afterTimestamp: options } : (options || {});
+  const hasSequenceCursor = Number.isFinite(Number(normalizedOptions.afterSequence));
+  const afterSequence = hasSequenceCursor ? Number(normalizedOptions.afterSequence) : null;
   const result = await query({
     table: EVENTS_TABLE,
     action: 'select',
     filter: { session_id: sessionId },
-    queryOptions: { orderBy: 'created_at:asc', limit: 200 },
+    queryOptions: {
+      orderBy: hasSequenceCursor ? 'sequence:asc' : 'sequence:desc',
+      limit: Math.min(Number(normalizedOptions.limit || 200), 200),
+      ...(hasSequenceCursor ? { greaterThan: { sequence: afterSequence } } : {}),
+    },
   });
-  let events = result.rows || [];
-  if (afterTimestamp) {
-    const after = new Date(afterTimestamp).getTime();
+  let events = (result.rows || [])
+    .map((row, index) => rowToAgentEvent(row, index + 1))
+    .sort((left, right) => left.sequence - right.sequence);
+  if (normalizedOptions.afterTimestamp) {
+    const after = new Date(normalizedOptions.afterTimestamp).getTime();
     events = events.filter((e) => {
-      const t = new Date(e.created_at).getTime();
+      const t = new Date(e.createdAt).getTime();
       return t > after;
     });
   }
-  return events.map((row) => ({
-    id: row.id,
-    type: row.type,
+  if (hasSequenceCursor) events = events.filter((event) => event.sequence > afterSequence);
+  if (normalizedOptions.browserVisibleOnly) events = events.filter(isBrowserVisibleEvent);
+  return events;
+}
+
+export function isBrowserVisibleEvent(event) {
+  return event?.visibility === 'public' || event?.visibility === 'summary';
+}
+
+function normalizeVisibility(visibility, type) {
+  if (AGENT_EVENT_VISIBILITIES.includes(visibility)) return visibility;
+  if (INTERNAL_BY_DEFAULT.has(type)) return 'internal';
+  if (SUMMARY_BY_DEFAULT.has(type)) return 'summary';
+  return 'public';
+}
+
+function rowToAgentEvent(row, fallbackSequence) {
+  const eventId = row.id || row.event_id;
+  const payload = typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : (row.payload || {});
+  return withLegacyAliases({
+    eventId,
     sessionId: row.session_id,
-    data: typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : (row.payload || {}),
-    actor: row.actor,
-    timestamp: row.created_at,
-  }));
+    sequence: Number(row.sequence || fallbackSequence),
+    type: row.type,
+    actorId: row.actor_id || row.actor || 'system',
+    ...(row.task_id ? { taskId: row.task_id } : {}),
+    ...(row.causation_id ? { causationId: row.causation_id } : {}),
+    correlationId: row.correlation_id || payload.correlationId || `corr_${eventId}`,
+    payload,
+    visibility: normalizeVisibility(row.visibility, row.type),
+    createdAt: row.created_at || new Date().toISOString(),
+    schemaVersion: Number(row.schema_version || AGENT_EVENT_SCHEMA_VERSION),
+  });
+}
+
+export function withLegacyAliases(event) {
+  Object.defineProperties(event, {
+    id: { enumerable: false, get: () => event.eventId },
+    data: { enumerable: false, get: () => event.payload },
+    actor: { enumerable: false, get: () => event.actorId },
+    timestamp: { enumerable: false, get: () => event.createdAt },
+  });
+  return event;
 }
 
 /**

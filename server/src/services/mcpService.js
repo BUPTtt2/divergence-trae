@@ -360,6 +360,7 @@ export const TOOL_REGISTRY = {
     category: '搜索',
     icon: '🔍',
     timeout: 5000,
+    executionMode: 'live', riskLevel: 'R1', evidenceLevel: 'E2', evidenceKind: 'web', agentAccessible: true,
     execute: webSearch,
     parameters: {
       query: { type: 'string', description: '搜索关键词', required: true },
@@ -380,6 +381,7 @@ export const TOOL_REGISTRY = {
     category: '金融',
     icon: '📈',
     timeout: 5000,
+    executionMode: 'live', riskLevel: 'R1', evidenceLevel: 'E2', evidenceKind: 'market', agentAccessible: true,
     execute: stockQuery,
     parameters: {
       symbol: { type: 'string', description: '股票代码或名称（如 600519、贵州茅台）', required: true },
@@ -398,6 +400,7 @@ export const TOOL_REGISTRY = {
     category: '生活',
     icon: '☀️',
     timeout: 5000,
+    executionMode: 'live', riskLevel: 'R1', evidenceLevel: 'E2', evidenceKind: 'weather', agentAccessible: true,
     execute: weatherQuery,
     parameters: {
       city: { type: 'string', description: '城市名称，如：北京、上海', required: true },
@@ -416,6 +419,7 @@ export const TOOL_REGISTRY = {
     category: '工具',
     icon: '📅',
     timeout: 2000,
+    executionMode: 'static', riskLevel: 'R0', evidenceLevel: 'E0', evidenceKind: 'interpretive', agentAccessible: true,
     execute: calendarQuery,
     parameters: {
       date: { type: 'string', description: '日期 YYYY-MM-DD，默认今天', required: false },
@@ -433,6 +437,7 @@ export const TOOL_REGISTRY = {
     category: '效率',
     icon: '📝',
     timeout: 1000,
+    executionMode: 'mock', riskLevel: 'R3', evidenceLevel: 'E0', evidenceKind: 'write', agentAccessible: false,
     execute: noteCreate,
     parameters: {
       title: { type: 'string', description: '笔记标题', required: true },
@@ -455,6 +460,7 @@ export const TOOL_REGISTRY = {
     category: '工具',
     icon: '🌐',
     timeout: 1000,
+    executionMode: 'mock', riskLevel: 'R1', evidenceLevel: 'E0', evidenceKind: 'translation', agentAccessible: false,
     execute: translateText,
     parameters: {
       text: { type: 'string', description: '待翻译文本', required: true },
@@ -475,6 +481,7 @@ export const TOOL_REGISTRY = {
     category: '金融',
     icon: '💱',
     timeout: 5000,
+    executionMode: 'live', riskLevel: 'R1', evidenceLevel: 'E2', evidenceKind: 'market', agentAccessible: true,
     execute: exchangeRate,
     parameters: {
       from: { type: 'string', description: '源币种代码，如 USD', required: true },
@@ -495,6 +502,7 @@ export const TOOL_REGISTRY = {
     category: '金融',
     icon: '💰',
     timeout: 1000,
+    executionMode: 'deterministic', riskLevel: 'R0', evidenceLevel: 'E0', evidenceKind: 'calculation', agentAccessible: true,
     execute: salaryCalc,
     parameters: {
       base: { type: 'number', description: '月薪基数（元）', required: true },
@@ -517,6 +525,7 @@ export const TOOL_REGISTRY = {
     category: '工具',
     icon: '🏢',
     timeout: 5000,
+    executionMode: 'live', riskLevel: 'R1', evidenceLevel: 'E2', evidenceKind: 'web', agentAccessible: true,
     execute: companyInfo,
     parameters: {
       name: { type: 'string', description: '公司名称', required: true },
@@ -535,6 +544,7 @@ export const TOOL_REGISTRY = {
     category: '金融',
     icon: '📊',
     timeout: 1000,
+    executionMode: 'static', riskLevel: 'R0', evidenceLevel: 'E0', evidenceKind: 'snapshot', agentAccessible: true,
     execute: macroData,
     parameters: {
       indicator: { type: 'string', description: '指标：GDP/CPI/LPR/PMI', required: true },
@@ -574,7 +584,7 @@ export async function executeTool(name, params = {}) {
 export function getToolSchemas(names = []) {
   return names
     .map(n => TOOL_REGISTRY[n])
-    .filter(Boolean)
+    .filter(t => t?.agentAccessible !== false)
     .map(t => ({
       type: 'function',
       function: {
@@ -621,23 +631,20 @@ export function summarizeToolResult(name, result) {
 // ===== 向后兼容（/api/mcp/* 路由用）=====
 
 export function listTools() {
-  return Object.values(TOOL_REGISTRY).map(t => ({
+  return Object.values(TOOL_REGISTRY).filter(t => t.agentAccessible !== false).map(t => ({
     name: t.name,
     description: t.description,
     category: t.category,
     icon: t.icon,
     parameters: t.parameters,
+    executionMode: t.executionMode,
+    riskLevel: t.riskLevel,
   }));
 }
 
 export async function callTool(toolName, params = {}) {
-  const result = await executeTool(toolName, params);
-  return {
-    tool: toolName,
-    params,
-    result,
-    timestamp: new Date().toISOString(),
-  };
+  const { executeEvidenceTool } = await import('./toolEvidenceGateway.js');
+  return executeEvidenceTool(toolName, params);
 }
 
 export default {

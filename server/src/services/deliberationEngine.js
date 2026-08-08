@@ -28,9 +28,15 @@ import * as customAdvisorService from './customAdvisorService.js';
 import logger from './logger.js';
 import eventBus from './eventBus.js';
 import { evaluateSession } from './evalPipeline.js';
-import { withRetry, withTimeout } from './retryHelper.js';
 import * as reactLoop from './reactLoop.js';
-import * as eventStore from './eventStore.js';
+import {
+  commitDomainEvents,
+  lensCompletionDomainEvents,
+  lensPlanDomainEvents,
+  reflectionDomainEvents,
+} from './agentEventSemantics.js';
+import { executeLensReviewTasks } from './cognitivePerturbationService.js';
+import { normalizeExecuteResponse } from '../../../shared/deliberationContract.js';
 // 系统级 Agent（生产级 4 Agent）
 import AuditAgentSingleton from '../agents/system/AuditAgent.js';
 const _auditAttached = (() => { try { AuditAgentSingleton.ensureAttached(); } catch (e) { logger.warn('[DeliberationEngine] audit attach fail', e.message); } return true; })();
@@ -44,12 +50,16 @@ export const STATES = {
   REFLECT: 'REFLECT',
   ORACLE: 'ORACLE',
   COMMIT: 'COMMIT',
+  COMPLETE: 'COMPLETE',
   PAUSED: 'PAUSED',
   FAILED: 'FAILED',
 };
 
 const MAX_ROUND = 2;
 const PAUSE_TIMEOUT_MS = 30 * 60 * 1000; // 30 分钟内可 resume
+const commitFlights = new Map();
+const executeFlights = new Map();
+const lensReviewFlights = new Map();
 
 // ============ 工具函数 ============
 
@@ -84,7 +94,7 @@ function buildResponse(plannedSession, plan, askUser, openingLine, round, memory
  * @param {object} session
  * @returns {object} 数据契约响应
  */
-function buildResponseFromSession(session) {
+export function buildResponseFromSession(session) {
   const plan = session && session.plan ? session.plan : { dimensions: [], toolProbes: [], askUser: [], minFindings: 3 };
   const memoryUsed = Array.isArray(session && session.memory_used) ? session.memory_used : [];
   const askUser = Array.isArray(plan.askUser) && plan.askUser.length > 0
@@ -93,12 +103,27 @@ function buildResponseFromSession(session) {
   return {
     sessionId: session && session.id,
     state: session && session.state,
+    question: session && session.question,
     askUser,
     plan,
     round: (plan && plan.round) || (session && session.round) || 1,
+    replanCount: Number(session?.replan_count || 0),
     maxRound: MAX_ROUND,
     openingLine: (plan && plan.openingLine) || (session && session.openingLine) || '',
     memory: memoryUsed.map((m) => ({ content: m.content, type: m.memory_type })),
+    toolResults: Array.isArray(session?.tool_results) ? session.tool_results : [],
+    findings: Array.isArray(session?.findings) ? session.findings : [],
+    conflicts: Array.isArray(session?.conflicts) ? session.conflicts : [],
+    gaps: Array.isArray(session?.gaps) ? session.gaps : [],
+    dynamicChoices: Array.isArray(session?.dynamic_choices) ? session.dynamic_choices : [],
+    masterSummary: session?.master_summary || '',
+    oracle: session?.oracle || null,
+    cognitivePlan: session?.cognitive_plan ?? session?.cognitivePlan ?? null,
+    lensImpacts: Array.isArray(session?.lens_impacts)
+      ? session.lens_impacts
+      : (Array.isArray(session?.lensImpacts) ? session.lensImpacts : []),
+    lensReview: session?.lens_review ?? session?.lensReview ?? session?.cognitive_plan?.review ?? null,
+    commitResult: session?.commit_result || null,
   };
 }
 
@@ -122,6 +147,224 @@ function mergeAnswersToContext(question, answers) {
   return text ? `${question} ${text}`.trim() : question;
 }
 
+function sessionNotFoundError() {
+  const error = new Error('SESSION_NOT_FOUND');
+  error.code = 'SESSION_NOT_FOUND';
+  return error;
+}
+
+async function performLensReviewLifecycle(result, context = {}, dependencies = {}) {
+  const plan = result?.cognitivePlan ?? result?.session?.cognitivePlan ?? null;
+  const sessionId = context.sessionId || result.session?.id;
+  const actionId = String(context.actionId || '').trim();
+  const emit = dependencies.emitFn || eventBus.emit.bind(eventBus);
+  for (const event of lensPlanDomainEvents({ cognitivePlan: plan, lensImpacts: [] })) {
+    await emit(sessionId, { ...event, actor: 'reflector', correlationId: actionId });
+  }
+
+  const executeFn = dependencies.executeFn || executeLensReviewTasks;
+  const executed = await executeFn({ session: result.session, plan, actionId });
+  const totalTaskCount = Math.min(3, plan.reviewTasks.length);
+  const reviewedTaskIds = new Set(plan.reviewTasks.slice(0, totalTaskCount).map((task) => task.id));
+  const completedTaskIds = new Set(executed.impacts.flatMap((impact) => {
+    if (!reviewedTaskIds.has(impact?.taskId)) return [];
+    if (
+      impact?.outcome === 'no-change'
+      && typeof impact?.executionId === 'string'
+      && typeof impact?.agentId === 'string'
+    ) return [impact.taskId];
+    if (!Array.isArray(impact?.findingIds)) return [];
+    const linked = impact.findingIds.some((findingId) => executed.findings.some((finding) => (
+      finding?.id === findingId
+      && finding?.lensTaskId === impact.taskId
+      && finding?.lensId === plan.lensId
+    )));
+    return linked ? [impact.taskId] : [];
+  }));
+  const completedTaskCount = completedTaskIds.size;
+  const lensReview = {
+    started: true,
+    status: completedTaskCount === totalTaskCount ? 'completed' : 'pending',
+    actionId,
+    totalTaskCount,
+    completedTaskCount,
+    pendingTaskIds: [...reviewedTaskIds].filter((taskId) => !completedTaskIds.has(taskId)),
+  };
+  const cognitivePlan = {
+    ...executed.plan,
+    reviewTasks: executed.plan.reviewTasks.map((task) => reviewedTaskIds.has(task.id)
+      ? { ...task, status: completedTaskIds.has(task.id) ? 'completed' : 'pending' }
+      : task),
+    review: lensReview,
+  };
+  const next = {
+    ...result,
+    cognitivePlan,
+    lensImpacts: executed.impacts,
+    lensReview,
+    session: {
+      ...result.session,
+      findings: executed.findings,
+      cognitivePlan,
+      lensImpacts: executed.impacts,
+      lensReview,
+    },
+  };
+  const persist = dependencies.persistFn || ((id, value) => persistExecuteResult(id, value, {
+    actionId,
+    claimToken: context.claimToken,
+  }));
+  await persist(sessionId, next);
+  for (const event of lensCompletionDomainEvents(next)) {
+    await emit(sessionId, { ...event, actor: 'reflector', correlationId: actionId });
+  }
+  return next;
+}
+
+export async function runLensReviewLifecycle(result, context = {}, dependencies = {}) {
+  const plan = result?.cognitivePlan ?? result?.session?.cognitivePlan ?? null;
+  if (!Number.isInteger(plan?.lensId) || !Array.isArray(plan?.reviewTasks) || plan.reviewTasks.length === 0) {
+    return result;
+  }
+  if (plan.review?.started === true) return result;
+
+  const sessionId = String(context.sessionId || result?.session?.id || '').trim();
+  if (!sessionId) throw new Error('LENS_REVIEW_SESSION_REQUIRED');
+
+  const active = lensReviewFlights.get(sessionId);
+  if (active) return active;
+
+  const flight = (async () => {
+    const actionId = String(context.actionId || '').trim();
+    const tasks = plan.reviewTasks.slice(0, 3);
+    const lensReview = {
+      started: true,
+      status: 'running',
+      actionId,
+      totalTaskCount: tasks.length,
+      completedTaskCount: 0,
+      pendingTaskIds: tasks.map((task) => task.id).filter(Boolean),
+    };
+    const claimedPlan = {
+      ...plan,
+      reviewTasks: plan.reviewTasks.map((task, index) => (index < 3 ? { ...task, status: 'pending' } : task)),
+      review: lensReview,
+    };
+    const claim = dependencies.claimFn || memoryService.claimLensReview;
+    const claimResult = await claim(sessionId, {
+      cognitivePlan: claimedPlan,
+      lensReview,
+      actionId,
+      executeClaimToken: context.claimToken,
+    });
+    if (!claimResult?.claimed) {
+      const persisted = claimResult?.session;
+      if (!persisted) throw new Error('LENS_REVIEW_CLAIM_STATE_UNAVAILABLE');
+      const persistedPlan = persisted.cognitive_plan ?? persisted.cognitivePlan ?? null;
+      const persistedImpacts = persisted.lens_impacts ?? persisted.lensImpacts ?? [];
+      const persistedReview = persisted.lens_review ?? persisted.lensReview ?? persistedPlan?.review ?? null;
+      return {
+        ...result,
+        session: { ...result.session, ...persisted },
+        cognitivePlan: persistedPlan,
+        lensImpacts: persistedImpacts,
+        lensReview: persistedReview,
+        lensReviewRecovered: true,
+      };
+    }
+    const persisted = claimResult.session || {};
+    const durablePlan = persisted.cognitive_plan ?? persisted.cognitivePlan ?? claimedPlan;
+    const claimedResult = {
+      ...result,
+      cognitivePlan: durablePlan,
+      lensReview: persisted.lens_review ?? persisted.lensReview ?? lensReview,
+      session: {
+        ...persisted,
+        ...result.session,
+        cognitivePlan: durablePlan,
+        lensReview: persisted.lens_review ?? persisted.lensReview ?? lensReview,
+      },
+    };
+    return performLensReviewLifecycle(claimedResult, context, dependencies);
+  })();
+  lensReviewFlights.set(sessionId, flight);
+  try {
+    return await flight;
+  } finally {
+    if (lensReviewFlights.get(sessionId) === flight) lensReviewFlights.delete(sessionId);
+  }
+}
+
+export async function assertSessionOwner(sessionId, verifiedUserId) {
+  const userId = String(verifiedUserId || '').trim();
+  const session = userId ? await memoryService.getSession(sessionId) : null;
+  if (!session || session.user_id !== userId) throw sessionNotFoundError();
+  return session;
+}
+
+export async function planSessionWithFallback(session, planFn = planner.plan, dependencies = {}) {
+  try {
+    return await planFn(session, dependencies);
+  } catch (error) {
+    if (
+      error?.code === 'EXECUTE_CLAIM_LOST'
+      || error?.code === 'ANSWER_STATE_CONFLICT'
+      || error?.code === 'ANSWER_PERSIST_FAILED'
+    ) throw error;
+    logger.warn('[Deliberation] planner 失败，保存可继续的规则兜底', { sessionId: session.id, error: error.message });
+    const fallback = _fallbackPlanResult(session, error.message);
+    const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
+    await saveSession({
+      ...fallback.session,
+      state: fallback.session.state,
+      plan: fallback.plan,
+    });
+    return fallback;
+  }
+}
+
+function executeProjectionPatch(session) {
+  const patch = memoryService.toSessionPersistenceData(session);
+  delete patch.state;
+  delete patch.execute_action_id;
+  delete patch.execute_status;
+  delete patch.execute_claim_token;
+  delete patch.execute_lease_expires_at;
+  return patch;
+}
+
+async function persistClaimedExecuteSession(sessionId, session, executionCtx) {
+  await memoryService.updateClaimedExecute(sessionId, {
+    actionId: executionCtx.actionId,
+    claimToken: executionCtx.claimToken,
+    state: session.state,
+    patch: executeProjectionPatch(session),
+  });
+  return { ...session, id: sessionId };
+}
+
+export async function persistClarifyExecute(sessionId, session, questions, executionCtx = {}, dependencies = {}) {
+  const plan = {
+    ...(session.plan || {}),
+    askUser: questions,
+  };
+  const completeExecute = dependencies.completeExecuteFn || memoryService.completeExecute;
+  const completed = await completeExecute(sessionId, {
+    actionId: executionCtx.actionId,
+    claimToken: executionCtx.claimToken,
+    state: STATES.WAIT,
+    patch: {
+      findings: Array.isArray(session.findings) ? session.findings : [],
+      tool_results: Array.isArray(session.tool_results) ? session.tool_results : [],
+      plan,
+    },
+  });
+  session.state = STATES.WAIT;
+  session.plan = plan;
+  session.askUser = questions;
+  return completed.session;
+}
+
 // ============ 主入口 ============
 
 /**
@@ -132,9 +375,7 @@ function mergeAnswersToContext(question, answers) {
  * @param {string} userId 用户ID
  * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
-export async function start(question, userId) {
-  logger.info('[Deliberation] start 开始', { question: (question || '').slice(0, 60), userId });
-
+export async function createSession(question, userId) {
   if (!question || typeof question !== 'string' || question.trim().length === 0) {
     throw new Error('缺少 question 参数');
   }
@@ -145,8 +386,6 @@ export async function start(question, userId) {
     throw new Error('缺少 userId 参数');
   }
 
-  // ========== v3.1 关键修复：先落 session，再 plan ==========
-  // 即使 plan 全部失败也一定给前端返回一个有效的 sessionId，避免 500 让前端卡死
   let session = {
     user_id: userId,
     question: question.trim(),
@@ -164,25 +403,45 @@ export async function start(question, userId) {
     logger.warn('[Deliberation] saveSession 失败，使用内存态 id', { sessionId: session.id, error: e.message });
   }
   const sessionId = session.id;
+  await eventBus.emit(sessionId, {
+    type: 'SESSION_CREATED',
+    data: { question: session.question },
+    actor: 'yan',
+    visibility: 'public',
+  });
+  return {
+    sessionId,
+    state: STATES.PLAN,
+    question: session.question,
+    round: 1,
+    maxRound: MAX_ROUND,
+  };
+}
 
-  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'start', thought: `演·起卦：用户问「${question.trim().slice(0, 40)}」` } });
-
-  // 调 planner.plan()，失败时给 fallback 版本（绝对不 throw）
-  let result;
-  try {
-    result = await withRetry(
-      () => withTimeout(
-        () => planner.plan(session),
-        20000,
-        '演规划'
-      ),
-      { retries: 2, delayMs: 1000, backoffMs: 2000, name: 'planner.plan' }
+export async function plan(sessionId, executionCtx = {}, dependencies = {}) {
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
+  if (session.state !== STATES.PLAN || session.plan) {
+    return buildResponse(
+      session,
+      session.plan || {},
+      session.askUser || session.plan?.askUser || [],
+      session.openingLine || session.plan?.openingLine || '',
+      session.round || session.plan?.round || 1,
+      session.memory || [],
     );
-  } catch (e) {
-    // v3.1 兜底：plan 彻底失败时，仍然返回一个有 sessionId + 启发式追问/维度 的合法响应
-    logger.warn('[Deliberation] planner.plan 彻底失败，使用最后一道规则兜底:', e.message);
-    result = _fallbackPlanResult(session, e.message);
   }
+
+  await eventBus.emit(sessionId, {
+    type: 'PLANNING_STARTED',
+    data: { label: '辨认问题与推演深度' },
+    actor: 'planner',
+    visibility: 'public',
+  });
+
+  const result = dependencies.planSessionFn
+    ? await dependencies.planSessionFn(session)
+    : await planSessionWithFallback(session, dependencies.planFn || planner.plan);
+  if (dependencies.planSessionFn) await memoryService.saveSession(result.session);
 
   // 确保 sessionId 一致（兜底时可能用的是内存态对象）
   result.session.id = result.session.id || sessionId;
@@ -235,6 +494,12 @@ export async function start(question, userId) {
   return resp;
 }
 
+export async function start(question, userId) {
+  logger.info('[Deliberation] start 开始', { question: (question || '').slice(0, 60), userId });
+  const created = await createSession(question, userId);
+  return plan(created.sessionId, { userId });
+}
+
 /**
  * 最后一道兜底：当 planner.plan 全部失败（超时/LLM挂），给一个合法的响应
  * 确保前端能得到 sessionId + 启发式追问 + 4 个智囊，流程继续
@@ -257,28 +522,31 @@ function _fallbackPlanResult(session, errorMsg = '') {
     { id: 'jingyuan', name: '镜渊', stance: '反思视角', role: 'dynamic', trigram: '☷', color: '#706088', glow: '#A890C8' },
   ];
 
-  // 启发式追问（按问题关键词，最多 3 条）
+  const round = Math.max(1, Number(session.round) || 1);
+  const shouldClarify = round < MAX_ROUND;
+
+  // 启发式追问（仅首轮；回答后的兜底必须继续进入执行，不能再次卡在 WAIT）
   const askUser = [];
-  if (/(租房|买房|换城市|城市|房租|房源)/.test(q)) {
+  if (shouldClarify && /(租房|买房|换城市|城市|房租|房源)/.test(q)) {
     askUser.push({ question: '能接受的月预算大概是多少？', reason: '预算决定筛选范围', source: 'P0-FB' });
     askUser.push({ question: '工作/学校大概在哪个区域？期望的单程通勤时长是？', reason: '通勤是日常双输的元凶', source: 'P0-FB' });
     askUser.push({ question: '是短期过渡还是长期居住？有没有对象或家人同住？', reason: '长期/同住会改变风险评估', source: 'P0-FB' });
-  } else if (/(offer|工作|跳槽|创业|辞职|转行|升职|职业)/.test(q)) {
+  } else if (shouldClarify && /(offer|工作|跳槽|创业|辞职|转行|升职|职业)/.test(q)) {
     askUser.push({ question: '你现在最看重的是收入、成长，还是稳定性？', reason: '三者不可兼得，先定权重', source: 'P0-FB' });
     askUser.push({ question: '目前的储蓄能撑多久（裸辞缓冲期）？', reason: '财务缓冲决定决策风险', source: 'P0-FB' });
-  } else if (/(投资|股票|基金|理财|贷款|汇率|借钱|还钱)/.test(q)) {
+  } else if (shouldClarify && /(投资|股票|基金|理财|贷款|汇率|借钱|还钱)/.test(q)) {
     askUser.push({ question: '能接受的最大亏损比例是多少？', reason: '风险承受力决定配置', source: 'P0-FB' });
     askUser.push({ question: '这笔钱多久内要用？能锁多久？', reason: '期限决定产品选择', source: 'P0-FB' });
-  } else if (/(感情|恋爱|结婚|分手|对象|伴侣|老公|老婆|父母|家人)/.test(q)) {
+  } else if (shouldClarify && /(感情|恋爱|结婚|分手|对象|伴侣|老公|老婆|父母|家人)/.test(q)) {
     askUser.push({ question: '你最不能接受的底线是什么？', reason: '没有底线的选择都是后悔', source: 'P0-FB' });
     askUser.push({ question: '家人/对方的态度是？', reason: '亲密关系的事不是一个人决定的', source: 'P0-FB' });
-  } else {
+  } else if (shouldClarify) {
     askUser.push({ question: '这件事的时间限制是什么？多久之内必须决定？', reason: '时间决定信息获取深度', source: 'P0-FB' });
     askUser.push({ question: '最坏情况是什么？你能接受吗？', reason: '先判底线再谈收益', source: 'P0-FB' });
   }
 
-  session.state = STATES.WAIT;
-  session.round = 1;
+  session.state = shouldClarify ? STATES.WAIT : STATES.EXECUTE;
+  session.round = round;
   session.askUser = askUser;
 
   const plan = {
@@ -287,7 +555,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     toolProbes: [],
     askUser,
     minFindings: 3,
-    round: 1,
+    round,
     openingLine: `关于「${(session.question || '').slice(0, 30)}」，先问清几个关键点再推。`,
     analysis: `（LLM 暂不可用：${String(errorMsg || '').slice(0, 40)}，演已按规则生成维度与追问）`,
   };
@@ -298,7 +566,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     plan,
     askUser,
     openingLine: plan.openingLine,
-    round: 1,
+    round,
     maxRound: MAX_ROUND,
     memory: [],
     fallback: true,
@@ -314,48 +582,78 @@ function _fallbackPlanResult(session, errorMsg = '') {
  * @param {Array} answers 用户回答数组
  * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
-export async function answer(sessionId, answers) {
+export async function answer(sessionId, answers, executionCtx = {}, dependencies = {}) {
   logger.info('[Deliberation] answer 收到', { sessionId, answerCount: Array.isArray(answers) ? answers.length : 0 });
 
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
+  const loadedSession = await assertSessionOwner(sessionId, executionCtx.userId);
+  const answerTransition = dependencies.answerTransitionFn || memoryService.claimClarifyAnswer;
+  const claimAnswer = dependencies.claimAnswerFn || ((id, snapshot) => answerTransition(id, snapshot, {
+    now: dependencies.nowFn ? dependencies.nowFn() : Date.now(),
+    ...(dependencies.leaseMs ? { leaseMs: dependencies.leaseMs } : {}),
+  }));
+  const answerClaim = await claimAnswer(sessionId, loadedSession);
+  const session = { ...loadedSession, ...answerClaim.session };
+  const claimToken = answerClaim.claimToken;
+  const rollbackPatch = executeProjectionPatch(loadedSession);
+  // Planner 只生成内存投影；最终业务状态与 lease 清理由 complete 的单次 CAS 一起落库。
+  const saveSessionFn = async (candidate) => ({ ...candidate, id: sessionId });
+
+  try {
+    // round 从持久化的 plan.round 读取，+1 进入下一轮判定
+    const prevRound = Number((session.plan && session.plan.round) || session.round) || 1;
+    session.round = prevRound + 1;
+
+    // 合并 answers 到 questionContext（作为补充信息，不改原问题），供 autonomyGate 重新扫描
+    session.questionContext = mergeAnswersToContext(session.question, answers);
+    session.answers = Array.isArray(answers) ? answers : [];
+
+    logger.info('[Deliberation] answer 重新规划', {
+      sessionId,
+      prevRound,
+      newRound: session.round,
+      questionContext: session.questionContext.slice(0, 80),
+    });
+
+    // 重新 plan；其保存动作继续受当前 answer token 保护。
+    const result = dependencies.planSessionFn
+      ? await dependencies.planSessionFn(session, { saveSessionFn })
+      : await planSessionWithFallback(session, dependencies.planFn || planner.plan, { saveSessionFn });
+    try {
+      await answerTransition(sessionId, result.session, {
+        mode: 'complete',
+        claimToken,
+        state: result.session.state,
+        patch: executeProjectionPatch(result.session),
+      });
+    } catch (error) {
+      if (!error.code) error.code = 'ANSWER_PERSIST_FAILED';
+      throw error;
+    }
+
+    logger.info('[Deliberation] answer 完成', {
+      sessionId,
+      state: result.session.state,
+      round: result.round,
+      dimCount: result.plan?.dimensions?.length || 0,
+      askUserCount: result.askUser?.length || 0,
+    });
+
+    return buildResponse(result.session, result.plan, result.askUser, result.openingLine, result.round, result.memory);
+  } catch (error) {
+    try {
+      await answerTransition(sessionId, loadedSession, {
+        mode: 'release',
+        claimToken,
+        patch: rollbackPatch,
+      });
+    } catch (releaseError) {
+      logger.warn('[Deliberation] answer claim 释放失败，等待租约过期', {
+        sessionId,
+        error: releaseError.message,
+      });
+    }
+    throw error;
   }
-
-  // round 从持久化的 plan.round 读取，+1 进入下一轮判定
-  const prevRound = Number((session.plan && session.plan.round) || session.round) || 1;
-  session.round = prevRound + 1;
-
-  // 合并 answers 到 questionContext（作为补充信息，不改原问题），供 autonomyGate 重新扫描
-  session.questionContext = mergeAnswersToContext(session.question, answers);
-  session.answers = Array.isArray(answers) ? answers : [];
-
-  logger.info('[Deliberation] answer 重新规划', {
-    sessionId,
-    prevRound,
-    newRound: session.round,
-    questionContext: session.questionContext.slice(0, 80),
-  });
-
-  // 重新 plan（planner 内 autonomyGate 按 session.round 判定 ASK/CONTINUE/STOP）
-  const result = await withRetry(
-    () => withTimeout(
-      () => planner.plan(session),
-      20000,
-      '演规划'
-    ),
-    { retries: 2, delayMs: 1000, backoffMs: 2000, name: 'planner.plan' }
-  );
-
-  logger.info('[Deliberation] answer 完成', {
-    sessionId,
-    state: result.session.state,
-    round: result.round,
-    dimCount: result.plan?.dimensions?.length || 0,
-    askUserCount: result.askUser?.length || 0,
-  });
-
-  return buildResponse(result.session, result.plan, result.askUser, result.openingLine, result.round, result.memory);
 }
 
 /**
@@ -369,31 +667,17 @@ export async function answer(sessionId, answers) {
  *
  * @param {string} sessionId
  * @param {Array} agentIds 指定调用的智囊ID（可选，作为 ReAct 候选池）
+ * @param {{actionId?:string,userId?:string|null}} executionCtx 稳定动作与调用者上下文
  * @returns {Promise<{sessionId, state, findings, oracle, conflicts, gaps, replanned}>}
  */
-export async function execute(sessionId, agentIds) {
-  logger.info('[Deliberation] execute 开始', { sessionId, agentIds });
+export async function performExecute(sessionId, agentIds, executionCtx, session, dependencies = {}) {
+  const actionId = String(executionCtx.actionId || '').trim();
+  const emit = dependencies.emitFn || eventBus.emit.bind(eventBus);
+  const runReActLoop = dependencies.reactLoopFn || reactLoop.runReActLoop;
+  const reflect = dependencies.reflectFn || reflector.reflect;
+  logger.info('[Deliberation] execute 开始', { sessionId, agentIds, actionId });
 
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
-  }
-
-  // === ★ P0 守卫：澄清未完成绝不允许启动 ReAct 循环（之前前端 SSE 抢跑 EXECUTE → DELIBERATE，就靠这一条后端双保险）
-  const askUser = session.askUser || (session.plan && session.plan.askUser) || [];
-  const stillNeedClarify = Array.isArray(askUser) && askUser.length > 0 && (session.state === STATES.WAIT || session.state === STATES.PLAN);
-  if (stillNeedClarify) {
-    // SEV2 审计记录
-    try { AuditAgentSingleton && typeof AuditAgentSingleton.record === 'function' && AuditAgentSingleton.record({ sev: 2, rule: 'STATE_LEAP', evidence: `execute 被调用但 session 仍在澄清 (state=${session.state} askUser=${askUser.length})`, sessionId }); } catch { /* noop */ }
-    logger.warn('[Deliberation] execute 被拒绝：仍在澄清阶段，需先 answerDeliberation 完成追问', { sessionId, state: session.state, askUserCount: askUser.length });
-    const resp = buildResponseFromSession(session);
-    resp.clarifyRequired = true;
-    resp.state = STATES.WAIT;
-    resp.askUser = askUser;
-    return resp;
-  }
-
-  const question = session.questionContext || session.question || '';
+  const question = session.question_context || session.questionContext || session.question || '';
 
   // 1. 构建智囊池：优先用传入的 agentIds（用户选择的），否则用 plan 中的 agents（演推荐的）
   //    ReAct 循环里演自主决定调哪些智囊，这里只提供候选池
@@ -460,14 +744,14 @@ export async function execute(sessionId, agentIds) {
     toolResults: Array.isArray(session.tool_results) ? session.tool_results : [],
     dialogue: [],
     llmCallCount: 0,
+    actionId,
   };
 
   // 3. emit 进入 DELIBERATE（Event Sourcing：事件追加为真相）
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'EXECUTE', to: 'DELIBERATE', thought: '演·ReAct 推演开始' } });
-  await eventStore.appendEvent(sessionId, 'STATE_CHANGE', { from: 'EXECUTE', to: 'DELIBERATE' }, 'yan');
+  await emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'EXECUTE', to: 'DELIBERATE', thought: '演·ReAct 推演开始' }, actor: 'yan', correlationId: actionId, visibility: 'public' });
 
   // 4. 运行 ReAct 循环（Think→Act→Observe，演自主决策 tool_call/advisor_call/ask_user/output）
-  const reactResult = await reactLoop.runReActLoop(sessionId, reactState);
+  const reactResult = await runReActLoop(sessionId, reactState);
 
   // 5. 把 ReAct 产生的 findings/toolResults 写回 session
   session.findings = reactState.findings || [];
@@ -475,11 +759,7 @@ export async function execute(sessionId, agentIds) {
 
   // 6. 演决定追问：持久化 + 返回 CLARIFY（不预设，演基于上下文判断）
   if (reactResult.state === 'CLARIFY' && Array.isArray(reactResult.askUser) && reactResult.askUser.length > 0) {
-    await memoryService.updateSessionState(sessionId, STATES.WAIT, {
-      findings: session.findings,
-      tool_results: session.tool_results,
-    });
-    await eventStore.appendEvent(sessionId, 'CLARIFY_ASKED', { questions: reactResult.askUser }, 'yan');
+    await persistClarifyExecute(sessionId, session, reactResult.askUser, executionCtx);
     logger.info('[Deliberation] execute 演追问，返回 CLARIFY', {
       sessionId,
       askUserCount: reactResult.askUser.length,
@@ -501,9 +781,7 @@ export async function execute(sessionId, agentIds) {
   });
 
   // 7. Reflect（立卦或重规划）
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'REFLECT' } });
-  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'reflect', thought: `演·反思：聚合${session.findings.length}位智囊发现` } });
-  const result = await reflector.reflect(session);
+  let result = await reflect(session);
 
   // Step 8: 重规划串通 — reflector 触发重规划时，自动重新 plan/execute，最多1次
   if (result.replanned && (result.session.state === 'PLAN' || result.session.state === 'EXECUTE')) {
@@ -512,78 +790,215 @@ export async function execute(sessionId, agentIds) {
       newState: result.session.state,
       replanCount: result.session.replan_count,
     });
-    eventBus.emit(sessionId, {
+    // 先用 fencing token 持久化并续租，成功后才能公开任何 replan 事件。
+    const saveSessionFn = (candidate) => persistClaimedExecuteSession(sessionId, candidate, executionCtx);
+    await saveSessionFn(result.session);
+    await emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'REFLECT' } });
+    await emit(sessionId, { type: 'THOUGHT', data: { step: 'reflect', thought: `演·反思：聚合${session.findings.length}位智囊发现` } });
+    await emit(sessionId, {
       type: 'THOUGHT',
       data: { step: 'replan', thought: `演·重规划：${result.reason}，重新析度召智` },
     });
-    // 持久化当前 session（含 replan_count 和补维度）
-    await memoryService.saveSession(result.session);
+    for (const domainEvent of reflectionDomainEvents(result)) {
+      await emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
+    }
     // state='PLAN'：先重新 plan（planner 会读 session 已有 findings 重新规划）
     if (result.session.state === 'PLAN') {
-      await withRetry(
-        () => withTimeout(
-          () => planner.plan(result.session),
-          20000,
-          '演规划'
-        ),
-        { retries: 2, delayMs: 1000, backoffMs: 2000, name: 'planner.plan' }
-      );
+      const replanned = await planSessionWithFallback(result.session, planner.plan, { saveSessionFn });
+      result.session = replanned.session;
     }
     // 递归 execute（传空 agentIds 让 agentRouter 基于新维度推荐智囊，replan_count 已+1 不会无限）
-    return execute(sessionId, []);
+    return performExecute(sessionId, [], executionCtx, result.session, dependencies);
+  }
+
+  await emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'REFLECT' } });
+  await emit(sessionId, { type: 'THOUGHT', data: { step: 'reflect', thought: `演·反思：聚合${session.findings.length}位智囊发现` } });
+
+  let executeProjectionPersisted = false;
+  result = await runLensReviewLifecycle(result, {
+    sessionId,
+    actionId,
+    claimToken: executionCtx.claimToken,
+  }, {
+    emitFn: emit,
+    persistFn: async (id, value) => {
+      await persistExecuteResult(id, value, {
+        actionId,
+        claimToken: executionCtx.claimToken,
+      });
+      executeProjectionPersisted = true;
+    },
+  });
+  if (result.lensReviewRecovered === true) throw new Error('LENS_REVIEW_CLAIM_LOST');
+
+  if (!executeProjectionPersisted) {
+    await persistExecuteResult(sessionId, result, {
+      actionId,
+      claimToken: executionCtx.claimToken,
+    });
   }
 
   // emit 反思结果
   if (result.oracle) {
-    eventBus.emit(sessionId, {
+    await emit(sessionId, {
       type: 'OBSERVATION',
       data: {
         insight: `立卦：${result.oracle.primary?.lower?.name || ''}${result.oracle.primary?.upper?.name || ''} · ${result.conflicts?.length || 0}处矛盾`,
       },
     });
   }
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'REFLECT', to: result.session?.state || 'ORACLE' } });
+  await emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'REFLECT', to: result.session?.state || 'ORACLE' } });
 
-  // 6. 持久化
-  await persistExecuteResult(sessionId, result);
+  const reflectionProjection = {
+    ...result,
+    dynamicChoices: result.session?.dynamicChoices || [],
+    masterSummary: result.session?.masterSummary || '',
+  };
+  for (const domainEvent of reflectionDomainEvents({ ...reflectionProjection, cognitivePlan: null, lensImpacts: [] })) {
+    await emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
+  }
 
   return buildExecuteResponse(sessionId, result);
+}
+
+export async function runExecuteClaimLifecycle(session, agentIds, executionCtx = {}, dependencies = {}) {
+  const actionId = String(executionCtx.actionId || '').trim();
+  const claim = dependencies.claimFn || memoryService.claimExecute;
+  const release = dependencies.releaseFn || memoryService.releaseExecuteClaim;
+  const executeFn = dependencies.executeFn || performExecute;
+  const now = dependencies.nowFn ? dependencies.nowFn() : Date.now();
+  const claimResult = await claim(session.id, {
+    actionId,
+    now,
+    ...(dependencies.leaseMs ? { leaseMs: dependencies.leaseMs } : {}),
+  });
+  if (!claimResult?.claimed) {
+    if (!claimResult?.session) throw new Error('EXECUTE_CLAIM_STATE_UNAVAILABLE');
+    return normalizeExecuteResponse(buildResponseFromSession(claimResult.session));
+  }
+
+  const claimedContext = {
+    ...executionCtx,
+    actionId,
+    claimToken: claimResult.claimToken,
+  };
+  try {
+    return await executeFn(session.id, agentIds, claimedContext, claimResult.session, dependencies);
+  } catch (error) {
+    try {
+      await release(session.id, { actionId, claimToken: claimResult.claimToken });
+    } catch (releaseError) {
+      logger.warn('[Deliberation] execute claim 释放失败，等待租约过期', {
+        sessionId: session.id,
+        error: releaseError.message,
+      });
+    }
+    throw error;
+  }
+}
+
+export async function execute(sessionId, agentIds, executionCtx = {}, dependencies = {}) {
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
+  const persistedPlan = session.cognitive_plan ?? session.cognitivePlan ?? null;
+  const persistedReview = session.lens_review ?? session.lensReview ?? persistedPlan?.review ?? null;
+  if (session.state === STATES.ORACLE && persistedReview?.started === true) {
+    return normalizeExecuteResponse(buildResponseFromSession(session));
+  }
+
+  const askUser = session.askUser || session.plan?.askUser || [];
+  const stillNeedClarify = Array.isArray(askUser)
+    && askUser.length > 0
+    && (session.state === STATES.WAIT || session.state === STATES.PLAN);
+  if (stillNeedClarify) {
+    try {
+      AuditAgentSingleton?.record?.({
+        sev: 2,
+        rule: 'STATE_LEAP',
+        evidence: `execute 被调用但 session 仍在澄清 (state=${session.state} askUser=${askUser.length})`,
+        sessionId,
+      });
+    } catch { /* noop */ }
+    logger.warn('[Deliberation] execute 被拒绝：仍在澄清阶段，需先 answerDeliberation 完成追问', {
+      sessionId,
+      state: session.state,
+      askUserCount: askUser.length,
+    });
+    const response = buildResponseFromSession(session);
+    return normalizeExecuteResponse({
+      ...response,
+      clarifyRequired: true,
+      state: 'CLARIFY',
+      askUser,
+    });
+  }
+
+  const flights = dependencies.flightRegistry || executeFlights;
+  const active = flights.get(sessionId);
+  if (active) return active;
+
+  const flight = runExecuteClaimLifecycle(session, agentIds, executionCtx, dependencies);
+  flights.set(sessionId, flight);
+  try {
+    return await flight;
+  } finally {
+    if (flights.get(sessionId) === flight) flights.delete(sessionId);
+  }
 }
 
 /**
  * 持久化 execute + reflect 结果
  */
-async function persistExecuteResult(sessionId, result) {
+export async function persistExecuteResult(sessionId, result, dependencies = {}) {
   try {
     const patch = {
       findings: result.session.findings || [],
+      tool_results: result.session.tool_results || [],
       oracle: result.session.oracle || null,
+      conflicts: result.conflicts || [],
+      gaps: result.gaps || [],
       replan_count: result.session.replan_count ?? 0,
+      cognitive_plan: result.cognitivePlan ?? result.session.cognitivePlan ?? null,
+      lens_impacts: result.lensImpacts ?? result.session.lensImpacts ?? [],
+      lens_review: result.lensReview ?? result.session.lensReview ?? null,
     };
     // P1-1：持久化动态抉择选项和全局总结（下次恢复推演时不丢失）
-    if (result.session.dynamicChoices) patch.dynamic_choices = result.session.dynamicChoices;
-    if (result.session.masterSummary != null) patch.master_summary = result.session.masterSummary;
+    patch.dynamic_choices = result.session.dynamicChoices ?? result.session.dynamic_choices ?? [];
+    patch.master_summary = result.session.masterSummary ?? result.session.master_summary ?? '';
     if (result.session.plan) {
       patch.plan = result.session.plan;
     }
-    await memoryService.updateSessionState(sessionId, result.session.state, patch);
+    if (dependencies.actionId && dependencies.claimToken) {
+      const completeExecute = dependencies.completeExecuteFn || memoryService.completeExecute;
+      await completeExecute(sessionId, {
+        actionId: dependencies.actionId,
+        claimToken: dependencies.claimToken,
+        state: result.session.state,
+        patch,
+      });
+    } else {
+      const updateSessionState = dependencies.updateSessionStateFn || memoryService.updateSessionState;
+      await updateSessionState(sessionId, result.session.state, patch);
+    }
     logger.info('[Deliberation] execute 持久化完成', {
       sessionId,
       state: result.session.state,
       findingsCount: patch.findings.length,
       hasOracle: !!patch.oracle,
+      hasCognitivePlan: !!patch.cognitive_plan,
+      lensImpactCount: patch.lens_impacts.length,
       hasDynamicChoices: Array.isArray(patch.dynamic_choices) && patch.dynamic_choices.length > 0,
     });
   } catch (e) {
     logger.warn('[Deliberation] execute 持久化失败', { sessionId, error: e.message });
+    throw e;
   }
 }
 
 /**
  * 组装 execute 响应
  */
-function buildExecuteResponse(sessionId, result) {
-  return {
+export function buildExecuteResponse(sessionId, result) {
+  return normalizeExecuteResponse({
     sessionId,
     state: result.session.state,
     findings: result.session.findings || [],
@@ -592,10 +1007,14 @@ function buildExecuteResponse(sessionId, result) {
     gaps: result.gaps,
     replanned: result.replanned,
     reason: result.reason,
-    // P1-1：动态抉择选项（替代前端 DEFAULT_CHOICES 固定4个）
+    // 受控业务选项；Lens 审查任务不得进入用户提交白名单。
     dynamicChoices: Array.isArray(result.session.dynamicChoices) ? result.session.dynamicChoices : [],
     masterSummary: result.session.masterSummary || '',
-  };
+    cognitivePlan: result.cognitivePlan ?? result.session.cognitivePlan ?? null,
+    lensImpacts: result.lensImpacts ?? result.session.lensImpacts ?? [],
+    lensReview: result.lensReview ?? result.session.lensReview ?? null,
+    fallback: result.fallback === true,
+  });
 }
 
 /**
@@ -607,16 +1026,77 @@ function buildExecuteResponse(sessionId, result) {
  * @param {string} feedback 用户反馈
  * @returns {Promise<{sessionId, fateTicket, memoryUpdated}>}
  */
-export async function commit(sessionId, choice, feedback) {
-  logger.info('[Deliberation] commit 收到', { sessionId, choice, feedback: (feedback || '').slice(0, 60) });
-
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'ORACLE', to: 'COMMIT', choice } });
-  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'commit', thought: `演·落印：用户选择「${choice}」` } });
-
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
+export function commit(sessionId, choice, feedback, executionCtx = {}) {
+  const actionId = String(executionCtx.actionId || '').trim();
+  const existing = commitFlights.get(sessionId);
+  if (existing) {
+    if (existing.actionId !== actionId) {
+      const error = new Error('该 Session 正在提交另一项抉择');
+      error.code = 'COMMIT_IN_PROGRESS';
+      return Promise.reject(error);
+    }
+    return existing.promise.then((result) => ({ ...result, idempotentReplay: true }));
   }
+
+  const promise = performCommit(sessionId, choice, feedback, executionCtx);
+  const flight = { actionId, promise };
+  commitFlights.set(sessionId, flight);
+  const cleanup = () => {
+    if (commitFlights.get(sessionId) === flight) commitFlights.delete(sessionId);
+  };
+  promise.then(cleanup, cleanup);
+  return promise;
+}
+
+async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
+  const actionId = String(executionCtx.actionId || '').trim();
+  const requestedChoice = typeof choice === 'object' && choice
+    ? String(choice.id || choice.label || '').trim()
+    : String(choice || '').trim();
+  logger.info('[Deliberation] commit 收到', { sessionId, choice: requestedChoice, actionId, feedback: (feedback || '').slice(0, 60) });
+
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
+  if (session.state === STATES.COMPLETE && session.commit_result) {
+    const cached = typeof session.commit_result === 'string'
+      ? JSON.parse(session.commit_result)
+      : session.commit_result;
+    if (!actionId || !cached.actionId || cached.actionId === actionId) {
+      return { ...cached, idempotentReplay: true };
+    }
+    const error = new Error('该 Session 已完成，不能提交新的抉择');
+    error.code = 'SESSION_ALREADY_COMMITTED';
+    throw error;
+  }
+  if (session.state !== STATES.ORACLE) {
+    const error = new Error(`当前状态 ${session.state} 不允许提交抉择`);
+    error.code = 'INVALID_SESSION_STATE';
+    throw error;
+  }
+
+  let dynamicChoices = session.dynamic_choices || session.dynamicChoices || [];
+  if (typeof dynamicChoices === 'string') {
+    try { dynamicChoices = JSON.parse(dynamicChoices); } catch { dynamicChoices = []; }
+  }
+  const selected = Array.isArray(dynamicChoices)
+    ? dynamicChoices.find((item) => (
+      String(item?.id || '') === requestedChoice || String(item?.label || '') === requestedChoice
+    ))
+    : null;
+  if (!selected) {
+    const error = new Error('提交的抉择不属于该 Session 的动态选项');
+    error.code = 'INVALID_COMMIT_CHOICE';
+    throw error;
+  }
+  const authoritativeChoice = String(selected.id || selected.label);
+
+  const [decisionEvent, completedEvent] = commitDomainEvents({
+    choice: authoritativeChoice,
+    summary: session.master_summary || session.masterSummary || '',
+  });
+  await eventBus.emit(sessionId, { ...decisionEvent, actor: 'user', correlationId: actionId, visibility: 'public' });
+
+  await eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'ORACLE', to: 'COMMIT', choice: authoritativeChoice }, actor: 'yan', correlationId: actionId, visibility: 'public' });
+  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'commit', thought: `演·落印：用户选择「${authoritativeChoice}」` } });
 
   // 记录抉择（写入 session 供 consolidate 提取）
   try {
@@ -668,7 +1148,7 @@ export async function commit(sessionId, choice, feedback) {
       question: session.question,
       qaHistory,
       findings,
-      userChoice: choice || '',
+      userChoice: authoritativeChoice,
       userFeedback: feedback || '',
       existingMemories,
     });
@@ -694,7 +1174,22 @@ export async function commit(sessionId, choice, feedback) {
   }
 
   // Step 6: 生成命签（fateTicket）
-  const fateTicket = generateFateTicket(session, choice, feedback);
+  const fateTicket = generateFateTicket(session, authoritativeChoice, feedback);
+  const commitResult = {
+    sessionId,
+    state: STATES.COMPLETE,
+    actionId,
+    fateTicket,
+    memoryUpdated,
+  };
+
+  await memoryService.updateSessionState(sessionId, STATES.COMPLETE, {
+    oracle: session.oracle || null,
+    findings: session.findings || [],
+    commit_result: commitResult,
+  });
+  await eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'COMMIT', to: 'COMPLETE' }, actor: 'yan', correlationId: actionId, visibility: 'public' });
+  await eventBus.emit(sessionId, { ...completedEvent, actor: 'yan', correlationId: actionId, visibility: 'public' });
 
   eventBus.emit(sessionId, {
     type: 'OBSERVATION',
@@ -702,18 +1197,15 @@ export async function commit(sessionId, choice, feedback) {
   });
 
   // 推演结束，清理事件总线
-  setTimeout(() => eventBus.cleanup(sessionId), 60000);
+  const cleanupTimer = setTimeout(() => eventBus.cleanup(sessionId), 60000);
+  cleanupTimer.unref?.();
 
   // P1 Eval Pipeline：异步评估推演质量（不 await，失败不阻塞 commit 返回）
   evaluateSession(sessionId).catch((e) => {
     logger.warn('[Deliberation] commit evaluateSession 失败（不阻塞）', { sessionId, error: e.message });
   });
 
-  return {
-    sessionId,
-    fateTicket,
-    memoryUpdated,
-  };
+  return commitResult;
 }
 
 /**
@@ -722,7 +1214,7 @@ export async function commit(sessionId, choice, feedback) {
  * - 用于前端展示、收藏、分享
  */
 function generateFateTicket(session, choice, feedback) {
-  const question = session.questionContext || session.question || '';
+  const question = session.question_context || session.questionContext || session.question || '';
   const oracle = session.oracle || {};
   const findings = Array.isArray(session.findings) ? session.findings : [];
 
@@ -731,7 +1223,7 @@ function generateFateTicket(session, choice, feedback) {
     agentName: f.agentName || '未知',
     perspective: f.perspective || 'reflection',
     stance: f.stance || 'neutral',
-    excerpt: (f.content || '').slice(0, 60),
+    excerpt: agentEngine.sanitizeAgentDialogue(f.content || '', question).slice(0, 60),
   }));
 
   // 卦象摘要
@@ -762,12 +1254,8 @@ function generateFateTicket(session, choice, feedback) {
  * @param {string} sessionId
  * @returns {Promise<object|null>} 数据契约响应对象
  */
-export async function getState(sessionId) {
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    logger.warn('[Deliberation] getState 会话不存在', { sessionId });
-    return null;
-  }
+export async function getState(sessionId, executionCtx = {}) {
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
   return buildResponseFromSession(session);
 }
 
@@ -828,7 +1316,7 @@ export async function selfTest() {
   }
 
   // 验证 getState 读回完整字段
-  const restored = await getState(result.sessionId);
+  const restored = await getState(result.sessionId, { userId });
   if (!restored || restored.sessionId !== result.sessionId) {
     throw new Error(`selfTest 失败：getState 读回异常 restored=${JSON.stringify(restored?.sessionId)}`);
   }
@@ -875,13 +1363,10 @@ export async function selfTest() {
  * @param {string} reason 暂停原因（user_disconnected/user_paused/system）
  * @returns {Promise<{sessionId, paused, reason, previousState}>}
  */
-export async function pause(sessionId, reason = 'user_paused') {
+export async function pause(sessionId, reason = 'user_paused', executionCtx = {}) {
   logger.info('[Deliberation] pause', { sessionId, reason });
 
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
-  }
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
 
   // 终态不可暂停
   const terminalStates = [STATES.COMMIT, STATES.FAILED];
@@ -922,13 +1407,10 @@ export async function pause(sessionId, reason = 'user_paused') {
  * @param {string} sessionId
  * @returns {Promise<{sessionId, resumed, state, previousState, canContinue}>}
  */
-export async function resume(sessionId) {
+export async function resume(sessionId, executionCtx = {}) {
   logger.info('[Deliberation] resume', { sessionId });
 
-  const session = await memoryService.getSession(sessionId);
-  if (!session) {
-    throw new Error(`会话不存在: ${sessionId}`);
-  }
+  const session = await assertSessionOwner(sessionId, executionCtx.userId);
 
   if (session.state !== STATES.PAUSED) {
     logger.info('[Deliberation] resume 跳过（非暂停态）', { sessionId, state: session.state });
@@ -980,9 +1462,13 @@ export async function resume(sessionId) {
 
 export default {
   STATES,
+  createSession,
+  plan,
   start,
   answer,
   execute,
+  runExecuteClaimLifecycle,
+  persistClarifyExecute,
   commit,
   pause,
   resume,

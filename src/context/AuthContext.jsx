@@ -22,10 +22,10 @@ import {
   register as apiRegister,
   logout as apiLogout,
   getCachedUser,
-  getAuthState,
   clearAuth,
 } from '../services/auth.js';
 import { autoMigrateIfNeeded, autoPullIfNeeded } from '../services/dataSync.js';
+import { decideAuthBootstrap } from '../services/authBootstrap.js';
 
 const AuthContext = createContext(null);
 
@@ -45,23 +45,14 @@ export function AuthProvider({ children }) {
     async function init() {
       const token = getAccessToken();
       const cachedUser = getCachedUser();
+      const bootstrapAction = decideAuthBootstrap({
+        token,
+        cachedUser,
+        tokenExpiring: isTokenExpiringSoon(),
+      });
 
-      // 情况 1: 离线模式（之前匿名登录后端失败）
-      if (cachedUser?.offline) {
-        if (!cancelled) {
-          setState({
-            status: 'offline',
-            user: cachedUser,
-            offline: true,
-            loading: false,
-            error: null,
-          });
-        }
-        return;
-      }
-
-      // 情况 2: 有 token 且有效
-      if (token && cachedUser && !isTokenExpiringSoon()) {
+      // 有 token 且有效：直接恢复；历史离线态则重新尝试匿名认证。
+      if (bootstrapAction === 'cached') {
         if (!cancelled) {
           setState({
             status: cachedUser.anonymous ? 'anonymous' : 'registered',
@@ -74,8 +65,8 @@ export function AuthProvider({ children }) {
         return;
       }
 
-      // 情况 3: 有 token 即将过期，尝试 refresh
-      if (token) {
+      // 有 token 但即将过期：先刷新。
+      if (bootstrapAction === 'refresh') {
         const newToken = await refreshAccessToken();
         if (newToken) {
           const user = getCachedUser();
@@ -93,7 +84,7 @@ export function AuthProvider({ children }) {
         // refresh 失败 → 落到情况 4
       }
 
-      // 情况 4: 无 token 或 refresh 失败 → 匿名登录
+      // 无 token、历史离线态或刷新失败：匿名登录；不可达时仍会安全降级。
       const result = await anonymousLogin();
       if (!cancelled) {
         if (result.offline) {

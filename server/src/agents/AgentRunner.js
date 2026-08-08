@@ -1,10 +1,10 @@
 /**
  * AgentRunner —— 唯一的 Agent 调用入口。
  *   外部模块（planner / deliberationEngine）不要直接 new OrchestratorAgent().run(ctx)，
- *   必须走 AgentRunner.run(agent, {sessionId, userId, round, blackboard})。
+ *   必须走 AgentRunner.run(agent, {sessionId, userId, round, actionId, blackboard})。
  *
  * 负责：
- *   1) correlationId 生成（hash(sessionId|agent.id|round|ts)，唯一可追溯）
+ *   1) correlationId 生成（hash(sessionId|agent.id|round|actionId)，重试稳定）
  *   2) 超时控制（AbortController）—— 走 BaseAgent.timeoutMs，不再散着写 withTimeout 3 版
  *   3) 重试（按 BaseAgent.retries，默认 1 次）—— 复用 retryHelper.withRetry/withTimeout
  *   4) 熔断：同一 agent 5 分钟内 3 次失败，熔断 2 分钟，拒绝调用（抛 CIRCUIT_OPEN 错误）
@@ -12,7 +12,7 @@
  *   6) eventStore：每次开始/成功/失败都 append AGENT_RUN 事件
  */
 import crypto from 'node:crypto';
-import eventStore from '../services/eventStore.js';
+import eventBus from '../services/eventBus.js';
 import logger from '../services/logger.js';
 import { withRetry, withTimeout } from '../services/retryHelper.js';
 import BaseAgent from './BaseAgent.js';
@@ -24,6 +24,7 @@ const CIRCUIT_OPEN_MS = 2 * 60 * 1000;
 const failureLog = new Map();     // agentId -> [ts, ts, ts]
 const circuitOpen = new Map();    // agentId -> openUntilTs
 const idempotencyCache = new Map();  // correlationId -> {ok, output, meta, expiresTs}
+const inFlightRuns = new Map();    // correlationId -> Promise<Result>
 const IDEMPOTENCY_TTL = 10 * 60 * 1000;
 
 function _correlationId(parts) {
@@ -58,7 +59,7 @@ function _recordSuccess(agentId) {
 
 /**
  * @param {BaseAgent} agent
- * @param {{sessionId:string, userId:string, round?:number, blackboard?:Record<string,any>}} baseCtx
+ * @param {{sessionId:string, userId:string, round?:number, actionId:string, blackboard?:Record<string,any>}} baseCtx
  * @returns {Promise<{ok:boolean, output:any, meta:any, correlationId:string}>}
  */
 export async function run(agent, baseCtx) {
@@ -70,19 +71,53 @@ export async function run(agent, baseCtx) {
   }
   const round = typeof baseCtx.round === 'number' ? baseCtx.round : 0;
   const now = Date.now();
-  const correlationId = _correlationId([baseCtx.sessionId, agent.id, round, now]);
+  const actionId = String(baseCtx.actionId || '').trim();
+  if (!actionId) throw new Error('[AgentRunner] actionId is required');
+  const correlationId = _correlationId([baseCtx.sessionId, agent.id, round, actionId]);
 
   // 1) 幂等缓存
   const cached = idempotencyCache.get(correlationId);
   if (cached && cached.expiresTs > now) {
-    eventStore.append({ type: 'AGENT_RUN_CACHE_HIT', agentId: agent.id, sessionId: baseCtx.sessionId, correlationId, ts: now });
+    await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_COMPLETED', data: {
+      agentId: agent.id,
+      correlationId,
+      actionId,
+      cacheHit: true,
+    }, actor: agent.id, correlationId, taskId: actionId, visibility: 'summary' });
     return { ok: true, output: cached.output, meta: { ...cached.meta, cacheHit: true }, correlationId };
   }
+  if (cached) idempotencyCache.delete(correlationId);
+
+  const activeRun = inFlightRuns.get(correlationId);
+  if (activeRun) return activeRun;
+
+  const execution = executeAgentRun(agent, baseCtx, {
+    actionId,
+    correlationId,
+    round,
+    now,
+  });
+  inFlightRuns.set(correlationId, execution);
+  try {
+    return await execution;
+  } finally {
+    if (inFlightRuns.get(correlationId) === execution) {
+      inFlightRuns.delete(correlationId);
+    }
+  }
+}
+
+async function executeAgentRun(agent, baseCtx, { actionId, correlationId, round, now }) {
 
   // 2) 熔断
   if (_isCircuitOpen(agent.id, now)) {
     const err = Object.assign(new Error(`[AgentRunner] ${agent.id} 熔断中，拒绝调用`), { type: 'CIRCUIT_OPEN' });
-    eventStore.append({ type: 'AGENT_RUN_CIRCUIT_OPEN', agentId: agent.id, sessionId: baseCtx.sessionId, correlationId, ts: now });
+    await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_FAILED', data: {
+      agentId: agent.id,
+      correlationId,
+      actionId,
+      reason: 'CIRCUIT_OPEN',
+    }, actor: agent.id, correlationId, taskId: actionId, visibility: 'summary' });
     throw err;
   }
 
@@ -93,12 +128,20 @@ export async function run(agent, baseCtx) {
     sessionId: baseCtx.sessionId,
     userId: baseCtx.userId,
     round,
+    actionId,
     correlationId,
     signal: controller.signal,
     blackboard: { ...(baseCtx.blackboard || {}) }
   };
 
-  eventStore.append({ type: 'AGENT_RUN_START', agentId: agent.id, sessionId: baseCtx.sessionId, correlationId, timeoutMs: agent.timeoutMs, retries: agent.retries, ts: now });
+  await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_STARTED', data: {
+    agentId: agent.id,
+    agentName: agent.name,
+    correlationId,
+    actionId,
+    timeoutMs: agent.timeoutMs,
+    retries: agent.retries,
+  }, actor: agent.id, correlationId, taskId: actionId, visibility: 'public' });
 
   let result;
   try {
@@ -106,27 +149,32 @@ export async function run(agent, baseCtx) {
     result = agent.retries > 0
       ? await withRetry(wrapped, { retries: agent.retries, delayMs: 600, backoffMs: 1200, name: `Agent:${agent.id}` })
       : await wrapped();
-    clearTimeout(timeoutHandle);
     _recordSuccess(agent.id);
     if (result.ok) {
       idempotencyCache.set(correlationId, { output: result.output, meta: result.meta, expiresTs: Date.now() + IDEMPOTENCY_TTL });
     }
-    eventStore.append({ type: 'AGENT_RUN_OK', agentId: agent.id, sessionId: baseCtx.sessionId, correlationId, latencyMs: result.meta?.latencyMs, ts: Date.now() });
+    await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_COMPLETED', data: {
+      agentId: agent.id,
+      agentName: agent.name,
+      correlationId,
+      actionId,
+      latencyMs: result.meta?.latencyMs,
+    }, actor: agent.id, correlationId, taskId: actionId, visibility: 'public' });
     return { ...result, correlationId };
   } catch (err) {
-    clearTimeout(timeoutHandle);
     _recordFail(agent.id);
-    eventStore.append({
-      type: 'AGENT_RUN_FAIL',
+    await eventBus.emit(baseCtx.sessionId, { type: 'AGENT_FAILED', data: {
       agentId: agent.id,
-      sessionId: baseCtx.sessionId,
+      agentName: agent.name,
       correlationId,
+      actionId,
       errType: err?.type || String(err?.name || 'Error'),
       errMsg: (err?.message || String(err)).slice(0, 200),
-      ts: Date.now()
-    });
+    }, actor: agent.id, correlationId, taskId: actionId, visibility: 'summary' });
     logger.error(`[AgentRunner] ${agent.id} 失败: ${err?.type || ''} ${err?.message || err}`);
     throw err;
+  } finally {
+    clearTimeout(timeoutHandle);
   }
 }
 

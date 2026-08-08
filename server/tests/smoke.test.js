@@ -16,7 +16,13 @@ test('[P0] BaseAgent: shape + abstract _execute contract', async () => {
   const a = new DummyAgent();
   assert.equal(a.id, 'dummy');
   assert.equal(typeof a.run, 'function');
-  const ctx = { sessionId: 'sess_test_001', userId: 'usr_test_001', round: 0, correlationId: 'corr_test_001_xxxxx' };
+  const ctx = {
+    sessionId: 'sess_test_001',
+    userId: 'usr_test_001',
+    round: 0,
+    actionId: 'act_test_001',
+    correlationId: 'corr_test_001_xxxxx',
+  };
   const out = await a.run(ctx);
   assert.ok(out && out.ok);
 });
@@ -27,28 +33,42 @@ test('[P0] AgentRunner: correlationId + timeout enforcement', async () => {
   const run = mod.run || mod.default?.run;
   assert.equal(typeof run, 'function', 'AgentRunner.run 必须是函数');
 
-  // AgentRunner 的 contract 在真实启动 app 时 eventStore.append 会注入；单测改为校验 AgentRunner 对外暴露 run 函数 + BaseAgent.run 的契约
   class SlowAgent extends BaseAgent {
     constructor() { super({ id: 'slow', name: 'Slow', role: 'system', timeoutMs: 40, retries: 0 }); }
-    async _execute() {
-      await new Promise(r => setTimeout(r, 5000));
+    async _execute(ctx) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 5000);
+        ctx.signal.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(new Error('aborted'));
+        }, { once: true });
+      });
       return { ok: true };
     }
   }
-  // BaseAgent 本身必须受 timeoutMs 保护（超时走 AbortError）
-  const slowCtx = { sessionId: 'sess_slow', userId: 'usr_slow', round: 0, correlationId: 'corr_slow_xxxxxx' };
   await assert.rejects(
-    new SlowAgent().run(slowCtx),
-    /Abort|timeout|Cancel|超时/i,
-    'BaseAgent.run 必须在 timeoutMs 到达后中止（超时保护 contract）'
+    run(new SlowAgent(), {
+      sessionId: 'sess_slow',
+      userId: 'usr_slow',
+      round: 0,
+      actionId: 'act_slow_001',
+      blackboard: {},
+    }),
+    /Abort|aborted|timeout|超时/i,
+    'AgentRunner 必须在 timeoutMs 到达后中止'
   );
 
   class FastAgent extends BaseAgent {
     constructor() { super({ id: 'fast', name: 'Fast', role: 'advisor', timeoutMs: 5000, retries: 0 }); }
     async _execute() { return { ok: 42 }; }
   }
-  const fastCtx = { sessionId: 'sess_fast', userId: 'usr_fast', round: 0, correlationId: 'corr_fast_xxxxxx' };
-  const out = await new FastAgent().run(fastCtx);
+  const out = await run(new FastAgent(), {
+    sessionId: 'sess_fast',
+    userId: 'usr_fast',
+    round: 0,
+    actionId: 'act_fast_001',
+    blackboard: {},
+  });
   assert.ok(out && out.ok);
   assert.equal(out.output.ok, 42);
   assert.ok(out.meta && typeof out.meta.latencyMs === 'number');

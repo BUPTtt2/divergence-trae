@@ -53,13 +53,18 @@ export function useDeliberationStream(sessionId, callbacks = {}) {
 
     // 建立订阅
     const stream = subscribeDeliberationStream(sessionId, (evt) => {
-      const { type, data } = evt;
+      const { type } = evt;
+      const data = evt?.payload || evt?.data || {};
       const cb = cbRef.current;
+      cb.onEvent?.(evt);
 
       switch (type) {
         case 'CONNECTED':
           setConnected(true);
-          cb.onConnected?.();
+          cb.onConnected?.(evt);
+          break;
+        case 'REPLAY_COMPLETE':
+          cb.onReplayComplete?.(evt);
           break;
         case 'THOUGHT':
           cb.onThought?.(data || {});
@@ -93,7 +98,7 @@ export function useDeliberationStream(sessionId, callbacks = {}) {
     };
   }, [sessionId]);
 
-  const pause = useCallback((reason = 'user_paused') => {
+  const pause = useCallback(() => {
     if (!sessionId) return;
     setPaused(true);
     pauseDeliberation(sessionId).catch(() => {});

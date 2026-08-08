@@ -16,7 +16,8 @@
  * @property {string} sessionId    推演会话 id（前端 sess_ / ls_）
  * @property {string} userId       用户 id (usr_ 或 local_usr)
  * @property {number} round        当前轮次，0-based
- * @property {string} correlationId runId = hash(sessionId+agentId+round+ts)
+ * @property {string} actionId      稳定用户动作 id；同一动作重试必须复用
+ * @property {string} correlationId runId = hash(sessionId+agentId+round+actionId)
  * @property {AbortSignal} [signal] 超时/取消信号，Agent 内部 await 之间要 periodically check
  * @property {Record<string,any>} blackboard 只读黑板（问题/维度/记忆/上轮产出…）
  */
@@ -82,7 +83,11 @@ export function isString(val, minLen = 1) {
 }
 export function isValidSessionCtx(ctx) {
   if (!ctx || typeof ctx !== 'object') return false;
-  return isString(ctx.sessionId, 3) && isString(ctx.userId, 3) && typeof ctx.round === 'number' && isString(ctx.correlationId, 6);
+  return isString(ctx.sessionId, 3) &&
+    isString(ctx.userId, 3) &&
+    typeof ctx.round === 'number' &&
+    isString(ctx.actionId, 3) &&
+    isString(ctx.correlationId, 6);
 }
 export function isValidFinding(f) {
   if (!f || typeof f !== 'object') return false;

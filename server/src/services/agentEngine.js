@@ -10,6 +10,12 @@ import { retrieveMemories, getUserProfile, extractMemoriesFromInference } from '
 import { listAdvisors, formatAdvisorForAgentPool } from './customAdvisorService.js';
 import logger from './logger.js';
 
+export function uniqueValidAgentIds(agentIds, validIds) {
+  const allowed = new Set(Array.isArray(validIds) ? validIds : []);
+  return [...new Set(Array.isArray(agentIds) ? agentIds : [])]
+    .filter((id) => allowed.has(id));
+}
+
 /**
  * 分析用户问题，选择最适合的 Agent（数量由问题复杂度决定）
  *
@@ -99,7 +105,7 @@ ${agentList}
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      { maxTokens: 300, temperature: 0.3, timeout: 8000 }
+      { maxTokens: 300, temperature: 0.3, timeout: 18000 }
     );
 
     if (!text) {
@@ -113,11 +119,8 @@ ${agentList}
     }
 
     const parsed = JSON.parse(match[0]);
-    let agentIds = Array.isArray(parsed.agentIds) ? parsed.agentIds : [];
-
-    // 验证 id 有效性
     const validIds = allAgents.map((a) => a.id);
-    agentIds = agentIds.filter((id) => validIds.includes(id));
+    const agentIds = uniqueValidAgentIds(parsed.agentIds, validIds);
 
     // LLM 未选出任何 Agent 或解析失败：启用规则兜底（风眼/镜渊/钱谷/路向 四核心 + 关键词扩展）
     if (agentIds.length === 0) {
@@ -189,6 +192,20 @@ function _ruleBasedAgents(question, allAgents = [], errorReason = '') {
  * @param {string|null} userId 用户ID，用于检索跨推演记忆
  * @returns {Promise<string>} Agent 回应文本
  */
+export function sanitizeAgentDialogue(rawText, question = '') {
+  const normalizedQuestion = String(question || '').trim();
+  return String(rawText || '')
+    .replace(/<user_input\b[^>]*>[\s\S]*?<\/user_input>/gi, ' ')
+    .replace(/<\/?mention\b[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && line !== normalizedQuestion)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export async function generateAgentDialogue(agent, question, previousDialogues = [], fullDialogueHistory = [], userId = null) {
   if (!agent || !question) {
     throw Object.assign(new Error('generateAgentDialogue 缺少 agent 或 question'), { type: 'INVALID_INPUT' });
@@ -232,12 +249,14 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
 2. **优先提问，不要单向输出结论**：你的发言应该是「提问+讨论」的效果（像真人咨询一样），先问清关键信息再给判断；不要直接甩结论
 3. **敢于追问用户**：可以连续抛出1-2个具体问题（围绕你的视角），引导用户讲清楚真实情况
 4. **展示你收集到的信息**：在发言开头可以用1句话复述你理解到的现状（比如"按你说的，现在是和女朋友在找实习但还没着落，住酒店成本高怕离公司远，对吧？"），让用户看到你没瞎编
+5. **数字必须有来源**：用户没提供成本、收入、留存率等数字时，只能追问或明确写成待验证变量，不得自行假设一个数字代替用户事实
 
 【补充约束】
 - 用中文口语，不要书面体
 - 必须抓住用户问题里的具体词（数字、对象、场景），不要泛泛而谈
 - 不要给"祝你顺利"之类的客套结尾
 - 可以质疑用户、可以反问、可以泼冷水，但要说人话
+- 只输出用户可直接阅读的正文，禁止输出 XML/HTML 标签、user_input、mention 或系统字段
 
 【真Agent协作指令】
 - 若前面有其他智囊发言，必须主动对其至少一位做明确表态：用"我同意X说的"、"反驳X的观点"、"补充X的判断"这类自然语言引用对方名字
@@ -287,10 +306,11 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
     { maxTokens: 450, temperature: 0.85, timeout: 10000 }
   );
 
-  if (!text || !text.trim()) {
+  const sanitized = sanitizeAgentDialogue(text, question);
+  if (!sanitized) {
     throw Object.assign(new Error(`智囊${agent.name}发言LLM返回空`), { type: 'LLM_EMPTY_OUTPUT' });
   }
-  return text.trim().slice(0, 450);
+  return sanitized.slice(0, 450);
 }
 
 /**

@@ -24,13 +24,33 @@ import { evaluate as evaluateAutonomy } from './autonomyGate.js';
 import * as agentEngine from './agentEngine.js';
 import logger from './logger.js';
 import eventBus from './eventBus.js';
-import { withRetry, withTimeout } from './retryHelper.js';
+import { evidenceDomainEvent, planDomainEvents } from './agentEventSemantics.js';
+import { withRetry } from './retryHelper.js';
+import { buildQuickPlan, routeDeliberationDepth } from './deliberationDepthRouter.js';
 
 // ============ 常量 ============
 
-const LLM_TIMEOUT_MS = 15000;
+const LLM_TIMEOUT_MS = 20000;
 const MIN_FINDINGS = 3;
 const MAX_ROUND = 2;
+
+export async function callPlannerLLM(messages, options = {}, runtime = {}) {
+  const call = runtime.call || callLLM;
+  const retries = runtime.retries ?? 1;
+  return withRetry(async () => {
+    const text = await call(messages, {
+      ...options,
+      timeout: options.timeout || LLM_TIMEOUT_MS,
+    });
+    if (!text) throw Object.assign(new Error(`${runtime.name || 'planner LLM'}返回空文本`), { type: 'LLM_EMPTY_OUTPUT' });
+    return text;
+  }, {
+    retries,
+    delayMs: runtime.delayMs ?? 800,
+    backoffMs: runtime.backoffMs ?? 1200,
+    name: runtime.name || 'planner LLM',
+  });
+}
 
 // v3.0 已删除 QUESTION_TYPE_TO_DIMENSIONS 硬编码映射（零预设：维度由 LLM 自主生成）
 
@@ -45,6 +65,9 @@ const QUESTION_TYPE_RULES = [
   { type: 'city', pattern: /租房|买房|定居|搬家|落户|居住|落脚|合租|房租|房源|换城市|去.{1,6}(生活|定居|工作|发展|落脚|安家)/ },
   // 财务类
   { type: 'finance', pattern: /投资|股票|基金|理财|贷款|借钱|还钱|财务|赚钱|存钱|汇率|通货膨胀|股市|基金定投|还款|负债/ },
+  // 比赛与产品类必须先于 career，避免“投入项目/复赛目标”被误判成求职。
+  { type: 'competition', pattern: /比赛|竞赛|初赛|复赛|决赛|参赛|评审|展览|赛道作品|作品提交/ },
+  { type: 'product', pattern: /产品|项目|用户留存|用户增长|活跃用户|功能迭代|上线|部署|商业化|MVP|Demo|Agent|AI[ -]?native/i },
   // 职业类
   { type: 'career', pattern: /工作|职业|offer|跳槽|涨薪|创业|辞职|转行|升职|面试|简历|打工|内卷|加班|入职|离职|裁员|失业/ },
   // 健康类（养宠的"养"已经优先匹配 pet，这里 health 养.1,2 不抢"养猫"）
@@ -78,23 +101,17 @@ export async function detectQuestionType(question) {
   }
 
   // 正则未命中 → LLM 分类（带重试，失败抛错）
-  const text = await withRetry(
-    () => withTimeout(
-      () => callLLM(
+  const text = await callPlannerLLM(
         [
-          { role: 'system', content: '你是问题分类专家。将用户问题归类为以下类型之一：travel(出行/旅游/出差)、finance(财务/投资)、career(职业/工作)、health(健康/医疗)、relationship(情感/人际关系)、pet(养宠)、education(教育/学习)、legal(法律)、competition(比赛/竞赛)、tech(技术/编程)、city(租房/买房/定居/搬家/城市生活)、life(日常生活)、other(其他)。只返回类型关键词，不要解释。注意：租房买房是city不是travel；去某地工作/定居/生活是city不是travel。' },
+          { role: 'system', content: '你是问题分类专家。将用户问题归类为以下类型之一：travel(出行/旅游/出差)、finance(财务/投资)、career(求职/岗位/职场)、health(健康/医疗)、relationship(情感/人际关系)、pet(养宠)、education(教育/学习)、legal(法律)、competition(比赛/竞赛/参展)、product(产品/项目/用户/迭代/部署)、tech(技术/编程)、city(租房/买房/定居/搬家/城市生活)、life(日常生活)、other(其他)。只返回类型关键词，不要解释。注意：做产品或项目不是career；租房买房是city不是travel；去某地工作/定居/生活是city不是travel。' },
           { role: 'user', content: `问题：${q}\n分类结果：` },
         ],
-        { maxTokens: 10, temperature: 0.1 }
-      ),
-      3000,
-      'LLM问题分类'
-    ),
-    { retries: 2, delayMs: 500, name: 'detectQuestionType' }
+        { maxTokens: 10, temperature: 0.1, timeout: 10000 },
+        { retries: 2, delayMs: 500, name: 'detectQuestionType' },
   );
 
   const normalized = (text || '').trim().toLowerCase();
-  const validTypes = ['travel', 'finance', 'career', 'health', 'relationship', 'pet', 'education', 'legal', 'competition', 'tech', 'city', 'life', 'other'];
+  const validTypes = ['travel', 'finance', 'career', 'health', 'relationship', 'pet', 'education', 'legal', 'competition', 'product', 'tech', 'city', 'life', 'other'];
   const firstWord = normalized.replace(/^[^a-z]/g, '').split(/[^a-z]/)[0];
   let matched = validTypes.find(t => firstWord === t);
   if (!matched) {
@@ -119,9 +136,7 @@ async function generateYanAnalysis(question, questionType, dimensions, toolResul
   const memoryHints = (memories || []).slice(0, 3).map(m => m.content).filter(Boolean);
 
   try {
-    const result = await withRetry(
-      () => withTimeout(
-        () => callLLM(
+    const result = await callPlannerLLM(
           [
             {
               role: 'system',
@@ -150,12 +165,8 @@ async function generateYanAnalysis(question, questionType, dimensions, toolResul
 请以演的身份，用卦象风格分析此问。`,
             },
           ],
-          { maxTokens: 150, temperature: 0.7 }
-        ),
-        6000,
-        '演分析生成'
-      ),
-      { retries: 1, delayMs: 800, name: 'generateYanAnalysis' }
+          { maxTokens: 150, temperature: 0.7 },
+          { retries: 1, delayMs: 800, name: 'generateYanAnalysis' },
     );
 
     if (result && String(result).trim()) {
@@ -179,6 +190,12 @@ async function generateYanAnalysis(question, questionType, dimensions, toolResul
   return hasMem
     ? `${base}，且有旧例可循${tail}`
     : `${base}${tail}`;
+}
+
+export async function ensurePlannerAnalysis(existingAnalysis, generateAnalysis) {
+  const existing = String(existingAnalysis || '').trim();
+  if (existing) return existing;
+  return generateAnalysis();
 }
 
 // v3.0 已删除 ruleBasedDimensions 函数（零预设：维度由 LLM 自主生成，失败抛错不降级规则映射）
@@ -218,13 +235,10 @@ perspective 可选: financial/risk/emotional/reflection/strategic/action/communi
 4. 只返回 JSON 数组，不要任何解释`;
 
   try {
-    const text = await withRetry(
-      () => withTimeout(
-        () => callLLM([{ role: 'user', content: prompt }], { maxTokens: 400, temperature: 0.3 }),
-        8000,
-        'LLM维度生成'
-      ),
-      { retries: 2, delayMs: 1000, name: 'llmGenerateDimensions' }
+    const text = await callPlannerLLM(
+      [{ role: 'user', content: prompt }],
+      { maxTokens: 400, temperature: 0.3 },
+      { retries: 2, delayMs: 1000, name: 'llmGenerateDimensions' },
     );
 
     const parsed = parseDimensionsJSON(text);
@@ -370,13 +384,10 @@ perspective 可选: financial/risk/emotional/reflection/strategic/action/communi
 4. 只返回 JSON 数组，不要任何解释`;
 
   try {
-    const text = await withRetry(
-      () => withTimeout(
-        () => callLLM([{ role: 'user', content: prompt }], { maxTokens: 400, temperature: 0.3 }),
-        LLM_TIMEOUT_MS,
-        'LLM维度增强'
-      ),
-      { retries: 2, delayMs: 1000, name: 'llmEnhanceDimensions' }
+    const text = await callPlannerLLM(
+      [{ role: 'user', content: prompt }],
+      { maxTokens: 400, temperature: 0.3 },
+      { retries: 2, delayMs: 1000, name: 'llmEnhanceDimensions' },
     );
 
     if (text) {
@@ -422,9 +433,7 @@ async function selfCritiquePlan(question, dimensions, toolResults, memories) {
   const memoryHints = (memories || []).slice(0, 3).map(m => m.content).filter(Boolean);
 
   try {
-    const result = await withRetry(
-      () => withTimeout(
-        () => callLLM(
+    const result = await callPlannerLLM(
           [
             {
               role: 'system',
@@ -449,12 +458,8 @@ async function selfCritiquePlan(question, dimensions, toolResults, memories) {
 请自评。`,
             },
           ],
-          { maxTokens: 200, temperature: 0.2 }
-        ),
-        6000,
-        '演自评'
-      ),
-      { retries: 1, delayMs: 800, name: 'selfCritiquePlan' }
+          { maxTokens: 200, temperature: 0.2 },
+          { retries: 1, delayMs: 800, name: 'selfCritiquePlan' },
     );
 
     if (result) {
@@ -498,10 +503,33 @@ async function selfCritiquePlan(question, dimensions, toolResults, memories) {
  *   - askUser 为演的追问数组（state=WAIT 时非空）
  *   - memory 为映射后的 [{content, type}] 供前端开场吊言+个性化
  */
-export async function plan(session) {
+export async function plan(session, dependencies = {}) {
   const userId = session.user_id;
-  const question = session.question || '';
+  const question = session.question_context || session.questionContext || session.question || '';
   logger.info('[Planner] Plan 阶段开始', { sessionId: session.id, userId, question: question.slice(0, 60) });
+
+  const depthRoute = routeDeliberationDepth(question);
+  if (depthRoute.depth === 'quick') {
+    const result = buildQuickPlan(session);
+    const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
+    const saved = await saveSession(result.session);
+    result.session.id = saved.id || session.id;
+    const correlationId = `plan_${result.session.id}_${result.round}`;
+    for (const domainEvent of planDomainEvents(result.plan, result.askUser)) {
+      await eventBus.emit(result.session.id, {
+        ...domainEvent,
+        actor: 'planner',
+        correlationId,
+        taskId: domainEvent.data?.taskId,
+      });
+    }
+    logger.info('[Planner] 快推演规划完成', {
+      sessionId: result.session.id,
+      state: result.session.state,
+      reason: depthRoute.reason,
+    });
+    return result;
+  }
 
   // 1. 读 L3 命格
   let memories = [];
@@ -530,7 +558,9 @@ export async function plan(session) {
   try {
     const toolNeeds = toolProbeService.detectToolNeeds(session.question, questionType);
     toolResults = toolNeeds.length > 0
-      ? await toolProbeService.probe(session.question, questionType)
+      ? await toolProbeService.probe(session.question, questionType, {
+        context: { sessionId: session.id, actorId: userId },
+      })
       : [];
     logger.info('[Planner] 工具探测完成', {
       toolNeeds,
@@ -578,20 +608,14 @@ export async function plan(session) {
   }
 
   // 4.7 LLM 驱动选择 Agent（1-6个），失败抛错不降级
-  const agentResult = await withRetry(
-    () => withTimeout(
-      () => agentEngine.analyzeQuestion(question, userId, { useCustomAdvisors: true }),
-      10000,
-      'Agent选择'
-    ),
-    { retries: 1, delayMs: 800, name: 'selectAgents' }
-  );
+  const agentResult = await agentEngine.analyzeQuestion(question, userId, { useCustomAdvisors: true });
   const selectedAgentIds = Array.isArray(agentResult.agentIds) ? agentResult.agentIds : [];
   const selectedAgents = selectedAgentIds
     .map(id => {
       const fromPool = typeof agentEngine.getAgentById === 'function' ? agentEngine.getAgentById(id) : null;
       if (fromPool) return {
         id: fromPool.id, name: fromPool.name, stance: fromPool.stance,
+        perspective: fromPool.perspective,
         role: fromPool.role || 'dynamic', trigram: fromPool.trigram || '☰',
         color: fromPool.color || '#C8A850', glow: fromPool.glow || '#F0D890'
       };
@@ -607,7 +631,16 @@ export async function plan(session) {
   const deliberationPlan = {
     dimensions,
     agents: agentsForPlan,
-    toolProbes: toolResults.map((r) => ({ tool: r.tool, summary: r.summary, ok: r.ok })),
+    toolProbes: toolResults.map((r) => ({
+      tool: r.tool,
+      summary: r.summary,
+      ok: r.ok,
+      status: r.status,
+      evidenceLevel: r.evidence?.level || null,
+      freshness: r.evidence?.freshness || null,
+      sourceName: r.evidence?.sourceName || null,
+      observedAt: r.evidence?.observedAt || null,
+    })),
     askUser: [],
     minFindings: MIN_FINDINGS,
     analysis: agentResult.analysis || '',
@@ -653,10 +686,16 @@ export async function plan(session) {
 
   // 7. 持久化（saveSession 会自动生成 id 若缺失）
   try {
-    const saved = await memoryService.saveSession(session);
+    const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
+    const saved = await saveSession(session);
     session.id = saved.id;
     logger.info('[Planner] 会话已持久化', { sessionId: session.id, state: session.state, round: session.round });
   } catch (e) {
+    if (
+      e?.code === 'EXECUTE_CLAIM_LOST'
+      || e?.code === 'ANSWER_STATE_CONFLICT'
+      || e?.code === 'ANSWER_PERSIST_FAILED'
+    ) throw e;
     logger.warn('[Planner] 会话持久化失败，继续内存态', { error: e.message });
   }
 
@@ -679,12 +718,31 @@ export async function plan(session) {
           data: { insight: r.summary, tool: r.tool },
         });
       }
+      const evidenceEvent = evidenceDomainEvent(r.tool, r);
+      await eventBus.emit(session.id, {
+        ...evidenceEvent,
+        actor: 'tool_gateway',
+        correlationId: `plan_${session.id}_${session.round}`,
+        taskId: 'planner_evidence',
+      });
     }
   }
 
   // 7.6 LLM 驱动演分析文本（v3.0 零预设：失败抛错，不降级模板）
-  const analysis = await generateYanAnalysis(question, questionType, dimensions, toolResults, memories);
-  deliberationPlan.analysis = analysis;
+  deliberationPlan.analysis = await ensurePlannerAnalysis(
+    deliberationPlan.analysis,
+    () => generateYanAnalysis(question, questionType, dimensions, toolResults, memories),
+  );
+
+  const planCorrelationId = `plan_${session.id}_${session.round}`;
+  for (const domainEvent of planDomainEvents(deliberationPlan, askUser)) {
+    await eventBus.emit(session.id, {
+      ...domainEvent,
+      actor: 'planner',
+      correlationId: planCorrelationId,
+      taskId: domainEvent.data?.taskId,
+    });
+  }
 
   // 映射 L3 记忆为前端契约的 [{content, type}]
   const memoryForClient = memories.map((m) => ({ content: m.content, type: m.memory_type }));

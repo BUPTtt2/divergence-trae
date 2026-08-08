@@ -5,7 +5,22 @@
  * 依据: docs/REAL_AGENT_ARCHITECTURE.md 6.3 节 / docs/REAL_AGENT_FEASIBILITY.md 第 4 节
  */
 
-import { getCurrentUserIdSync } from './baseConfig.js';
+import { anonymousLogin, getAccessToken, refreshAccessToken } from './auth.js';
+import { recoverAccessToken } from './authRecovery.js';
+import { API_BASE_URL } from './baseConfig.js';
+import { buildDeliberationBases } from './deliberationBase.js';
+import { probeDeliberationHealth } from './deliberationHealth.js';
+import {
+  advanceSseCursor,
+  openAuthenticatedSse,
+  readStoredSseCursor,
+  writeStoredSseCursor,
+} from './sseStream.js';
+import {
+  createCommitRequest,
+  createExecuteRequest,
+  normalizeExecuteResponse,
+} from '../../shared/deliberationContract.js';
 
 const CLOG = {
   fetch: (m, p) => console.log(`[FETCH] ${m} ${p}`),
@@ -19,9 +34,10 @@ const CLOG = {
 ============================================================ */
 const FORCED_BASE = import.meta.env.VITE_DELIBERATION_API_BASE || null;
 const CACHE_KEY = 'deliberation_base_cache';
-const BASE_CANDIDATES = FORCED_BASE
-  ? [FORCED_BASE]
-  : ['', 'http://localhost:3001'];
+const BASE_CANDIDATES = buildDeliberationBases({
+  explicitBase: FORCED_BASE,
+  apiBase: API_BASE_URL,
+});
 
 let _cachedBase = (() => {
   try {
@@ -30,6 +46,20 @@ let _cachedBase = (() => {
   } catch {}
   return null;
 })();
+
+let _authRecoveryPromise = null;
+
+function recoverDeliberationAuthentication() {
+  if (!_authRecoveryPromise) {
+    _authRecoveryPromise = recoverAccessToken({
+      refresh: refreshAccessToken,
+      anonymous: anonymousLogin,
+    }).finally(() => {
+      _authRecoveryPromise = null;
+    });
+  }
+  return _authRecoveryPromise;
+}
 
 function _persistBase(b) {
   _cachedBase = b;
@@ -65,34 +95,14 @@ export function setRunMode(mode) {
   }
 }
 
-/**
- * 后端健康探测：极简版
- * （不再用 setTimeout/Promise.race，避免 HMR 或 polyfill 环境下的 lazyRetry 报错）
- * 只发一个真实请求，看是否能拿到 Response。
- */
 export async function probeBackend(timeoutMs = 3000) {
   if (RUN_MODE === 'LOCAL_FULL') return false;
-  const candidates = _cachedBase
-    ? [_cachedBase, ...BASE_CANDIDATES.filter(b => b !== _cachedBase)]
+  const bases = _cachedBase
+    ? [_cachedBase, ...BASE_CANDIDATES.filter((base) => base !== _cachedBase)]
     : BASE_CANDIDATES;
-
-  for (const base of candidates) {
-    try {
-      const url = `${base}/api/deliberation/start`;
-      // 这里只做一次 POST 尝试，不做超时控制（浏览器自身会在网络不可达时快速 reject）
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: 'probe', userId: 'probe' }),
-      });
-      if (resp && typeof resp.status === 'number') {
-        return true;
-      }
-    } catch (e) {
-      // 网络错误 / 拒绝连接：尝试下一个候选 base
-    }
-  }
-  return false;
+  const result = await probeDeliberationHealth({ bases, timeoutMs });
+  if (result.ok) _persistBase(result.base);
+  return result.ok;
 }
 
 /**
@@ -115,6 +125,20 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
     });
   }
 
+  let accessToken = getAccessToken();
+  if (!accessToken) {
+    accessToken = await recoverDeliberationAuthentication();
+    if (!accessToken) {
+      const error = new Error('AUTH_REQUIRED');
+      error.code = 'AUTH_REQUIRED';
+      error.status = 401;
+      throw error;
+    }
+  }
+  const headers = new Headers(init.headers || {});
+  headers.set('Authorization', `Bearer ${accessToken}`);
+  let authenticatedInit = { ...init, headers };
+
   // 已有缓存 base → 直接尝试（快路径）
   const candidates = _cachedBase
     ? [_cachedBase, ...BASE_CANDIDATES.filter(b => b !== _cachedBase)]
@@ -125,8 +149,17 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
     const base = candidates[i];
     const url = `${base}${path}`;
     try {
-      CLOG.fetch(init?.method || 'GET', path);
-      const resp = await fetch(url, init);
+      CLOG.fetch(authenticatedInit.method || 'GET', path);
+      let resp = await fetch(url, authenticatedInit);
+      if (resp.status === 401) {
+        const recoveredToken = await recoverDeliberationAuthentication();
+        if (recoveredToken) {
+          const retryHeaders = new Headers(init.headers || {});
+          retryHeaders.set('Authorization', `Bearer ${recoveredToken}`);
+          authenticatedInit = { ...init, headers: retryHeaders };
+          resp = await fetch(url, authenticatedInit);
+        }
+      }
       if (resp.ok) {
         // 记住第一个可用 base（加速后续请求）
         if (!_cachedBase || _cachedBase !== base) _persistBase(base);
@@ -139,7 +172,7 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
         let body = {};
         try { body = await resp.json(); } catch {}
         if (resp.status === 404 && /Application not found|not ?found/i.test(body?.message || '')) {
-          // Railway 挂了的典型信号：继续 fallback
+          // 候选后端部署不存在时继续尝试下一个 base
           continue;
         }
         if (throwOnError) {
@@ -152,7 +185,8 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
       }
       // 5xx：继续 fallback
     } catch (e) {
-      CLOG.error(init?.method, path, e);
+      CLOG.error(authenticatedInit.method, path, e);
+      if (e?.status >= 400 && e.status < 500) throw e;
       // 网络错误 / CORS / 拒绝连接：继续 fallback
       errors.push(`[${base || '/'}] ${e.message || 'NetworkError'}`);
     }
@@ -175,14 +209,13 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
  * 发起推演
  * POST /api/deliberation/start
  * @param {string} question
- * @param {string} userId
  * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
-export async function startDeliberation(question, userId) {
+export async function startDeliberation(question, options = {}) {
   const resp = await _deliberationFetch('/api/deliberation/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, userId }),
+    body: JSON.stringify({ question, deferPlanning: options.deferPlanning === true }),
   });
   const data = await resp.json().catch(() => ({}));
   // LOCAL_FULL：如果返回内容是空 mock，就补一个明确的 state 给调用方识别
@@ -191,6 +224,15 @@ export async function startDeliberation(question, userId) {
     data.sessionId = data.sessionId || ('ls_' + Date.now().toString(36));
   }
   return data;
+}
+
+export async function planDeliberation(sessionId) {
+  const resp = await _deliberationFetch(`/api/deliberation/${sessionId}/plan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  return resp.json().catch(() => ({}));
 }
 
 /**
@@ -214,28 +256,30 @@ export async function answerDeliberation(sessionId, answers) {
  * 执行智囊发言 / 推演循环
  * POST /api/deliberation/:sessionId/execute
  */
-export async function executeDeliberation(sessionId, context) {
+export async function executeDeliberation(sessionId, command) {
+  const payload = createExecuteRequest(command);
   const resp = await _deliberationFetch(`/api/deliberation/${sessionId}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ context }),
+    body: JSON.stringify(payload),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     throw new Error(data.error || `execute 失败: ${resp.status}`);
   }
-  return data;
+  return normalizeExecuteResponse(data);
 }
 
 /**
  * 提交用户抉择 / 落卦
  * POST /api/deliberation/:sessionId/commit
  */
-export async function commitDeliberation(sessionId, choice) {
+export async function commitDeliberation(sessionId, command) {
+  const payload = createCommitRequest(command);
   const resp = await _deliberationFetch(`/api/deliberation/${sessionId}/commit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ choice }),
+    body: JSON.stringify(payload),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
@@ -255,15 +299,11 @@ export async function getDeliberation(sessionId) {
 
 /**
  * 拉取历史记忆（long-term memory）
- * GET /api/deliberation/memories?userId=xxx
+ * GET /api/deliberation/memories
  */
-export async function getMemories(userId) {
+export async function getMemories() {
   try {
-    const resp = await _deliberationFetch(
-      `/api/deliberation/memories?userId=${encodeURIComponent(userId)}`,
-      {},
-      { throwOnError: false }
-    );
+    const resp = await _deliberationFetch('/api/deliberation/memories', {}, { throwOnError: false });
     const body = resp.json ? await resp.json().catch(() => ({})) : {};
     return Array.isArray(body?.memories) ? body.memories : [];
   } catch (e) {
@@ -274,15 +314,11 @@ export async function getMemories(userId) {
 
 /**
  * 获取用户自定义智囊（advisors）
- * GET /api/deliberation/advisors?userId=xxx
+ * GET /api/deliberation/advisors
  */
-export async function getAdvisors(userId) {
+export async function getAdvisors() {
   try {
-    const resp = await _deliberationFetch(
-      `/api/deliberation/advisors?userId=${encodeURIComponent(userId)}`,
-      {},
-      { throwOnError: false }
-    );
+    const resp = await _deliberationFetch('/api/deliberation/advisors', {}, { throwOnError: false });
     const body = resp.json ? await resp.json().catch(() => ({})) : {};
     return Array.isArray(body?.advisors) ? body.advisors : [];
   } catch (e) {
@@ -295,11 +331,11 @@ export async function getAdvisors(userId) {
  * 新建自定义智囊
  * POST /api/deliberation/advisors
  */
-export async function createAdvisor(advisor, userId) {
+export async function createAdvisor(advisor) {
   const resp = await _deliberationFetch('/api/deliberation/advisors', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ advisor, userId }),
+    body: JSON.stringify(advisor),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error || `创建智囊失败: ${resp.status}`);
@@ -310,11 +346,11 @@ export async function createAdvisor(advisor, userId) {
  * 更新自定义智囊
  * PUT /api/deliberation/advisors/:id
  */
-export async function updateAdvisor(id, patch, userId) {
+export async function updateAdvisor(id, patch) {
   const resp = await _deliberationFetch(`/api/deliberation/advisors/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ patch, userId }),
+    body: JSON.stringify(patch),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error || `更新智囊失败: ${resp.status}`);
@@ -325,11 +361,10 @@ export async function updateAdvisor(id, patch, userId) {
  * 删除自定义智囊
  * DELETE /api/deliberation/advisors/:id
  */
-export async function deleteAdvisor(id, userId) {
+export async function deleteAdvisor(id) {
   const resp = await _deliberationFetch(`/api/deliberation/advisors/${id}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId }),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error || `删除智囊失败: ${resp.status}`);
@@ -393,58 +428,85 @@ export async function resumeStream(sessionId) {
    带 LOCAL_FULL 短路：完全本地模式下，直接走 onOpen 然后不发任何事件。
 ============================================================ */
 export function subscribeDeliberationStream(sessionId, callbacks) {
-  const { onEvent, onAdvisorSpeak, onStateChange, onObservation, onError, onOpen, onClose } = callbacks || {};
+  const handlers = typeof callbacks === 'function' ? { onEvent: callbacks } : (callbacks || {});
+  const { onEvent, onAdvisorSpeak, onStateChange, onObservation, onError, onOpen, onClose } = handlers;
 
   // LOCAL_FULL：不连真实 SSE，立即给 onOpen + onClose 都发，避免逻辑挂住
   if (RUN_MODE === 'LOCAL_FULL') {
     let closed = false;
     const fakeSource = {
       get readyState() { return closed ? 2 : 1; },
-      close() { closed = true; onClose && onClose(); },
+      close() { closed = true; onClose?.(); },
     };
     setTimeout(() => onOpen && onOpen(), 0);
     return fakeSource;
   }
 
   let alive = true;
+  let activeStream = null;
+  let reconnectTimer = null;
+  let readyState = 0;
+  let lastSequence = Number(handlers.afterSequence || 0);
+  try { lastSequence = Math.max(lastSequence, readStoredSseCursor(localStorage, sessionId)); } catch {}
   const base = _cachedBase || BASE_CANDIDATES[0];
   const url = `${base}/api/deliberation/${sessionId}/events`;
-  let es;
-  try {
-    es = new EventSource(url, { withCredentials: false });
-  } catch (e) {
-    // EventSource 不支持同源构造失败，尝试 alt base
-    const altBase = BASE_CANDIDATES.find(b => b !== base) || BASE_CANDIDATES[0];
-    const altUrl = `${altBase}/api/deliberation/${sessionId}/events`;
-    es = new EventSource(altUrl, { withCredentials: false });
-  }
-  es.onopen = () => { if (alive) onOpen && onOpen(); };
-  es.onmessage = (ev) => {
-    if (!alive) return;
-    try {
-      const data = JSON.parse(ev.data || '{}');
-      onEvent && onEvent(data);
-      if (data?.type === 'advisor_speak' && onAdvisorSpeak) onAdvisorSpeak(data.payload || data);
-      if (data?.type === 'state_change' && onStateChange) onStateChange(data.payload || data);
-      if (data?.type === 'observation' && onObservation) onObservation(data.payload || data);
-      if (data?.type === 'error' && onError) onError(data.payload || data);
-    } catch (e) {
-      console.warn('[SSE] 解析事件失败:', ev.data, e);
-    }
+
+  const dispatch = (event) => {
+    lastSequence = advanceSseCursor(lastSequence, event);
+    try { writeStoredSseCursor(localStorage, sessionId, lastSequence); } catch {}
+    onEvent?.(event);
+    const payload = event?.data || event?.payload || event;
+    if (event?.type === 'ADVISOR_SPEAK') onAdvisorSpeak?.(payload);
+    if (event?.type === 'STATE_CHANGE') onStateChange?.(payload);
+    if (event?.type === 'OBSERVATION') onObservation?.(payload);
+    if (event?.type === 'ERROR') onError?.(payload);
   };
-  es.onerror = (err) => {
+
+  const connect = (attempt = 0) => {
     if (!alive) return;
-    // 连接异常：自动关闭，交给上层 fallback
-    console.warn('[SSE] 连接异常，关闭流:', err);
-    onError && onError(err);
-    try { es.close(); } catch {}
-    onClose && onClose();
+    const token = getAccessToken();
+    activeStream = openAuthenticatedSse({
+      url,
+      token,
+      afterSequence: lastSequence,
+      onEvent: dispatch,
+      onOpen: () => {
+        readyState = 1;
+        onOpen?.();
+      },
+      onError: async (error) => {
+        if (!alive) return;
+        if (error?.code === 'AUTH_REQUIRED') {
+          const recoveredToken = await recoverDeliberationAuthentication();
+          if (!recoveredToken) {
+            onError?.(error);
+            return;
+          }
+        } else if (error?.status === 404) {
+          onError?.(error);
+          return;
+        }
+      },
+      onClose: () => {
+        readyState = 2;
+        if (!alive) return;
+        if (attempt >= 3) {
+          onClose?.();
+          return;
+        }
+        const delay = Math.min(8_000, 1_000 * (2 ** attempt));
+        reconnectTimer = setTimeout(() => connect(attempt + 1), delay);
+      },
+    });
   };
+
+  connect();
   return {
-    get readyState() { return es.readyState; },
+    get readyState() { return readyState; },
     close() {
       alive = false;
-      try { es.close(); } catch {}
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      activeStream?.close();
     },
   };
 }

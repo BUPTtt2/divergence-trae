@@ -1,7 +1,7 @@
 /**
  * AuditAgent（审查总管，role=system）
  *   订阅 eventBus 所有事件，对每个业务输出做 SEV1/2/3 分级审查，
- *   落盘 audit.jsonl（append-only），并将 SEV1 / SEV2 写入 eventStore audit 分区，
+ *   落盘 audit.jsonl（append-only），并经 EventBus 写入内部审计事件，
  *   前端顶栏可见 SEV1。
  *
  *   4 条规则（和前端守卫对应，前后端双保险）：
@@ -19,7 +19,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import BaseAgent from '../BaseAgent.js';
 import eventBus from '../../services/eventBus.js';
-import eventStore from '../../services/eventStore.js';
 import { isValidAuditEvent } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,15 +36,16 @@ export class AuditAgent extends BaseAgent {
   /** 调用一次后 attach 到 eventBus（可重复调，幂等） */
   ensureAttached() {
     if (this.attached) return;
-    this.attached = true;
-    const safeWrap = (fn) => (...args) => { try { fn(...args); } catch (e) { /* audit 绝不让异常扩散 */ } };
+    const safeWrap = (fn) => (...args) => { try { fn(...args); } catch { /* audit 绝不让异常扩散 */ } };
+    const auditPayload = (event) => ({ sessionId: event.sessionId, ...(event.data || {}) });
 
     // PLAN_RESULT 出来 → 错分类审查
-    eventBus.on('PLAN_RESULT', safeWrap(ev => this.checkBadClassify(ev)));
+    eventBus.on('PLAN_RESULT', safeWrap(ev => this.checkBadClassify(auditPayload(ev))));
     // STATE_CHANGE → 状态越界审查
-    eventBus.on('STATE_CHANGE', safeWrap(ev => this.checkStateLeap(ev)));
+    eventBus.on('STATE_CHANGE', safeWrap(ev => this.checkStateLeap(auditPayload(ev))));
     // ADVISOR_SPEAK → 话题漂移审查
-    eventBus.on('ADVISOR_SPEAK', safeWrap(ev => this.checkTopicDrift(ev)));
+    eventBus.on('ADVISOR_SPEAK', safeWrap(ev => this.checkTopicDrift(auditPayload(ev))));
+    this.attached = true;
   }
 
   /** run() 接口：读近期 audit 计数或 flush，不是主要入口（主要入口是 attach 订阅） */
@@ -135,12 +135,26 @@ export class AuditAgent extends BaseAgent {
     try {
       fs.appendFileSync(AUDIT_FILE, JSON.stringify(e) + '\n', { encoding: 'utf8', mode: 0o644 });
     } catch { /* 磁盘满/只读，静默忽略，写 eventStore 兜底 */ }
-    try {
-      eventStore.append({ type: 'AUDIT_EVENT', sev: e.sev, rule: e.rule, evidence: e.evidence, sessionId: e.sessionId, agentId: e.agentId, correlationId: e.correlationId, ts: e.ts });
-    } catch { /* eventStore 异常绝不影响业务 */ }
+    const persisted = eventBus.emit(e.sessionId, {
+      type: 'AUDIT_EVENT',
+      data: {
+        sev: e.sev,
+        rule: e.rule,
+        evidence: e.evidence,
+        agentId: e.agentId,
+        correlationId: e.correlationId,
+        ts: e.ts,
+      },
+      actor: 'audit',
+      visibility: 'internal',
+    }).catch(() => null);
     // SEV1/2 通过 eventBus 通知前端
     if (e.sev <= 2) {
-      try { eventBus.emit('AUDIT_ALERT', { ...e }); } catch { /* noop */ }
+      void persisted.finally(() => {
+        try {
+          eventBus.emit(e.sessionId, { type: 'AUDIT_ALERT', data: e, actor: 'audit' });
+        } catch { /* noop */ }
+      });
     }
   }
 }
