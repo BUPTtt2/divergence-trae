@@ -1,11 +1,19 @@
 .live-arena {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   position: absolute;
-  top: 88px;
-  left: 18px;
+  top: max(88px, calc(env(safe-area-inset-top) + 12px));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  left: max(18px, env(safe-area-inset-left));
   z-index: 46;
   width: min(320px, calc(100vw - 36px));
-  max-height: calc(100% - 106px);
+  max-width: 100%;
+  max-height: none;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   padding: 12px;
   border: 1px solid rgb(174 142 73 / 34%);
   background: rgb(13 10 8 / 88%);
@@ -14,10 +22,12 @@
   backdrop-filter: blur(10px);
   pointer-events: auto;
   scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
 }
 
 .live-arena__header,
 .live-arena__lens-toggle {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -39,6 +49,7 @@
 
 .live-arena__motion-controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 3px;
 }
 
@@ -134,6 +145,7 @@
 }
 
 .live-arena__lens {
+  max-width: 100%;
   margin-top: 12px;
   border: 1px solid rgb(213 177 88 / 32%);
   background: rgb(21 16 11 / 74%);
@@ -162,6 +174,7 @@
 }
 
 .live-arena__lens-details {
+  min-width: 0;
   padding: 0 10px 10px;
 }
 
@@ -258,4 +271,52 @@
   background: rgb(255 255 255 / 3%);
   color: #c6b99f;
   font-size: 10px;
+}
+
+@media (min-width: 768px) and (max-width: 1180px) and (orientation: landscape) {
+  .live-arena {
+    width: min(320px, calc(100vw - 36px));
+    max-width: 320px;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1180px) and (orientation: portrait) {
+  .live-arena {
+    top: max(96px, calc(env(safe-area-inset-top) + 16px));
+    right: max(16px, env(safe-area-inset-right));
+    bottom: max(92px, calc(env(safe-area-inset-bottom) + 76px));
+    left: max(16px, env(safe-area-inset-left));
+    width: auto;
+  }
+}
+
+@media (max-width: 767px) {
+  .live-arena {
+    top: max(132px, calc(env(safe-area-inset-top) + 84px));
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(84px, calc(env(safe-area-inset-bottom) + 72px));
+    left: max(12px, env(safe-area-inset-left));
+    width: auto;
+    max-height: none;
+  }
+
+  .live-arena__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .live-arena__motion-controls button {
+    flex: 1 1 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-arena {
+    scroll-behavior: auto;
+  }
+
+  .live-arena__cue {
+    animation: none;
+    transition: none;
+  }
 }
