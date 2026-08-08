@@ -340,6 +340,7 @@ function _renderNavButton(phase, ctx) {
   const GLOW = '#E8C670';
   const btnBase = {
     padding: '10px 20px',
+    minHeight: 44,
     fontFamily: '"Ma Shan Zheng", serif',
     fontSize: 13,
     letterSpacing: '0.25em',

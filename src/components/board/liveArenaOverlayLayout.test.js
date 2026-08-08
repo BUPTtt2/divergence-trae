@@ -6,6 +6,7 @@ import postcss from 'postcss';
 const stylesheet = postcss.parse(
   fs.readFileSync(new URL('./liveArenaOverlay.css', import.meta.url), 'utf8'),
 );
+const gameSource = fs.readFileSync(new URL('../../pages/Game.jsx', import.meta.url), 'utf8');
 
 function mediaMatches(params, viewport) {
   return params.split(/\s+and\s+/).every((part) => {
@@ -108,6 +109,8 @@ test('all primary controls expose at least a 44px touch target without hover-onl
   stylesheet.walkRules((rule) => {
     assert.equal(rule.selectors.some((selector) => selector.includes(':hover')), false, rule.selector);
   });
+
+  assert.match(gameSource, /const btnBase = \{[\s\S]*?minHeight:\s*44/);
 });
 
 test('system reduced-motion disables ornamental transitions while off mode remains static', () => {
