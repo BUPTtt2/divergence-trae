@@ -118,3 +118,4 @@
 8. 待验收：主控仍需用真实 Safari/WebKit 检查 768×1024 与 1024×768 的 Lens 展开、动态安全区、standard/reduced/off、刷新/SSE 恢复、页面横向溢出、底部导航遮挡和独立触控。该项通过前 Stage 06 不记录为最终完成。
 9. 边界：未部署生产；自动 CSS 契约不能替代真实 iPad WebKit 渲染证据。
 10. Fix round 1：真实 iPad 首轮发现父容器 `scrollLeft=30` 会把 absolute overlay 裁到 viewport 左侧之外；两个 iPad media 区间现改为 fixed，待重载复验。正式审查同时修复已保存 standard 覆盖系统 Reduce Motion 的问题，off 保持完全静态。
+11. iPad 复验跟进：fixed 坐标和 44px 触控尺寸已符合预期，但阶段层仍覆盖顶部动画按钮；iPad overlay 现使用 z-index 60，高于阶段内容 55 且低于错误提示 100，待真实点击复验后关闭。

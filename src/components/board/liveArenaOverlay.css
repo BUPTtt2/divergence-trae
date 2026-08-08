@@ -276,6 +276,7 @@
 @media (min-width: 768px) and (max-width: 1180px) and (orientation: landscape) {
   .live-arena {
     position: fixed;
+    z-index: 60;
     width: min(
       320px,
       calc(100vw - max(18px, env(safe-area-inset-left)) - max(18px, env(safe-area-inset-right)))
@@ -287,6 +288,7 @@
 @media (min-width: 768px) and (max-width: 1180px) and (orientation: portrait) {
   .live-arena {
     position: fixed;
+    z-index: 60;
     top: max(96px, calc(env(safe-area-inset-top) + 16px));
     right: max(16px, env(safe-area-inset-right));
     bottom: max(92px, calc(env(safe-area-inset-bottom) + 76px));

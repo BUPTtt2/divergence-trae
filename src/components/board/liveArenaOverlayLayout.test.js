@@ -51,6 +51,7 @@ test('768x1024 portrait keeps the arena in one safe-area-aware column without ho
   const arena = declarationsForViewport('.live-arena', portrait);
 
   assert.equal(arena.position, 'fixed');
+  assert.ok(Number.parseInt(arena['z-index'], 10) > 55);
   assert.equal(arena.display, 'flex');
   assert.equal(arena['flex-direction'], 'column');
   assert.equal(arena.width, 'auto');
@@ -65,6 +66,7 @@ test('1024x768 landscape uses a bounded, vertically scrollable sidebar inside sa
   const arena = declarationsForViewport('.live-arena', landscape);
 
   assert.equal(arena.position, 'fixed');
+  assert.ok(Number.parseInt(arena['z-index'], 10) > 55);
   assert.match(arena.width, /env\(safe-area-inset-left\)/);
   assert.match(arena.width, /env\(safe-area-inset-right\)/);
   assert.equal(arena['max-width'], '320px');
@@ -78,7 +80,10 @@ test('1024x768 landscape uses a bounded, vertically scrollable sidebar inside sa
 });
 
 test('desktop keeps the existing container-relative overlay positioning', () => {
-  assert.equal(declarationsForViewport('.live-arena', desktop).position, 'absolute');
+  const arena = declarationsForViewport('.live-arena', desktop);
+
+  assert.equal(arena.position, 'absolute');
+  assert.equal(arena['z-index'], '46');
 });
 
 test('767px and narrower uses a flowing card stack with controls that wrap instead of overflowing', () => {
