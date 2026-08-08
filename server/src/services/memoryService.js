@@ -338,6 +338,46 @@ export async function releaseExecuteClaim(sessionId, { actionId, claimToken } = 
   return { released: result.rowCount === 1, session: result.rows[0] || await getSession(sessionId) };
 }
 
+/** 从无运行租约的 WAIT 原子接管回答流程，避免 answer 清除并发 execute 的租约。 */
+export async function claimClarifyAnswer(sessionId, snapshot = {}) {
+  const executeStatus = snapshot.execute_status ?? snapshot.executeStatus ?? null;
+  const leaseExpiresAt = snapshot.execute_lease_expires_at ?? snapshot.executeLeaseExpiresAt ?? null;
+  const eligible = snapshot.state === 'WAIT'
+    && (executeStatus === null || executeStatus === 'completed')
+    && leaseExpiresAt === null;
+  if (!eligible) {
+    const error = new Error('ANSWER_STATE_CONFLICT');
+    error.code = 'ANSWER_STATE_CONFLICT';
+    throw error;
+  }
+
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      state: 'WAIT',
+      execute_action_id: snapshot.execute_action_id ?? snapshot.executeActionId ?? null,
+      execute_status: executeStatus,
+      execute_claim_token: snapshot.execute_claim_token ?? snapshot.executeClaimToken ?? null,
+      execute_lease_expires_at: null,
+    },
+    data: {
+      state: 'PLAN',
+      execute_action_id: null,
+      execute_status: null,
+      execute_claim_token: null,
+      execute_lease_expires_at: null,
+    },
+  });
+  if (result.rowCount !== 1) {
+    const error = new Error('ANSWER_STATE_CONFLICT');
+    error.code = 'ANSWER_STATE_CONFLICT';
+    throw error;
+  }
+  return { claimed: true, session: result.rows[0] };
+}
+
 /**
  * 原子抢占一次性 Lens 审查。只有 lens_review 仍为空的调用者可以成为执行者。
  * PostgreSQL 使用条件 UPDATE；内存模式在同一同步临界区执行等价 CAS。
@@ -912,6 +952,7 @@ export default {
   claimExecute,
   completeExecute,
   releaseExecuteClaim,
+  claimClarifyAnswer,
   claimLensReview,
   selfTest,
 };

@@ -542,14 +542,13 @@ function _fallbackPlanResult(session, errorMsg = '') {
  * @param {Array} answers 用户回答数组
  * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
-export async function answer(sessionId, answers, executionCtx = {}) {
+export async function answer(sessionId, answers, executionCtx = {}, dependencies = {}) {
   logger.info('[Deliberation] answer 收到', { sessionId, answerCount: Array.isArray(answers) ? answers.length : 0 });
 
-  const session = await assertSessionOwner(sessionId, executionCtx.userId);
-  session.execute_action_id = null;
-  session.execute_status = null;
-  session.execute_claim_token = null;
-  session.execute_lease_expires_at = null;
+  const loadedSession = await assertSessionOwner(sessionId, executionCtx.userId);
+  const claimAnswer = dependencies.claimAnswerFn || memoryService.claimClarifyAnswer;
+  const answerClaim = await claimAnswer(sessionId, loadedSession);
+  const session = { ...loadedSession, ...answerClaim.session };
 
   // round 从持久化的 plan.round 读取，+1 进入下一轮判定
   const prevRound = Number((session.plan && session.plan.round) || session.round) || 1;
@@ -567,7 +566,8 @@ export async function answer(sessionId, answers, executionCtx = {}) {
   });
 
   // 重新 plan（planner 内 autonomyGate 按 session.round 判定 ASK/CONTINUE/STOP）
-  const result = await planSessionWithFallback(session);
+  const planSession = dependencies.planSessionFn || planSessionWithFallback;
+  const result = await planSession(session);
 
   logger.info('[Deliberation] answer 完成', {
     sessionId,
@@ -594,8 +594,11 @@ export async function answer(sessionId, answers, executionCtx = {}) {
  * @param {{actionId?:string,userId?:string|null}} executionCtx 稳定动作与调用者上下文
  * @returns {Promise<{sessionId, state, findings, oracle, conflicts, gaps, replanned}>}
  */
-async function performExecute(sessionId, agentIds, executionCtx, session) {
+export async function performExecute(sessionId, agentIds, executionCtx, session, dependencies = {}) {
   const actionId = String(executionCtx.actionId || '').trim();
+  const emit = dependencies.emitFn || eventBus.emit.bind(eventBus);
+  const runReActLoop = dependencies.reactLoopFn || reactLoop.runReActLoop;
+  const reflect = dependencies.reflectFn || reflector.reflect;
   logger.info('[Deliberation] execute 开始', { sessionId, agentIds, actionId });
 
   const question = session.question_context || session.questionContext || session.question || '';
@@ -669,10 +672,10 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
   };
 
   // 3. emit 进入 DELIBERATE（Event Sourcing：事件追加为真相）
-  await eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'EXECUTE', to: 'DELIBERATE', thought: '演·ReAct 推演开始' }, actor: 'yan', correlationId: actionId, visibility: 'public' });
+  await emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'EXECUTE', to: 'DELIBERATE', thought: '演·ReAct 推演开始' }, actor: 'yan', correlationId: actionId, visibility: 'public' });
 
   // 4. 运行 ReAct 循环（Think→Act→Observe，演自主决策 tool_call/advisor_call/ask_user/output）
-  const reactResult = await reactLoop.runReActLoop(sessionId, reactState);
+  const reactResult = await runReActLoop(sessionId, reactState);
 
   // 5. 把 ReAct 产生的 findings/toolResults 写回 session
   session.findings = reactState.findings || [];
@@ -702,9 +705,7 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
   });
 
   // 7. Reflect（立卦或重规划）
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'REFLECT' } });
-  eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: 'reflect', thought: `演·反思：聚合${session.findings.length}位智囊发现` } });
-  let result = await reflector.reflect(session);
+  let result = await reflect(session);
 
   // Step 8: 重规划串通 — reflector 触发重规划时，自动重新 plan/execute，最多1次
   if (result.replanned && (result.session.state === 'PLAN' || result.session.state === 'EXECUTE')) {
@@ -713,24 +714,29 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
       newState: result.session.state,
       replanCount: result.session.replan_count,
     });
-    eventBus.emit(sessionId, {
+    // 先用 fencing token 持久化并续租，成功后才能公开任何 replan 事件。
+    const saveSessionFn = (candidate) => persistClaimedExecuteSession(sessionId, candidate, executionCtx);
+    await saveSessionFn(result.session);
+    await emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'REFLECT' } });
+    await emit(sessionId, { type: 'THOUGHT', data: { step: 'reflect', thought: `演·反思：聚合${session.findings.length}位智囊发现` } });
+    await emit(sessionId, {
       type: 'THOUGHT',
       data: { step: 'replan', thought: `演·重规划：${result.reason}，重新析度召智` },
     });
     for (const domainEvent of reflectionDomainEvents(result)) {
-      await eventBus.emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
+      await emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
     }
-    // 当前 execute owner 才能持久化 replan 中间态，同时续租。
-    const saveSessionFn = (candidate) => persistClaimedExecuteSession(sessionId, candidate, executionCtx);
-    await saveSessionFn(result.session);
     // state='PLAN'：先重新 plan（planner 会读 session 已有 findings 重新规划）
     if (result.session.state === 'PLAN') {
       const replanned = await planSessionWithFallback(result.session, planner.plan, { saveSessionFn });
       result.session = replanned.session;
     }
     // 递归 execute（传空 agentIds 让 agentRouter 基于新维度推荐智囊，replan_count 已+1 不会无限）
-    return performExecute(sessionId, [], executionCtx, result.session);
+    return performExecute(sessionId, [], executionCtx, result.session, dependencies);
   }
+
+  await emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'REFLECT' } });
+  await emit(sessionId, { type: 'THOUGHT', data: { step: 'reflect', thought: `演·反思：聚合${session.findings.length}位智囊发现` } });
 
   let executeProjectionPersisted = false;
   result = await runLensReviewLifecycle(result, {
@@ -738,6 +744,7 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
     actionId,
     claimToken: executionCtx.claimToken,
   }, {
+    emitFn: emit,
     persistFn: async (id, value) => {
       await persistExecuteResult(id, value, {
         actionId,
@@ -757,14 +764,14 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
 
   // emit 反思结果
   if (result.oracle) {
-    eventBus.emit(sessionId, {
+    await emit(sessionId, {
       type: 'OBSERVATION',
       data: {
         insight: `立卦：${result.oracle.primary?.lower?.name || ''}${result.oracle.primary?.upper?.name || ''} · ${result.conflicts?.length || 0}处矛盾`,
       },
     });
   }
-  eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'REFLECT', to: result.session?.state || 'ORACLE' } });
+  await emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'REFLECT', to: result.session?.state || 'ORACLE' } });
 
   const reflectionProjection = {
     ...result,
@@ -772,7 +779,7 @@ async function performExecute(sessionId, agentIds, executionCtx, session) {
     masterSummary: result.session?.masterSummary || '',
   };
   for (const domainEvent of reflectionDomainEvents({ ...reflectionProjection, cognitivePlan: null, lensImpacts: [] })) {
-    await eventBus.emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
+    await emit(sessionId, { ...domainEvent, actor: 'reflector', correlationId: actionId });
   }
 
   return buildExecuteResponse(sessionId, result);
@@ -800,7 +807,7 @@ export async function runExecuteClaimLifecycle(session, agentIds, executionCtx =
     claimToken: claimResult.claimToken,
   };
   try {
-    return await executeFn(session.id, agentIds, claimedContext, claimResult.session);
+    return await executeFn(session.id, agentIds, claimedContext, claimResult.session, dependencies);
   } catch (error) {
     try {
       await release(session.id, { actionId, claimToken: claimResult.claimToken });

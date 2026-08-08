@@ -130,3 +130,93 @@ test('a failed planner attempt becomes one persisted fallback instead of overlap
   assert.equal(restored.question_context, session.questionContext);
   assert.deepEqual(restored.answers, session.answers);
 });
+
+test('answer claim rejects a WAIT session while an execute lease is running', async () => {
+  assert.equal(typeof memoryService.claimClarifyAnswer, 'function');
+  const session = await ownedSession({
+    plan: { askUser: [{ question: '还需要补充什么？' }], round: 1 },
+  });
+  const running = await memoryService.claimExecute(session.id, {
+    actionId: 'answer-race-action',
+    now: 70_000,
+    leaseMs: 500,
+  });
+
+  await assert.rejects(
+    memoryService.claimClarifyAnswer(session.id, session),
+    /ANSWER_STATE_CONFLICT/,
+  );
+  const persisted = await memoryService.getSession(session.id);
+  assert.equal(persisted.state, 'WAIT');
+  assert.equal(persisted.execute_status, 'running');
+  assert.equal(persisted.execute_claim_token, running.claimToken);
+});
+
+test('answer and execute cannot race past a completed CLARIFY handoff', async () => {
+  const session = await ownedSession({
+    plan: { askUser: [{ question: '还需要补充什么？' }], round: 1 },
+  });
+  const executeClaim = await memoryService.claimExecute(session.id, {
+    actionId: 'clarify-owner-action',
+    now: 80_000,
+    leaseMs: 5_000,
+  });
+  await engine.persistClarifyExecute(
+    session.id,
+    executeClaim.session,
+    session.plan.askUser,
+    { actionId: 'clarify-owner-action', claimToken: executeClaim.claimToken },
+  );
+  let answerClaimCount = 0;
+  let executeCount = 0;
+  const claimAnswerFn = async (id, snapshot) => {
+    answerClaimCount += 1;
+    const claimed = await memoryService.claimClarifyAnswer(id, snapshot);
+    await new Promise((resolve) => setImmediate(resolve));
+    return claimed;
+  };
+  const planSessionFn = async (claimedSession) => {
+    const plan = { ...claimedSession.plan, askUser: [], round: 2 };
+    const plannedSession = { ...claimedSession, state: 'EXECUTE', plan, round: 2 };
+    await memoryService.saveSession(plannedSession);
+    return {
+      session: plannedSession,
+      plan,
+      askUser: [],
+      openingLine: '',
+      round: 2,
+      memory: [],
+    };
+  };
+
+  const [answerResult, executeResult] = await Promise.allSettled([
+    engine.answer(
+      session.id,
+      [{ answer: '补充信息' }],
+      { userId: session.user_id },
+      { claimAnswerFn, planSessionFn },
+    ),
+    engine.execute(
+      session.id,
+      [],
+      { userId: session.user_id, actionId: 'other-execute-action' },
+      {
+        flightRegistry: new Map(),
+        executeFn: async () => {
+          executeCount += 1;
+          return { sessionId: session.id, state: 'ORACLE', findings: [] };
+        },
+      },
+    ),
+  ]);
+
+  assert.equal(answerResult.status, 'fulfilled');
+  assert.equal(executeResult.status, 'fulfilled');
+  assert.equal(executeResult.value.state, 'CLARIFY');
+  assert.equal(answerClaimCount, 1);
+  assert.equal(executeCount, 0);
+  const persisted = await memoryService.getSession(session.id);
+  assert.equal(persisted.state, 'EXECUTE');
+  assert.equal(persisted.execute_status, null);
+  assert.equal(persisted.execute_claim_token, null);
+});

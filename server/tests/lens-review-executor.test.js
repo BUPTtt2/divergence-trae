@@ -449,6 +449,75 @@ test('stale replan owner cannot overwrite the replacement owner projection', asy
   assert.notDeepEqual(persisted.plan, { dimensions: [{ perspective: 'stale' }] });
 });
 
+test('real engine persists and renews a replan before publishing its events', async () => {
+  assert.equal(typeof deliberationEngine.performExecute, 'function');
+  const sessionId = `sess_execute_replan_order_${Date.now()}`;
+  await memoryService.saveSession({
+    ...createSession(sessionId),
+    state: 'EXECUTE',
+    plan: { agents: [], askUser: [], dimensions: [] },
+    findings: [],
+  });
+  const claim = await memoryService.claimExecute(sessionId, {
+    actionId: 'replan-order-action',
+    now: 90_000,
+    leaseMs: 100,
+  });
+  const replanEvents = [];
+  let reflectCount = 0;
+
+  const result = await deliberationEngine.performExecute(
+    sessionId,
+    [],
+    { actionId: 'replan-order-action', claimToken: claim.claimToken },
+    claim.session,
+    {
+      reactLoopFn: async () => ({ state: 'OUTPUT' }),
+      reflectFn: async (current) => {
+        reflectCount += 1;
+        if (reflectCount === 1) {
+          return {
+            session: { ...current, state: 'EXECUTE', replan_count: 1 },
+            replanned: true,
+            reason: '补齐新证据',
+            conflicts: [],
+            gaps: [],
+          };
+        }
+        return {
+          session: { ...current, state: 'ORACLE', oracle: null },
+          replanned: false,
+          oracle: null,
+          conflicts: [],
+          gaps: [],
+        };
+      },
+      emitFn: async (_id, event) => {
+        const isFencedReflectionEvent = (
+          event?.type === 'STATE_CHANGE' && event?.data?.from === 'DELIBERATE'
+        ) || event?.data?.step === 'reflect'
+          || event?.data?.step === 'replan'
+          || event?.type === 'PLAN_REVISED';
+        if (isFencedReflectionEvent) {
+          const persisted = await memoryService.getSession(sessionId);
+          assert.equal(persisted.execute_action_id, 'replan-order-action');
+          assert.equal(persisted.execute_status, 'running');
+          assert.equal(persisted.execute_claim_token, claim.claimToken);
+          assert.equal(persisted.replan_count, 1);
+          assert.ok(persisted.execute_lease_expires_at > 90_100);
+        }
+        if (event?.data?.step === 'replan' || event?.type === 'PLAN_REVISED') {
+          replanEvents.push(event.type);
+        }
+      },
+    },
+  );
+
+  assert.equal(result.state, 'ORACLE');
+  assert.equal(reflectCount, 2);
+  assert.deepEqual(replanEvents, ['THOUGHT', 'PLAN_REVISED']);
+});
+
 test('Lens claim requires the active execute action and fencing token', async () => {
   const sessionId = `sess_lens_execute_fence_${Date.now()}`;
   const plan = { ...structuredClone(PLAN), reviewTasks: [structuredClone(PLAN.reviewTasks[0])] };
