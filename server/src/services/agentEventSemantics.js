@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 function descriptor(type, data, visibility = 'public') {
   return { type, data, visibility };
 }
@@ -22,7 +24,9 @@ function lensInvariants(invariants = {}) {
 }
 
 const TARGET_PERSPECTIVES = new Set([
-  'strategic', 'risk', 'financial', 'action', 'communication', 'practical', 'unspecified',
+  'strategic', 'communication', 'emotional', 'action', 'experience', 'risk', 'practical',
+  'health', 'financial', 'reflection', 'macro', 'legal', 'education', 'technical', 'career',
+  'unspecified',
 ]);
 const PERSPECTIVE_ALIASES = Object.freeze({
   '战略': 'strategic',
@@ -33,11 +37,6 @@ const PERSPECTIVE_ALIASES = Object.freeze({
   '沟通': 'communication',
   '实践': 'practical',
 });
-const CAUSAL_REFERENCE_PATTERNS = [
-  /^lens:(?:[1-9]|[1-5]\d|6[0-4])$/,
-  /^(?:conflict|gap|finding):[A-Za-z0-9_-]{1,128}$/,
-  /^oracle:dynamic:[1-6]$/,
-];
 
 function normalizeTargetPerspective(value) {
   const normalized = String(value || '').trim().toLowerCase();
@@ -49,7 +48,8 @@ function normalizeCausalReferences(sources) {
   return [...new Set((Array.isArray(sources) ? sources : [])
     .filter((source) => typeof source === 'string')
     .map((source) => source.trim())
-    .filter((source) => CAUSAL_REFERENCE_PATTERNS.some((pattern) => pattern.test(source))))];
+    .filter(Boolean)
+    .map((source) => `ref_${createHash('sha256').update(source).digest('hex').slice(0, 20)}`))];
 }
 
 function lensDomainEvents(result = {}) {

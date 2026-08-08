@@ -293,3 +293,67 @@ test('Lens lifecycle persistence is idempotent for one action but independent ac
   await removeEvents(allEvents);
   eventBus.cleanup(sessionId);
 });
+
+test('an explicit eventId only replays when its complete persistence identity matches', async () => {
+  const eventId = `event_collision_${Date.now()}`;
+  const sessionId = `sess_event_identity_${Date.now()}`;
+  const first = await appendEvent(sessionId, 'LENS_SELECTED', { lensId: 24 }, 'reflector', {
+    eventId,
+    correlationId: 'action_identity_1',
+    visibility: 'summary',
+  });
+  const replay = await appendEvent(sessionId, 'LENS_SELECTED', { lensId: 24 }, 'reflector', {
+    eventId,
+    correlationId: 'action_identity_1',
+    visibility: 'summary',
+  });
+
+  assert.equal(replay.eventId, first.eventId);
+  assert.equal(replay.sequence, first.sequence);
+  await assert.rejects(
+    () => appendEvent(`${sessionId}_other`, 'LENS_SELECTED', { lensId: 24 }, 'reflector', {
+      eventId,
+      correlationId: 'action_identity_1',
+      visibility: 'summary',
+    }),
+    (error) => error?.code === 'EVENT_ID_COLLISION',
+  );
+  await assert.rejects(
+    () => appendEvent(sessionId, 'LENS_SELECTED', { lensId: 25 }, 'reflector', {
+      eventId,
+      correlationId: 'action_identity_1',
+      visibility: 'summary',
+    }),
+    (error) => error?.code === 'EVENT_ID_COLLISION',
+  );
+
+  await removeEvents([first]);
+});
+
+test('EventBus notifies backend subscribers once for an idempotent Lens retry', async () => {
+  const sessionId = `sess_lens_listener_${Date.now()}`;
+  let calls = 0;
+  const unsubscribe = eventBus.on('LENS_SELECTED', (event) => {
+    calls += 1;
+    assert.equal(event.sequence, 1);
+  });
+  const event = {
+    type: 'LENS_SELECTED',
+    data: { lensId: 24, sourceDigest: 'listener-stable' },
+    actor: 'reflector',
+    correlationId: 'action_listener_1',
+    visibility: 'summary',
+  };
+
+  const first = await eventBus.emit(sessionId, event);
+  const replay = await eventBus.emit(sessionId, event);
+  const stored = await getEvents(sessionId);
+
+  assert.equal(calls, 1);
+  assert.equal(replay.eventId, first.eventId);
+  assert.equal(stored.length, 1);
+
+  unsubscribe();
+  await removeEvents(stored);
+  eventBus.cleanup(sessionId);
+});

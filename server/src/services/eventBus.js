@@ -16,6 +16,7 @@ import {
   deterministicEventId,
   getEvents,
   isBrowserVisibleEvent,
+  wasEventInserted,
   withLegacyAliases,
 } from './eventStore.js';
 const SYSTEM_SESSION_ID = 'system';
@@ -104,16 +105,6 @@ class EventBus {
       logger.info(logMsg, logMeta);
     }
 
-    // 后端审计依赖同步通知；事件对象会在持久化后补齐正式 sequence。
-    const handlers = this.backendListeners.get(draft.type) || [];
-    for (const handler of handlers) {
-      try {
-        handler(draft);
-      } catch (error) {
-        logger.warn('[EventBus] 后端订阅者异常', { type: draft.type, error: error.message });
-      }
-    }
-
     const persistedPromise = appendEvent(sid, draft.type, draft.payload, draft.actorId, {
       eventId: draft.eventId,
       createdAt: draft.createdAt,
@@ -123,6 +114,16 @@ class EventBus {
       visibility: event.visibility,
     }).then((persisted) => {
       Object.assign(draft, persisted);
+      if (!wasEventInserted(persisted)) return persisted;
+
+      const handlers = this.backendListeners.get(draft.type) || [];
+      for (const handler of handlers) {
+        try {
+          handler(draft);
+        } catch (error) {
+          logger.warn('[EventBus] 后端订阅者异常', { type: draft.type, error: error.message });
+        }
+      }
       if (!this.history.has(sid)) this.history.set(sid, []);
       const history = this.history.get(sid);
       history.push(persisted);

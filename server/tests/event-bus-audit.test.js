@@ -44,7 +44,7 @@ test('AuditAgent emits and persists a forbidden state transition alert', async (
     }, 100);
   });
 
-  eventBus.emit('sess_audit', {
+  await eventBus.emit('sess_audit', {
     type: 'STATE_CHANGE',
     data: { from: 'CLARIFY', to: 'EXECUTE' },
   });
