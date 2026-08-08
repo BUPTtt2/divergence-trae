@@ -23,6 +23,7 @@
  */
 
 import logger from './logger.js';
+import { callLLM } from './llmRouter.js';
 import {
   createCognitivePerturbationPlan,
   createLensImpactRecords,
@@ -31,6 +32,12 @@ import {
 // ============ 常量 ============
 
 const MAX_REPLAN = 1;
+const REVIEW_LENS_CLAUSE_IDS = Object.freeze([
+  'knowledge_state',
+  'counterfactual',
+  'verification',
+  'boundary_guard',
+]);
 const LOCKED_INVARIANTS = Object.freeze({
   evidenceLocked: true,
   riskLocked: true,
@@ -352,6 +359,105 @@ function buildReviewLensText(oracle) {
   return `【${primaryName}】本轮审查镜头由${stateCounts.verified}项已验证、${stateCounts.unknown}项未知和${stateCounts.contested}项冲突构成。${dynamicStr}，备选镜头为${changedName}。请逐项补证并检查反转变量；事实、风险与审批边界保持不变。`;
 }
 
+function reviewLensContext(oracle) {
+  const stateCounts = oracle.lineMeta.reduce((counts, line) => {
+    counts[line.knowledgeState] += 1;
+    return counts;
+  }, { verified: 0, unknown: 0, contested: 0 });
+  return {
+    primaryName: `${oracle.primary.lower.name}${oracle.primary.upper.name}`,
+    changedName: `${oracle.changed.lower.name}${oracle.changed.upper.name}`,
+    dynamicStr: oracle.dynamics.length > 0
+      ? `${oracle.dynamics.map((i) => i + 1).join('、')}爻动`
+      : '无动爻',
+    ...stateCounts,
+  };
+}
+
+const REVIEW_LENS_TEMPLATES = Object.freeze({
+  'standard-v1': Object.freeze({
+    knowledge_state: (ctx) => `【${ctx.primaryName}】本轮审查镜头由${ctx.verified}项已验证、${ctx.unknown}项未知和${ctx.contested}项冲突构成。`,
+    counterfactual: (ctx) => `${ctx.dynamicStr}，备选镜头为${ctx.changedName}。`,
+    verification: () => '请逐项补证并检查反转变量；',
+    boundary_guard: () => '事实、风险与审批边界保持不变。',
+  }),
+  'concise-v1': Object.freeze({
+    knowledge_state: (ctx) => `【${ctx.primaryName}】审查概览：已验证${ctx.verified}项，未知${ctx.unknown}项，冲突${ctx.contested}项。`,
+    counterfactual: (ctx) => `反转观察：${ctx.dynamicStr}，对照${ctx.changedName}镜头。`,
+    verification: () => '下一步仅补证未知、核验冲突与反转条件。',
+    boundary_guard: () => '边界先行：事实、风险与审批要求保持不变。',
+  }),
+});
+
+function parseReviewLensSelection(raw) {
+  if (typeof raw !== 'string' || raw.length > 300) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return null;
+  const keys = Object.keys(parsed);
+  if (keys.length !== 2 || !keys.includes('templateId') || !keys.includes('clauseIds')) return null;
+  if (!Object.hasOwn(REVIEW_LENS_TEMPLATES, parsed.templateId)) return null;
+  if (!Array.isArray(parsed.clauseIds) || parsed.clauseIds.length !== REVIEW_LENS_CLAUSE_IDS.length) return null;
+  if (new Set(parsed.clauseIds).size !== REVIEW_LENS_CLAUSE_IDS.length) return null;
+  if (!REVIEW_LENS_CLAUSE_IDS.every((id) => parsed.clauseIds.includes(id))) return null;
+  return parsed;
+}
+
+function renderReviewLensSelection(oracle, selection) {
+  const context = reviewLensContext(oracle);
+  const template = REVIEW_LENS_TEMPLATES[selection.templateId];
+  return selection.clauseIds.map((clauseId) => template[clauseId](context)).join('');
+}
+
+async function generateReviewLensText(oracle, callLLMFn, timeoutMs = 4000) {
+  const fallback = buildReviewLensText(oracle);
+  const context = reviewLensContext(oracle);
+  const safeTimeoutMs = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : 4000;
+  let timer;
+
+  try {
+    const raw = await Promise.race([
+      Promise.resolve().then(() => callLLMFn([
+        {
+          role: 'system',
+          content: '你只能选择受控审查模板和句段顺序。仅返回严格 JSON，格式为 {"templateId":"standard-v1|concise-v1","clauseIds":["knowledge_state","counterfactual","verification","boundary_guard"]}。四个 clause ID 必须各出现一次；禁止输出任何自由文本或额外字段。',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            primaryName: context.primaryName,
+            changedName: context.changedName,
+            knowledgeCounts: {
+              verified: context.verified,
+              unknown: context.unknown,
+              contested: context.contested,
+            },
+            dynamicLines: oracle.dynamics.map((index) => index + 1),
+          }),
+        },
+      ], { maxTokens: 120, temperature: 0, timeout: safeTimeoutMs })),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), safeTimeoutMs);
+      }),
+    ]);
+    const selection = parseReviewLensSelection(raw);
+    if (!selection) {
+      logger.warn('[OracleText] LLM 返回非受控结构，改用规则说明');
+      return fallback;
+    }
+    return renderReviewLensSelection(oracle, selection);
+  } catch (error) {
+    logger.info(`[OracleText] LLM 超时/失败，改用规则说明: ${error.message}`);
+    return fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const BUSINESS_TOPIC_CATALOG = Object.freeze([
   { key: 'supplier', label: '供应商', pattern: /供应商|供货|采购|供方/ },
   { key: 'contract', label: '合同签约', pattern: /签约|合同|续约|协议/ },
@@ -530,7 +636,11 @@ export async function reflect(session, dependencies = {}) {
     lensImpacts = [];
   }
 
-  oracle.text = buildReviewLensText(oracle);
+  oracle.text = await generateReviewLensText(
+    oracle,
+    dependencies.callLLMFn || callLLM,
+    dependencies.reviewLensTimeoutMs,
+  );
 
   // Lens 任务和用户最终选择保持分离；业务选项只使用原问题中的受控主题。
   const businessTopic = deriveBusinessTopic(session?.question || '');
