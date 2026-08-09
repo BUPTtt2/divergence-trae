@@ -18,6 +18,7 @@ const MAX_INPUT_CHARS = 2000;
  * 当前仅智谱提供 embedding API；魔搭/DeepSeek 无 embedding 端点
  */
 function getEmbeddingProvider() {
+  if (process.env.ZHIPU_EMBEDDINGS_ENABLED === 'false') return null;
   if (process.env.ZHIPU_API_KEY) {
     return {
       name: 'zhipu',

@@ -51,6 +51,10 @@ export function writeStoredSseCursor(storage, sessionId, sequence) {
   return next;
 }
 
+export function sseReconnectDelay(attempt) {
+  return Math.min(8_000, 1_000 * (2 ** Math.max(0, Number(attempt) || 0)));
+}
+
 export function openAuthenticatedSse({
   url,
   token,
@@ -126,5 +130,6 @@ export default {
   advanceSseCursor,
   readStoredSseCursor,
   writeStoredSseCursor,
+  sseReconnectDelay,
   openAuthenticatedSse,
 };

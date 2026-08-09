@@ -28,6 +28,8 @@ import { evidenceDomainEvent, planDomainEvents } from './agentEventSemantics.js'
 import { withRetry } from './retryHelper.js';
 import { buildQuickPlan, routeDeliberationDepth } from './deliberationDepthRouter.js';
 import { buildDecisionCase } from './decisionCaseService.js';
+import OrchestratorAgent from '../agents/system/OrchestratorAgent.js';
+import { run as runAgent } from '../agents/AgentRunner.js';
 
 // ============ 常量 ============
 
@@ -510,7 +512,37 @@ export async function plan(session, dependencies = {}) {
 
   const depthRoute = routeDeliberationDepth(question);
   if (depthRoute.depth === 'quick') {
-    const result = buildQuickPlan(session);
+    let quickOrchestration = null;
+    try {
+      const runner = dependencies.runAgentFn || runAgent;
+      const manager = dependencies.orchestratorAgent || new OrchestratorAgent();
+      const managerRun = await runner(manager, {
+        sessionId: session.id,
+        userId: userId || 'anonymous',
+        round: Number(session.round || 1),
+        actionId: `plan-round-${Number(session.round || 1)}`,
+        blackboard: {
+          mode: 'quick',
+          question,
+          answers: session.answers || [],
+        },
+      });
+      if (managerRun?.ok && managerRun.output?.orchestration) {
+        quickOrchestration = {
+          ...managerRun.output.orchestration,
+          manager: {
+            agentId: 'orchestrator',
+            name: '演·编排总管',
+            status: 'completed',
+            source: managerRun.output.planSource || 'quick-structured',
+            correlationId: managerRun.correlationId,
+          },
+        };
+      }
+    } catch (error) {
+      logger.warn('[Planner] 编排总管不可用，使用受控快推演结构', { error: error.message });
+    }
+    const result = buildQuickPlan(session, quickOrchestration);
     const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
     const saved = await saveSession(result.session);
     result.session.id = saved.id || session.id;

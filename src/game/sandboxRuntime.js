@@ -40,6 +40,15 @@ export function mapServerStateToInternalPhase(state) {
   return SERVER_TO_INTERNAL_PHASE[String(state || '').toUpperCase()] || 'idle';
 }
 
+export function shouldResumePlanning(state) {
+  return String(state || '').toUpperCase() === 'PLAN';
+}
+
+export function shouldRequestPlanning({ pendingSessionId, activeSessionId, inFlightSessionId }) {
+  if (!pendingSessionId || pendingSessionId !== activeSessionId) return false;
+  return inFlightSessionId !== pendingSessionId;
+}
+
 export function adaptFateTicket(ticket) {
   if (!ticket?.ticketId) return null;
   const keyFindings = Array.isArray(ticket.keyFindings) ? ticket.keyFindings : [];
@@ -65,6 +74,23 @@ export function currentClarificationQuestion(awaitingAnswers, answeredRounds) {
   return String(rounds.at(-1)?.question || '').trim();
 }
 
+export function normalizePendingClarifications(awaitingAnswers) {
+  return (Array.isArray(awaitingAnswers) ? awaitingAnswers : [])
+    .map((item, index) => ({
+      question: String(item?.question || item || '').trim(),
+      reason: String(item?.reason || '').trim(),
+      fieldId: String(item?.fieldId || item?.taskId || item?.id || `question_${index + 1}`).trim(),
+      required: item?.required !== false,
+    }))
+    .filter((item) => item.question);
+}
+
+export function clarificationInteractionState(pending) {
+  return pending
+    ? { heading: '正在消化你的回答', submitLabel: '正在整理案卷…', disabled: true }
+    : { heading: '先补齐关键事实', submitLabel: '回答并继续', disabled: false };
+}
+
 export function shouldShowInteractionDock({ phase, awaitingUser, awaitingAnswers }) {
   const interactivePhase = ['clarify_loop', 'yan_analyze', 'agent_debate', 'summary'].includes(phase);
   if (!interactivePhase) return false;
@@ -78,7 +104,11 @@ export default {
   resolveSandboxRuntime,
   mapDeliberationPhase,
   mapServerStateToInternalPhase,
+  shouldResumePlanning,
+  shouldRequestPlanning,
   adaptFateTicket,
   currentClarificationQuestion,
+  normalizePendingClarifications,
+  clarificationInteractionState,
   shouldShowInteractionDock,
 };

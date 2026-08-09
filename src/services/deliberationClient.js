@@ -8,12 +8,13 @@
 import { anonymousLogin, getAccessToken, refreshAccessToken } from './auth.js';
 import { recoverAccessToken } from './authRecovery.js';
 import { API_BASE_URL } from './baseConfig.js';
-import { buildDeliberationBases } from './deliberationBase.js';
+import { buildDeliberationBases, shouldTryNextDeliberationBase } from './deliberationBase.js';
 import { probeDeliberationHealth } from './deliberationHealth.js';
 import {
   advanceSseCursor,
   openAuthenticatedSse,
   readStoredSseCursor,
+  sseReconnectDelay,
   writeStoredSseCursor,
 } from './sseStream.js';
 import {
@@ -167,26 +168,26 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
         return resp;
       }
       errors.push(`[${base || '/'}] HTTP ${resp.status}`);
-      // 4xx（除 404 "Application not found" 这种后端不存在信号外）通常是请求本身问题，不重试下一个
-      if (resp.status >= 400 && resp.status < 500) {
-        let body = {};
-        try { body = await resp.json(); } catch {}
-        if (resp.status === 404 && /Application not found|not ?found/i.test(body?.message || '')) {
-          // 候选后端部署不存在时继续尝试下一个 base
-          continue;
-        }
-        if (throwOnError) {
-          const err = new Error(body?.error || `请求失败: ${resp.status}`);
-          err.status = resp.status;
-          err.body = body;
-          throw err;
-        }
-        return resp;
+      let body = {};
+      try { body = await resp.clone().json(); } catch {}
+      const errorMessage = body?.error || body?.message || `请求失败: ${resp.status}`;
+      if (shouldTryNextDeliberationBase({
+        status: resp.status,
+        cached: _cachedBase === base,
+        error: errorMessage,
+      })) {
+        continue;
       }
-      // 5xx：继续 fallback
+      if (throwOnError) {
+        const err = new Error(errorMessage);
+        err.status = resp.status;
+        err.body = body;
+        throw err;
+      }
+      return resp;
     } catch (e) {
       CLOG.error(authenticatedInit.method, path, e);
-      if (e?.status >= 400 && e.status < 500) throw e;
+      if (e?.status >= 400) throw e;
       // 网络错误 / CORS / 拒绝连接：继续 fallback
       errors.push(`[${base || '/'}] ${e.message || 'NetworkError'}`);
     }
@@ -519,11 +520,7 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
       onClose: () => {
         readyState = 2;
         if (!alive) return;
-        if (attempt >= 3) {
-          onClose?.();
-          return;
-        }
-        const delay = Math.min(8_000, 1_000 * (2 ** attempt));
+        const delay = sseReconnectDelay(attempt);
         reconnectTimer = setTimeout(() => connect(attempt + 1), delay);
       },
     });

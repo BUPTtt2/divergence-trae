@@ -70,6 +70,32 @@ function fetchWithTimeout(url, options, timeoutMs = DEFAULT_TIMEOUT_MS) {
     .finally(() => clearTimeout(timer));
 }
 
+export function buildProviderRequestBody(provider, messages, options = {}) {
+  const {
+    maxTokens = 400,
+    temperature = 0.85,
+    tools,
+    tool_choice,
+    stream = false,
+  } = options;
+  const body = {
+    model: provider.model,
+    messages,
+    max_tokens: maxTokens,
+    temperature,
+  };
+
+  if (provider.name === 'zhipu' && provider.model === 'glm-4.7-flash') {
+    body.thinking = { type: 'disabled' };
+  }
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+    body.tool_choice = tool_choice || 'auto';
+  }
+  if (stream) body.stream = true;
+  return body;
+}
+
 /**
  * 调用单个提供商（非流式）
  * @param {object} provider 提供商配置
@@ -87,17 +113,12 @@ async function callProvider(provider, messages, options = {}) {
     returnRaw = false,
   } = options;
 
-  const body = {
-    model: provider.model,
-    messages,
-    max_tokens: maxTokens,
+  const body = buildProviderRequestBody(provider, messages, {
+    maxTokens,
     temperature,
-  };
-  // 注入 tools 参数（OpenAI 兼容 function calling）
-  if (tools && tools.length > 0) {
-    body.tools = tools;
-    body.tool_choice = tool_choice || 'auto';
-  }
+    tools,
+    tool_choice,
+  });
 
   const resp = await fetchWithTimeout(provider.endpoint, {
     method: 'POST',
@@ -234,13 +255,11 @@ export async function callLLMStream(messages, options = {}, res) {
           Authorization: `Bearer ${provider.apiKey}`,
           Accept: 'text/event-stream',
         },
-        body: JSON.stringify({
-          model: provider.model,
-          messages,
-          max_tokens: maxTokens,
+        body: JSON.stringify(buildProviderRequestBody(provider, messages, {
+          maxTokens,
           temperature,
           stream: true,
-        }),
+        })),
         signal: controller.signal,
       });
 

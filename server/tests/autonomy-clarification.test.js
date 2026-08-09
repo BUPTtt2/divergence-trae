@@ -28,3 +28,8 @@ test('一轮追问把前三个关键变量合并成一个问题任务', () => {
     },
   );
 });
+
+test('问题数量不会扩张两轮追问的产品上限', () => {
+  assert.equal(typeof autonomyGate.resolveClarificationRoundLimit, 'function');
+  assert.equal(autonomyGate.resolveClarificationRoundLimit({ plan: { maxQuestions: 4 } }), 2);
+});

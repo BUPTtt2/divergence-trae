@@ -1,26 +1,9 @@
 .deliberation-conversation {
-  position: fixed;
-  z-index: 60;
-  left: 50%;
-  top: max(86px, calc(env(safe-area-inset-top) + 62px));
-  bottom: max(18px, env(safe-area-inset-bottom));
-  width: min(720px, calc(100vw - 32px));
-  translate: -50% 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid rgb(213 177 88 / 34%);
-  background: rgb(10 8 7 / 94%);
   color: #eee5d2;
-  box-shadow: 0 24px 80px rgb(0 0 0 / 42%);
-}
-
-.deliberation-conversation > header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-bottom: 1px solid rgb(213 177 88 / 18%);
 }
 
 .deliberation-conversation header span:last-child,
@@ -31,8 +14,6 @@
 
 .deliberation-conversation header strong { font-size: 14px; letter-spacing: .12em; }
 .deliberation-conversation header small { color: #8f8676; font: 10px/1.5 "Noto Serif SC", serif; }
-.deliberation-conversation__seal { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid #d5b158; color: #efd47d; }
-
 .deliberation-conversation__thread {
   min-height: 0;
   flex: 1;
@@ -43,7 +24,7 @@
   gap: 12px;
 }
 
-.deliberation-conversation__message { max-width: 88%; padding: 11px 13px; border-left: 2px solid rgb(213 177 88 / 45%); background: rgb(255 255 255 / 3%); }
+.deliberation-conversation__message { max-width: 100%; padding: 11px 13px; border-left: 2px solid rgb(213 177 88 / 45%); background: rgb(255 255 255 / 3%); }
 .deliberation-conversation__message.is-user { margin-left: auto; border-left: 0; border-right: 2px solid rgb(213 177 88 / 45%); }
 .deliberation-conversation__message.is-agent { background: rgb(213 177 88 / 8%); }
 .deliberation-conversation__message span,.deliberation-conversation__message small { color: #9b907d; font: 10px/1.5 "Noto Serif SC", serif; }
@@ -58,18 +39,31 @@
 .deliberation-conversation__process li { padding: 4px 0; color: #9b907d; font: 10px/1.55 "Noto Serif SC", serif; }
 .deliberation-conversation__process li strong { display: block; color: #cfc2aa; }
 
+.deliberation-conversation__assignments { padding: 11px 16px 12px; border-top: 1px solid rgb(213 177 88 / 18%); }
+.deliberation-conversation__assignments > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.deliberation-conversation__assignments > header strong { color: #d8c58c; font: 600 11px/1.5 "Noto Serif SC", serif; }
+.deliberation-conversation__assignments > header small { color: #857c6e; font: 9px/1.5 "Noto Serif SC", serif; }
+.deliberation-conversation__manager-state { margin: 4px 0 0; color: #7f9e8f; font: 9px/1.5 "Noto Serif SC", serif; }
+.deliberation-conversation__assignments ul { display: grid; gap: 7px; margin-top: 8px; padding: 0; list-style: none; }
+.deliberation-conversation__assignments li { padding: 8px 10px; border: 1px solid rgb(213 177 88 / 14%); background: rgb(255 255 255 / 2%); }
+.deliberation-conversation__assignments li span { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.deliberation-conversation__assignments li b { color: #e8d8a6; font: 600 11px/1.5 "Noto Serif SC", serif; }
+.deliberation-conversation__assignments li em { color: #8f8676; font: normal 9px/1.5 "Noto Serif SC", serif; }
+.deliberation-conversation__assignments li p { margin: 3px 0 0; color: #9e9587; font: 10px/1.55 "Noto Serif SC", serif; }
+
 .deliberation-conversation__composer { padding: 12px 16px 16px; border-top: 1px solid rgb(213 177 88 / 18%); background: #0b0908; }
 .deliberation-conversation__modes { display: flex; gap: 6px; margin-bottom: 8px; overflow-x: auto; }
 .deliberation-conversation__modes button,.deliberation-conversation__actions button { min-height: 44px; border: 1px solid rgb(213 177 88 / 28%); background: transparent; color: #a99d87; padding: 0 13px; cursor: pointer; white-space: nowrap; }
 .deliberation-conversation__modes button[aria-pressed="true"] { border-color: #d5b158; color: #efd47d; background: rgb(213 177 88 / 10%); }
 .deliberation-conversation textarea { display: block; width: 100%; min-height: 76px; max-height: 150px; resize: vertical; padding: 11px 12px; border: 1px solid rgb(213 177 88 / 28%); outline: none; background: #080706; color: #f1eadc; font: 12px/1.65 "Noto Serif SC", serif; }
 .deliberation-conversation textarea:focus { border-color: #d5b158; }
+.deliberation-conversation__field-input { min-height: 58px !important; margin-top: 10px; resize: vertical; }
+.deliberation-conversation__mode-help { margin: 7px 0 0; color: #8f8676; font: 10px/1.55 "Noto Serif SC", serif; }
 .deliberation-conversation__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 9px; }
 .deliberation-conversation__actions .is-primary { border-color: #d5b158; background: #d5b158; color: #171009; }
 .deliberation-conversation__actions button:disabled { opacity: .35; cursor: not-allowed; }
 
 @media (max-width: 767px), (max-height: 700px) {
-  .deliberation-conversation { top: max(70px, calc(env(safe-area-inset-top) + 54px)); bottom: max(8px, env(safe-area-inset-bottom)); width: calc(100vw - 16px); }
   .deliberation-conversation__thread { padding: 12px; }
   .deliberation-conversation__message { max-width: 96%; }
   .deliberation-conversation__composer { padding: 10px 12px 12px; }

@@ -65,6 +65,31 @@ export function perspectiveForAgent(agent = {}) {
   return matched?.[1] || 'reflection';
 }
 
+function normalizeAdvisorReference(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+export function resolveAdvisorAgents(requestedAgentIds, advisorPool, fallbackCount = 2) {
+  const pool = Array.isArray(advisorPool) ? advisorPool.filter((agent) => agent?.id) : [];
+  const agentsByReference = new Map();
+  for (const agent of pool) {
+    agentsByReference.set(normalizeAdvisorReference(agent.id), agent);
+    agentsByReference.set(normalizeAdvisorReference(agent.name), agent);
+  }
+
+  const resolved = [];
+  const seen = new Set();
+  for (const reference of Array.isArray(requestedAgentIds) ? requestedAgentIds : []) {
+    const agent = agentsByReference.get(normalizeAdvisorReference(reference));
+    if (agent && !seen.has(agent.id)) {
+      resolved.push(agent);
+      seen.add(agent.id);
+    }
+  }
+
+  return resolved.length > 0 ? resolved : pool.slice(0, fallbackCount);
+}
+
 /**
  * 构建演的 ReAct 系统提示
  * @param {object} state 推演状态
@@ -119,7 +144,7 @@ ${availableAgents}
 
 【action 类型说明】
 - tool_call: 调工具获取实时信息。args: {"tool": "工具名", "params": {...}}
-- advisor_call: 召唤智囊发言。args: {"agentIds": ["智囊ID1", "智囊ID2"]}
+- advisor_call: 召唤智囊发言。args: {"agentIds": ["智囊ID1", "智囊ID2"]}。只能填写“可用智囊”中连字符前的 ID，不得填写姓名或未列出的智囊
 - ask_user: 信息严重不足，需追问。args: {"questions": [{"question":"问题", "reason":"为什么问"}]}
 - self_critique: 自我批判，发现盲区。args: {"critique": "发现的问题"}
 - output: 信息充分，可以立卦。args: {}
@@ -439,9 +464,7 @@ export async function runReActLoop(sessionId, state) {
         case 'advisor_call': {
           const agentIds = action.args.agentIds || [];
           const pool = state.advisorPool || AGENT_POOL;
-          const agents = agentIds
-            .map((id) => pool.find((a) => a.id === id))
-            .filter(Boolean);
+          const agents = resolveAdvisorAgents(agentIds, pool);
           if (agents.length === 0) {
             observation = '未指定有效智囊';
             break;

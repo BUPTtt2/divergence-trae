@@ -77,14 +77,13 @@ const lensReviewFlights = new Map();
  * @returns {object} 数据契约响应
  */
 function buildResponse(plannedSession, plan, askUser, openingLine, round, memory) {
-  const maxRound = Number(plan?.maxQuestions) || MAX_ROUND;
   return {
     sessionId: plannedSession.id,
     state: plannedSession.state,
     askUser: Array.isArray(askUser) ? askUser : [],
     plan: plan || { dimensions: [], toolProbes: [], askUser: [], minFindings: 3 },
     round: round || 1,
-    maxRound,
+    maxRound: MAX_ROUND,
     openingLine: openingLine || '',
     memory: Array.isArray(memory) ? memory : [],
     questionType: plannedSession.questionType || '',
@@ -113,7 +112,7 @@ export function buildResponseFromSession(session) {
     plan,
     round: (plan && plan.round) || (session && session.round) || 1,
     replanCount: Number(session?.replan_count || 0),
-    maxRound: Number(plan?.maxQuestions) || MAX_ROUND,
+    maxRound: MAX_ROUND,
     openingLine: (plan && plan.openingLine) || (session && session.openingLine) || '',
     memory: memoryUsed.map((m) => ({ content: m.content, type: m.memory_type })),
     toolResults: Array.isArray(session?.tool_results) ? session.tool_results : [],
@@ -556,22 +555,40 @@ export async function start(question, userId) {
  * 确保前端能得到 sessionId + 启发式追问 + 4 个智囊，流程继续
  */
 function _fallbackPlanResult(session, errorMsg = '') {
-  const q = (session.question || '').toLowerCase();
+  const questionContext = session.question_context || session.questionContext || session.question || '';
+  const q = questionContext.toLowerCase();
+  const depthRoute = routeDeliberationDepth(questionContext);
+  const isFoodContext = /(吃饭|进食|上一餐|饿|嘴馋|吃撑|食欲|减脂|减肥|控制体重|控卡|暴食|节食)/.test(q);
   // 启发式维度
   const dims = [];
   const add = (name, perspective) => dims.push({ name, perspective, agents: [], toolNeeds: [] });
-  add('投入与成本', 'financial');
-  add('风险与隐患', 'risk');
-  add('长期影响', 'strategic');
-  add('内心诉求', 'emotional');
+  if (isFoodContext) {
+    add('身体信号', 'health');
+    add('进食情境', 'practical');
+    add('当前目标', 'emotional');
+    add('可持续性', 'strategic');
+  } else {
+    add('投入与成本', 'financial');
+    add('风险与隐患', 'risk');
+    add('长期影响', 'strategic');
+    add('内心诉求', 'emotional');
+  }
 
   // 启发式 agent（风眼/钱谷/路向/镜渊 四核心）
-  const fallbackAgents = [
+  const defaultFallbackAgents = [
     { id: 'fengyan', name: '风眼', stance: '风险视角', role: 'dynamic', trigram: '☵', color: '#A84848', glow: '#E88080' },
     { id: 'qiangu', name: '钱谷', stance: '财务视角', role: 'dynamic', trigram: '☰', color: '#C88848', glow: '#E8B880' },
     { id: 'luxiang', name: '路向', stance: '职业/趋势视角', role: 'dynamic', trigram: '☴', color: '#508870', glow: '#80C8A8' },
     { id: 'jingyuan', name: '镜渊', stance: '反思视角', role: 'dynamic', trigram: '☷', color: '#706088', glow: '#A890C8' },
   ];
+  const fallbackAgents = isFoodContext ? [
+    { id: 'jiankang', name: '养生', stance: '健康视角', perspective: 'health', role: 'dynamic', reason: '核对身体信号、进食间隔和即时健康边界', trigram: '☵', color: '#508870', glow: '#80C8A8' },
+    { id: 'xinhe', name: '心禾', stance: '情感视角', perspective: 'emotional', role: 'dynamic', reason: '区分饥饿、进食冲动与情绪性需求', trigram: '☲', color: '#A87898', glow: '#D8A8C8' },
+    { id: 'jingyuan', name: '镜渊', stance: '反思视角', perspective: 'strategic', role: 'dynamic', reason: '检查体重目标是否可持续，并识别过度限制风险', trigram: '☷', color: '#706088', glow: '#A890C8' },
+  ] : defaultFallbackAgents.map((agent) => ({
+    ...agent,
+    reason: `${agent.stance}负责独立检查当前信息，再由演汇总分歧。`,
+  }));
 
   const round = Math.max(1, Number(session.round) || 1);
   const shouldClarify = round < MAX_ROUND;
@@ -601,18 +618,20 @@ function _fallbackPlanResult(session, errorMsg = '') {
   session.askUser = askUser;
 
   const plan = {
+    depth: depthRoute.depth,
+    depthReason: depthRoute.reason,
+    maxQuestions: depthRoute.maxQuestions,
     dimensions: dims,
     agents: fallbackAgents,
     toolProbes: [],
     askUser,
     minFindings: 3,
     round,
-    openingLine: `关于「${(session.question || '').slice(0, 30)}」，先问清几个关键点再推。`,
+    openingLine: `关于「${(session.question || '').slice(0, 30)}」，演已按现有信息重新安排推演视角。`,
     analysis: `（LLM 暂不可用：${String(errorMsg || '').slice(0, 40)}，演已按规则生成维度与追问）`,
   };
   session.plan = plan;
-  plan.maxQuestions = routeDeliberationDepth(session.question || '').maxQuestions;
-  plan.caseFile = buildDecisionCase({ session, plan, memories: [], depthRoute: routeDeliberationDepth(session.question || '') });
+  plan.caseFile = buildDecisionCase({ session, plan, memories: [], depthRoute });
 
   return {
     session,
@@ -660,19 +679,44 @@ export async function answer(sessionId, answers, executionCtx = {}, dependencies
     const priorAnswers = Array.isArray(session.answers) ? session.answers : [];
     const currentAnswers = Array.isArray(answers) ? answers : [];
     session.answers = [...priorAnswers, ...currentAnswers];
-    session.questionContext = mergeAnswersToContext(session.question, session.answers);
+    const questionContext = mergeAnswersToContext(session.question, session.answers);
+    session.question_context = questionContext;
+    session.questionContext = questionContext;
 
     logger.info('[Deliberation] answer 重新规划', {
       sessionId,
       prevRound,
       newRound: session.round,
-      questionContext: session.questionContext.slice(0, 80),
+      questionContext: questionContext.slice(0, 80),
     });
 
     // 重新 plan；其保存动作继续受当前 answer token 保护。
-    const rawResult = dependencies.planSessionFn
-      ? await dependencies.planSessionFn(session, { saveSessionFn })
-      : await planSessionWithFallback(session, dependencies.planFn || planner.plan, { saveSessionFn });
+    let rawResult;
+    if (session.round > MAX_ROUND) {
+      const depthRoute = routeDeliberationDepth(questionContext);
+      const plan = { ...(session.plan || {}), askUser: [], round: session.round };
+      plan.caseFile = buildDecisionCase({
+        session,
+        plan,
+        memories: Array.isArray(session.memory_used) ? session.memory_used : [],
+        depthRoute,
+      });
+      session.state = STATES.READY;
+      session.askUser = [];
+      session.plan = plan;
+      rawResult = {
+        session,
+        plan,
+        askUser: [],
+        openingLine: plan.openingLine || '信息已归入案卷，请确认后开演。',
+        round: session.round,
+        memory: [],
+      };
+    } else {
+      rawResult = dependencies.planSessionFn
+        ? await dependencies.planSessionFn(session, { saveSessionFn })
+        : await planSessionWithFallback(session, dependencies.planFn || planner.plan, { saveSessionFn });
+    }
     const result = enforceCaseConfirmationGate(rawResult);
     try {
       await answerTransition(sessionId, result.session, {
@@ -1079,7 +1123,6 @@ export async function confirmCase(sessionId, command = {}, executionCtx = {}) {
   const questionContext = context.length > 0 ? `${session.question}\n用户已确认案卷：\n- ${context.join('\n- ')}` : session.question;
   await memoryService.updateSessionState(sessionId, STATES.EXECUTE, {
     plan,
-    askUser: [],
     memory_used: acceptedMemories,
     question_context: questionContext,
   });

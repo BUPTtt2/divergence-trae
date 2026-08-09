@@ -67,3 +67,52 @@ test('open questions stay visible as unknowns and are never promoted to facts', 
   }]);
   assert.equal(decisionCase.readiness.status, 'collecting');
 });
+
+test('decision case keeps inferred understanding separate from confirmed user facts', () => {
+  const decisionCase = buildDecisionCase({
+    session: {
+      question: '要不要吃饭',
+      answers: [{ fieldId: 'body_signal', question: '身体感受', answer: '不饿' }],
+      information_inferences: [{
+        id: 'intent_1',
+        fieldId: 'current_goal',
+        value: '可能正在控制体重',
+        confidence: 0.62,
+        evidence: '用户提到最近吃得超量',
+      }],
+    },
+    plan: {
+      askUser: [{ fieldId: 'current_goal', question: '你此刻主要目标是什么？', reason: '目标影响建议' }],
+    },
+    depthRoute: { depth: 'quick', reason: '低风险日常选择', maxQuestions: 3 },
+  });
+
+  assert.equal(decisionCase.facts.length, 1);
+  assert.equal(decisionCase.inferences.length, 1);
+  assert.equal(decisionCase.inferences[0].status, 'pending');
+  assert.equal(decisionCase.unknowns[0].id, 'current_goal');
+});
+
+test('explicitly skipped fields stay visible as authorized unknowns without blocking review', () => {
+  const decisionCase = buildDecisionCase({
+    session: {
+      question: '要不要吃饭',
+      answers: [{ fieldId: 'meal_context', answer: '用户选择跳过本项澄清' }],
+    },
+    plan: {
+      askUser: [],
+      informationFields: [{ id: 'meal_context', prompt: '上一餐是什么时候？', reason: '进食间隔会影响建议' }],
+    },
+    depthRoute: { depth: 'quick', reason: '低风险日常选择', maxQuestions: 3 },
+  });
+
+  assert.equal(decisionCase.facts.length, 0);
+  assert.deepEqual(decisionCase.unknowns, [{
+    id: 'meal_context',
+    question: '上一餐是什么时候？',
+    reason: '用户选择暂不提供；结论必须保留条件，不得把它当成事实。',
+    status: 'skipped',
+  }]);
+  assert.equal(decisionCase.readiness.status, 'review');
+  assert.equal(decisionCase.readiness.openUnknownCount, 0);
+});

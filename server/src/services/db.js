@@ -90,9 +90,13 @@ export function initDB() {
  * @param {Array} params 参数
  * @returns {Promise<{rows: Array, rowCount: number}>}
  */
+export function toPostgresParam(value) {
+  return Array.isArray(value) ? JSON.stringify(value) : value;
+}
+
 async function pgQuery(text, params = []) {
   if (!pool) throw new Error('数据库未初始化');
-  const result = await pool.query(text, params);
+  const result = await pool.query(text, params.map(toPostgresParam));
   return { rows: result.rows, rowCount: result.rowCount };
 }
 

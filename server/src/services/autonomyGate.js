@@ -36,6 +36,10 @@ export const PRIORITY = { P0: 0, P1: 1, P2: 2, P3: 3, P4: 4 };
  */
 const MAX_ROUND = 2;
 
+export function resolveClarificationRoundLimit() {
+  return MAX_ROUND;
+}
+
 // ---- P0 前提缺失检测正则 ----
 const TIME_PATTERN = /几月|下个月|下周|明天|后天|今天|本月|下月|本月底|\d{1,2}月|\d{1,2}日|\d{1,2}号|周末|假期|五一|十一|春节|国庆|元旦|清明|端午|中秋|寒假|暑假|近期|月底/;
 const BUDGET_PATTERN = /预算|多少钱|费用|万|千|块|元|财力|盘缠|经费|存款|开支|花销/;
@@ -601,7 +605,7 @@ export async function isInformationSufficient(question, qaHistory) {
  */
 export async function evaluate(session, memory, toolResults) {
   const round = Number(session && session.round) || 1;
-  const maxRound = Math.max(1, Math.min(4, Number(session?.plan?.maxQuestions) || MAX_ROUND));
+  const maxRound = resolveClarificationRoundLimit(session);
   const question = String((session && (session.questionContext || session.question)) || '');
   const openingLine = await buildOpeningLine(memory, question);
   logger.info('[Autonomy] evaluate 开始', {

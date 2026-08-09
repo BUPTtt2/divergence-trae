@@ -16,12 +16,13 @@ function opaqueReference(source) {
 test('plan semantics expose tasks, assignments and unknowns without prompts', () => {
   const events = planDomainEvents({
     dimensions: [{ id: 'cost', name: '成本' }],
-    agents: [{ id: 'risk', name: '风眼', perspective: '风险' }],
+    agents: [{ id: 'risk', name: '风眼', perspective: '风险', reason: '核验最坏情况与回撤边界' }],
   }, [{ question: '预算上限是多少？', reason: '约束方案' }]);
 
   assert.deepEqual(events.map((event) => event.type), ['PLAN_CREATED', 'AGENT_ASSIGNED', 'UNKNOWN_IDENTIFIED']);
   assert.deepEqual(events[0].data.tasks, [{ id: 'cost', label: '成本', status: 'planned' }]);
   assert.equal(events[1].data.agentId, 'risk');
+  assert.equal(events[1].data.reason, '核验最坏情况与回撤边界');
   assert.equal(events[2].data.question, '预算上限是多少？');
   assert.equal('prompt' in events[0].data, false);
 });

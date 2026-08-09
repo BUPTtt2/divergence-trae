@@ -7,6 +7,7 @@ import {
   writeStoredSseCursor,
   openAuthenticatedSse,
   parseSseFrames,
+  sseReconnectDelay,
 } from './sseStream.js';
 
 test('split SSE chunks produce one event and preserve the remainder', () => {
@@ -111,4 +112,10 @@ test('SSE waits for asynchronous authentication recovery before closing', async 
   });
   await stream.done;
   assert.deepEqual(order, ['recovered', 'closed']);
+});
+
+test('SSE reconnect backoff remains active after long backend interruptions', () => {
+  assert.equal(sseReconnectDelay(0), 1000);
+  assert.equal(sseReconnectDelay(3), 8000);
+  assert.equal(sseReconnectDelay(20), 8000);
 });

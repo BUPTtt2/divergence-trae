@@ -538,18 +538,18 @@ ${dialogueText || '无详细对话记录'}
     );
   } catch (e) {
     console.warn('[generateMasterSummary] LLM调用异常，返回本地兜底:', e.message);
-    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
+    return buildLocalMasterSummary(originalQuestion, agentIds, dialogueHistory);
   }
 
   if (!text) {
     console.warn('[generateMasterSummary] LLM返回空，返回本地兜底');
-    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
+    return buildLocalMasterSummary(originalQuestion, agentIds, dialogueHistory);
   }
 
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) {
     console.warn('[generateMasterSummary] LLM无有效JSON，返回本地兜底。原文:', text.slice(0, 150));
-    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
+    return buildLocalMasterSummary(originalQuestion, agentIds, dialogueHistory);
   }
 
   let parsed;
@@ -557,13 +557,13 @@ ${dialogueText || '无详细对话记录'}
     parsed = JSON.parse(match[0]);
   } catch (e) {
     console.warn('[generateMasterSummary] JSON解析失败，返回本地兜底:', e.message);
-    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
+    return buildLocalMasterSummary(originalQuestion, agentIds, dialogueHistory);
   }
   const summary = (parsed.summary || '').trim();
   const options = Array.isArray(parsed.options) ? parsed.options : [];
   if (!summary || options.length === 0) {
     console.warn('[generateMasterSummary] 字段缺失，返回本地兜底');
-    return _localMasterSummaryFallback(originalQuestion, agentIds, dialogueHistory);
+    return buildLocalMasterSummary(originalQuestion, agentIds, dialogueHistory);
   }
   // 补齐每个 option 的 keyPoints / guaRecommendation 字段，避免前端 undefined
   const normalizedOptions = options.slice(0, 3).map(opt => ({
@@ -577,8 +577,7 @@ ${dialogueText || '无详细对话记录'}
 }
 
 /** 本地兜底：从 dialogueHistory 真实对话中抽取关键词生成结构化总结+3选项（绝不返回预设空模板） */
-function _localMasterSummaryFallback(originalQuestion, agentIds = [], dialogueHistory = {}) {
-  const agentList = agentIds.map(id => AGENT_POOL_MAP[id]).filter(Boolean);
+export function buildLocalMasterSummary(originalQuestion, agentIds = [], dialogueHistory = {}) {
   const snippets = [];
   for (const id of agentIds) {
     const history = dialogueHistory[id] || [];
@@ -591,11 +590,42 @@ function _localMasterSummaryFallback(originalQuestion, agentIds = [], dialogueHi
   const keywords = _extractKeywords([originalQuestion, ...snippets].join(' '), 6);
   const qSlice = String(originalQuestion || '').slice(0, 45);
 
+  if (/吃饭|进食|加餐|嘴馋|饥饿/.test(originalQuestion)) {
+    const confirmedFacts = String(originalQuestion || '')
+      .split('\n')
+      .map(line => line.replace(/^\s*-\s*/, '').trim())
+      .filter(line => line && !line.includes('用户已确认案卷') && !/要不要吃饭/.test(line));
+    const factSummary = confirmedFacts.length > 0
+      ? confirmedFacts.slice(0, 3).join('；')
+      : '目前还没有足够的身体信号与进食情境';
+    const summary = `按你确认的信息：${factSummary}。这不是单纯的“吃或不吃”，而是先区分身体饥饿、进食冲动与当前目标，再选择一个可逆动作；若出现明显不适，应优先照顾身体并寻求专业帮助。`;
+    return {
+      summary,
+      options: [
+        {
+          label: '先不加餐 · 观察十分钟',
+          keyPoints: ['喝水并离开食物刺激', '十分钟后重新评估饥饿感', '适合刚吃过且更像嘴馋时'],
+          guaRecommendation: '艮',
+        },
+        {
+          label: '确有饥饿 · 少量补充',
+          keyPoints: ['选择一份有明确分量的食物', '避免边刷手机边继续吃', '吃后记录饱腹与睡眠感受'],
+          guaRecommendation: '坤',
+        },
+        {
+          label: '仍想进食 · 记录触发因素',
+          keyPoints: ['标记情绪、环境或习惯触发', '不把一次选择等同于成败', '把记录带入下一次推演'],
+          guaRecommendation: '巽',
+        },
+      ],
+    };
+  }
+
   let summary;
   if (snippets.length > 0) {
-    summary = `关于「${qSlice}」，众智已交锋${agentIds.length}路：${snippets.slice(0, 3).join('；')}。核心分歧在${keywords.slice(0, 3).join('、')}，请以本心锚定抉择。`;
+    summary = `关于「${qSlice}」，众智已交锋${agentIds.length}路：${snippets.slice(0, 3).join('；')}。当前分歧集中在${keywords.slice(0, 3).join('、')}，下一步应先验证最可能改变选择的事实。`;
   } else {
-    summary = `关于「${qSlice}」，推演已凝于此刻。关键词：${keywords.slice(0, 4).join(' · ')}。请听从本心，择一而行。`;
+    summary = `关于「${qSlice}」，当前缺少可核验的智囊结论。先围绕${keywords.slice(0, 3).join('、')}做一个低成本验证，再根据新证据决定推进、保留或退出。`;
   }
 
   const makePoints = (tone) => [
@@ -605,9 +635,9 @@ function _localMasterSummaryFallback(originalQuestion, agentIds = [], dialogueHi
   ];
 
   const options = [
-    { label: '执 · 进取之路', keyPoints: makePoints('进攻'), guaRecommendation: '乾' },
-    { label: '守 · 权衡之策', keyPoints: makePoints('稳健'), guaRecommendation: '坤' },
-    { label: '变 · 破局之道', keyPoints: makePoints('变通'), guaRecommendation: '革' },
+    { label: '验证 · 小步试行', keyPoints: makePoints('试行'), guaRecommendation: '乾' },
+    { label: '保留 · 补齐证据', keyPoints: makePoints('稳健'), guaRecommendation: '坤' },
+    { label: '退出 · 设置止损', keyPoints: makePoints('止损'), guaRecommendation: '艮' },
   ];
   return { summary, options };
 }

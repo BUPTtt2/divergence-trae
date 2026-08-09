@@ -221,6 +221,30 @@ test('a failed planner attempt becomes one persisted fallback instead of overlap
   assert.deepEqual(restored.answers, session.answers);
 });
 
+test('planner fallback keeps clarified food context, adaptive depth and relevant advisors', async () => {
+  const session = await ownedSession({
+    state: 'WAIT',
+    round: 2,
+    question: '要不要吃饭',
+    question_context: '要不要吃饭 现在不饿 一小时前吃得很多 正在减脂控制体重',
+    answers: [
+      { fieldId: 'body_signal', answer: '现在不饿' },
+      { fieldId: 'meal_context', answer: '一小时前吃得很多' },
+      { fieldId: 'current_goal', answer: '正在减脂控制体重' },
+    ],
+  });
+
+  const result = await engine.planSessionWithFallback(session, async () => {
+    throw new Error('planner unavailable');
+  });
+
+  assert.equal(result.plan.depth, 'standard');
+  assert.match(result.plan.depthReason, /体重|饮食|拆解/);
+  assert.deepEqual(result.plan.agents.map((agent) => agent.id), ['jiankang', 'xinhe', 'jingyuan']);
+  assert.equal(result.plan.caseFile.depth, 'standard');
+  assert.equal(result.plan.caseFile.facts.length, 3);
+});
+
 test('answer persistence failures bypass planner fallback', async () => {
   const session = await ownedSession({
     state: 'PLAN',
@@ -328,6 +352,65 @@ test('answer and execute cannot race past a completed CLARIFY handoff', async ()
   assert.equal(persisted.state, 'READY');
   assert.equal(persisted.execute_status, null);
   assert.equal(persisted.execute_claim_token, null);
+});
+
+test('every clarification answer is accumulated into the next planning context', async () => {
+  const session = await ownedSession({
+    question_context: '是否换工作 第一轮：当前租期六个月',
+    answers: [{ answer: '当前租期六个月' }],
+    plan: { askUser: [{ question: '通勤距离多远？' }], round: 1 },
+  });
+  let plannedContext = '';
+  const planSessionFn = async (current) => {
+    plannedContext = current.question_context;
+    const plan = { ...current.plan, askUser: [], round: 2 };
+    return {
+      session: { ...current, state: 'READY', plan },
+      plan,
+      askUser: [],
+      openingLine: '',
+      round: 2,
+      memory: [],
+    };
+  };
+
+  await engine.answer(
+    session.id,
+    [{ answer: '通勤约35公里' }],
+    { userId: session.user_id },
+    { planSessionFn },
+  );
+
+  assert.match(plannedContext, /当前租期六个月/);
+  assert.match(plannedContext, /通勤约35公里/);
+});
+
+test('the third clarification answer closes the case without another planner pass', async () => {
+  const session = await ownedSession({
+    question_context: '是否换工作 当前租期六个月',
+    answers: [{ answer: '当前租期六个月' }],
+    plan: {
+      askUser: [{ question: '通勤距离多远？' }],
+      round: 2,
+      dimensions: [{ id: 'commute', name: '通勤成本' }],
+      agents: [{ id: 'qiangu', name: '钱谷' }],
+    },
+  });
+  let plannerCalls = 0;
+
+  const result = await engine.answer(
+    session.id,
+    [{ answer: '通勤约35公里' }],
+    { userId: session.user_id },
+    { planSessionFn: async () => { plannerCalls += 1; } },
+  );
+  const restored = await memoryService.getSession(session.id);
+
+  assert.equal(plannerCalls, 0);
+  assert.equal(result.state, 'READY');
+  assert.deepEqual(result.askUser, []);
+  assert.match(restored.question_context, /当前租期六个月/);
+  assert.match(restored.question_context, /通勤约35公里/);
 });
 
 test('a crashed answer lease can be taken over after expiry', async () => {

@@ -180,6 +180,7 @@ export function planDomainEvents(plan = {}, askUser = []) {
       agentName: agent.name,
       perspective: agent.perspective || agent.stance || '',
       taskId: agent.taskId || tasks[0]?.id || null,
+      reason: agent.reason || agent.assignmentReason || agent.task || '',
     }));
   }
   for (const [index, unknown] of (askUser || []).entries()) {

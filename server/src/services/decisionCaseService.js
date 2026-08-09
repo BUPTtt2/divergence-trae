@@ -7,6 +7,10 @@ function answerValue(answer) {
   return cleanText(answer?.answer || answer?.text || answer?.content);
 }
 
+function isSkippedAnswer(value) {
+  return /用户选择跳过|暂不回答|不愿回答|按现有信息继续/.test(cleanText(value));
+}
+
 function memoryId(memory, index) {
   return cleanText(memory?.id || memory?.memory_id || `memory_${index + 1}`, 96);
 }
@@ -15,9 +19,9 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
   const answers = Array.isArray(session.answers) ? session.answers : [];
   const facts = answers.flatMap((answer, index) => {
     const value = answerValue(answer);
-    if (!value) return [];
+    if (!value || isSkippedAnswer(value)) return [];
     return [{
-      id: cleanText(answer?.id || `answer_${index + 1}`, 96),
+      id: cleanText(answer?.fieldId || answer?.id || `answer_${index + 1}`, 96),
       question: cleanText(answer?.question, 300),
       value,
       source: 'user',
@@ -43,12 +47,29 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
     const question = cleanText(item?.question || item?.field, 300);
     if (!question) return [];
     return [{
-      id: cleanText(item?.taskId || item?.id || `unknown_${index + 1}`, 96),
+      id: cleanText(item?.fieldId || item?.taskId || item?.id || `unknown_${index + 1}`, 96),
       question,
       reason: cleanText(item?.reason, 300),
       status: 'open',
     }];
   });
+  const unknownIds = new Set(unknowns.map((unknown) => unknown.id));
+  const informationFields = new Map((Array.isArray(plan.informationFields) ? plan.informationFields : [])
+    .map((field) => [cleanText(field?.id, 96), field])
+    .filter(([id]) => id));
+  for (const answer of answers) {
+    const value = answerValue(answer);
+    const fieldId = cleanText(answer?.fieldId || answer?.taskId || answer?.id, 96);
+    if (!fieldId || !isSkippedAnswer(value) || unknownIds.has(fieldId)) continue;
+    const field = informationFields.get(fieldId);
+    unknowns.push({
+      id: fieldId,
+      question: cleanText(field?.prompt || answer?.question || '用户暂未提供的信息', 300),
+      reason: '用户选择暂不提供；结论必须保留条件，不得把它当成事实。',
+      status: 'skipped',
+    });
+    unknownIds.add(fieldId);
+  }
 
   const memoryCandidates = (Array.isArray(memories) ? memories : []).flatMap((memory, index) => {
     const content = cleanText(memory?.content, 300);
@@ -62,20 +83,34 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
   });
 
   const maxQuestions = Number(depthRoute.maxQuestions || plan.maxQuestions || 3);
+  const inferences = (Array.isArray(session.information_inferences) ? session.information_inferences : [])
+    .flatMap((inference, index) => {
+      const value = cleanText(inference?.value, 500);
+      if (!value) return [];
+      return [{
+        id: cleanText(inference?.id || `inference_${index + 1}`, 96),
+        fieldId: cleanText(inference?.fieldId, 96),
+        value,
+        confidence: Math.max(0, Math.min(1, Number(inference?.confidence) || 0)),
+        evidence: cleanText(inference?.evidence, 500),
+        status: 'pending',
+      }];
+    });
   return {
     version: 1,
     objective: cleanText(session.question || session.question_context || session.questionContext, 500),
     depth: ['quick', 'standard', 'deep'].includes(depthRoute.depth) ? depthRoute.depth : 'standard',
     depthReason: cleanText(depthRoute.reason || plan.depthReason || '需要拆解取舍并核对信息', 300),
     facts,
+    inferences,
     memoryCandidates,
     assumptions: [],
     unknowns,
     readiness: {
-      status: unknowns.length > 0 ? 'collecting' : 'review',
+      status: unknowns.some((unknown) => unknown.status === 'open') ? 'collecting' : 'review',
       answeredCount: facts.filter((fact) => fact.source === 'user').length,
       maxQuestions,
-      openUnknownCount: unknowns.length,
+      openUnknownCount: unknowns.filter((unknown) => unknown.status === 'open').length,
     },
     confirmedByUser: false,
     confirmedAt: null,

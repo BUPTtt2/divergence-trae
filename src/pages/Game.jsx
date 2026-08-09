@@ -52,6 +52,9 @@ const _normalizeMsg = (raw) => {
 };
 
 const VIRTUAL_ROLES = [
+  { id: 'yan', name: '演', stance: '提问·析理', color: '#E8C670', glow: '#FFE89A', role: 'virtual', font: 'seal' },
+  { id: 'jingyuan', name: '镜渊', stance: '反省·审查', color: '#A898C8', glow: '#C8B8FF', role: 'virtual', font: 'script' },
+];
 
 /* ============================================================
    辅助：阶段 · 标签 · 底部导航按键渲染
@@ -166,10 +169,10 @@ export default function Game() {
     agentErrors, fateContent, activeAgents, choices, phaseLabel,
     historyCount, mentionMessages, setFloatTip, setInference,
     backendError, streamError, handleRejectRetry,
-    commitPending,
+    commitPending, answerPending,
     arenaProjection,
     caseFile, yanQuestionRounds, awaitingAnswers, progress, memoryLayers, mirrorReview,
-    handleRestart, handleStart, handleUserAdvance, handleSkipClarify, handleConfirmAgents,
+    handleRestart, handleStart, handleUserAdvance, handleSubmitAnswers, handleSkipClarify, handleConfirmAgents,
     handleInterject,
     handleResume,
     handleChoiceClick, handleRevealFate,
@@ -178,6 +181,7 @@ export default function Game() {
     handleSaveToCollection, handleConfirmCaseFile, handleBackFromCaseFile,
     saveGameState, fateRevealed,
   } = flow;
+  const [companionOpen, setCompanionOpen] = useState(true);
 
   // ★ Fix: 全局反馈 toast — 受用/失言按钮按下后任何阶段都立刻显示"生效了"
   const [feedbackToast, setFeedbackToast] = useState(null); // { text, color, key }
@@ -192,7 +196,7 @@ export default function Game() {
   }, []);
 
   return (
-    <div className="game-root h-screen flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)' }}>
+    <div className={`game-root ${companionOpen ? 'companion-is-open' : ''} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)' }}>
       <div className="crt-overlay" />
       {(backendError || streamError) && (
         <div role="alert" style={{
@@ -209,8 +213,8 @@ export default function Game() {
         </div>
       )}
       <div className="flex-1 min-h-0 overflow-hidden relative">
-        {!showInput && !['casting', 'yan_analyze', 'clarify_loop', 'case_file_confirm'].includes(phase) && (
-          <div className="w-full h-full relative">
+        {!showInput && phase !== 'case_file_confirm' && (
+          <div className="sandbox-stage w-full h-full relative">
             <Board
               phase={phase}
               activeAgentIdx={activeAgentIdx}
@@ -238,10 +242,16 @@ export default function Game() {
             setCurrentResponse={setCurrentResponse}
             projection={arenaProjection}
             onAdvance={handleUserAdvance}
+            onSubmitAnswers={handleSubmitAnswers}
             onSkipClarify={handleSkipClarify}
             onInterject={handleInterject}
             paused={isPaused}
             onResume={handleResume}
+            answerPending={answerPending}
+            assignments={inference?.plan?.agents || activeAgents}
+            orchestration={inference?.plan?.orchestration}
+            open={companionOpen}
+            onOpenChange={setCompanionOpen}
           />
         )}
 
@@ -575,44 +585,6 @@ export default function Game() {
               fateContent={fateContent}
               fateRevealed={fateRevealed}
             />
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {awaitingUser && phase === 'path_reveal' && (
-            <motion.div
-              className="absolute left-1/2 -translate-x-1/2 z-20"
-              style={{ bottom: '24px' }}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 16 }}
-              transition={{ duration: 0.6, ease: 'easeOut' }}
-            >
-              <button
-                onClick={handleRevealFate}
-                style={{
-                  padding: '14px 42px',
-                  background: `linear-gradient(135deg, ${BORDER_COLOR} 0%, ${GLOW_COLOR} 100%)`,
-                  color: '#0E0A06',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  fontFamily: '"Ma Shan Zheng", serif',
-                  letterSpacing: '0.4em',
-                  border: 'none',
-                  cursor: 'pointer',
-                  boxShadow: `0 0 32px ${GLOW_COLOR}80`,
-                  transition: 'all 0.3s ease',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.boxShadow = `0 0 48px ${GLOW_COLOR}`;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.boxShadow = `0 0 32px ${GLOW_COLOR}80`;
-                }}
-              >
-                揭 示 命 签
-              </button>
-            </motion.div>
           )}
         </AnimatePresence>
 
