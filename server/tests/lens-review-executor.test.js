@@ -472,7 +472,13 @@ test('real engine persists and renews a replan before publishing its events', as
     { actionId: 'replan-order-action', claimToken: claim.claimToken },
     claim.session,
     {
-      reactLoopFn: async () => ({ state: 'OUTPUT' }),
+      reactLoopFn: async (_sessionId, reactState) => {
+        reactState.findings.push(
+          { id: 'finding-fengyan', agentId: 'fengyan', claim: '供应商切换需要先验证最坏交付风险。' },
+          { id: 'finding-jingyuan', agentId: 'jingyuan', claim: '应先用一轮可逆试运行验证稳定性。' },
+        );
+        return { state: 'OUTPUT' };
+      },
       reflectFn: async (current) => {
         reflectCount += 1;
         if (reflectCount === 1) {

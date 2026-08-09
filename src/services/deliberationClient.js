@@ -206,6 +206,18 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
   return new Response(JSON.stringify({ error: msg }), { status: 0, headers: { 'content-type': 'application/json' } });
 }
 
+export async function requestDeliberationApi(path, init = {}) {
+  const response = await _deliberationFetch(path, init);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(body.error || body.message || `请求失败: ${response.status}`);
+    error.status = response.status;
+    error.body = body;
+    throw error;
+  }
+  return body;
+}
+
 /**
  * 发起推演
  * POST /api/deliberation/start

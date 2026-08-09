@@ -70,7 +70,7 @@ export default function DecisionCaseReviewPanel({ caseFile = {}, onConfirm, onRe
 
       <footer>
         <button type="button" className="secondary" onClick={onRestart}>重新提问</button>
-        <button type="button" className="primary" onClick={() => onConfirm?.({ acceptedMemoryIds: [...selected], additionalContext })}>确认案卷 · 开始推演</button>
+        <button type="button" className="primary" onClick={() => onConfirm?.({ acceptedMemoryIds: [...selected], additionalContext })}>确认案卷 · 选择智囊</button>
       </footer>
       <style>{`
         .decision-case-review{width:min(760px,94vw);max-height:min(82vh,780px);overflow:auto;box-sizing:border-box;padding:clamp(18px,3vw,30px);color:#eee8da;background:rgba(15,12,10,.98);border:1px solid rgba(213,182,96,.42);font-family:"Noto Serif SC",serif;box-shadow:0 20px 80px #000}

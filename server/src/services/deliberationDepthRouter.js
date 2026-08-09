@@ -29,13 +29,15 @@ export function buildQuickPlan(session, orchestrated = null) {
       round: session.round,
     });
   const { informationFields, sufficiency } = orchestration;
-  const askUser = sufficiency.complete ? [] : sufficiency.missingFields.map((field) => ({
+  const askUser = sufficiency.complete || !sufficiency.nextQuestion ? [] : [sufficiency.nextQuestion].map((field) => ({
     fieldId: field.id,
     taskId: field.id,
     question: field.prompt,
     reason: field.reason,
     required: field.required,
-    source: 'quick-depth-router',
+    decisionImpact: field.decisionImpact || '',
+    source: field.source || 'quick-depth-router',
+    isFollowUp: field.isFollowUp === true,
   }));
   const effectiveDepth = sufficiency.escalation.changed ? sufficiency.escalation.to : depthRoute.depth;
   const plan = {
@@ -46,7 +48,7 @@ export function buildQuickPlan(session, orchestrated = null) {
     agents: orchestration.advisors,
     toolProbes: [],
     askUser,
-    minFindings: 2,
+    minFindings: effectiveDepth === 'quick' ? 1 : 2,
     round: Number(session.round || 1),
     openingLine: sufficiency.complete
       ? '关键信息已收到，演已按你的目标重新安排互补视角。'
@@ -55,6 +57,9 @@ export function buildQuickPlan(session, orchestrated = null) {
       ? '快推演：信息字段已收敛，进入互补智囊条件判断。'
       : '快推演：收集身体状态、进食情境与当前目标，不预设用户饥饿。',
     informationFields,
+    informationStates: sufficiency.fieldStates,
+    readiness: sufficiency.readiness,
+    nextQuestion: askUser[0] || null,
     orchestration: {
       depth: effectiveDepth,
       reason: sufficiency.escalation.changed ? sufficiency.escalation.reason : depthRoute.reason,
@@ -78,11 +83,15 @@ export function buildQuickPlan(session, orchestrated = null) {
     plan,
     askUser,
     memory_used: [],
+    information_states: sufficiency.fieldStates,
   };
   return {
     session: nextSession,
     plan,
     askUser,
+    nextQuestion: askUser[0] || null,
+    readiness: sufficiency.readiness,
+    informationFields: sufficiency.fieldStates,
     openingLine: plan.openingLine,
     round: plan.round,
     maxRound: depthRoute.maxRounds,
@@ -90,4 +99,65 @@ export function buildQuickPlan(session, orchestrated = null) {
   };
 }
 
-export default { routeDeliberationDepth, buildQuickPlan };
+export function buildIntakePlan(session, orchestration, depthRoute = routeDeliberationDepth(session.question || '')) {
+  const { informationFields, sufficiency } = orchestration;
+  const nextField = sufficiency.complete ? null : sufficiency.nextQuestion;
+  const askUser = nextField ? [{
+    fieldId: nextField.id,
+    taskId: nextField.id,
+    question: nextField.prompt,
+    reason: nextField.reason,
+    required: nextField.required,
+    decisionImpact: nextField.decisionImpact || '',
+    source: nextField.source || 'adaptive-intake',
+    isFollowUp: nextField.isFollowUp === true,
+  }] : [];
+  const plan = {
+    depth: depthRoute.depth,
+    depthReason: depthRoute.reason,
+    maxQuestions: depthRoute.maxQuestions,
+    dimensions: orchestration.dimensions,
+    agents: [],
+    toolProbes: [],
+    askUser,
+    minFindings: depthRoute.depth === 'quick' ? 1 : 2,
+    round: Number(session.round || 1),
+    openingLine: '演会逐项确认真正会改变判断的信息；每次只问一件事，你也可以明确保留未知。',
+    analysis: '信息收集尚未完成，系统不会提前选择智囊或生成结论。',
+    informationFields,
+    informationStates: sufficiency.fieldStates,
+    readiness: sufficiency.readiness,
+    nextQuestion: askUser[0] || null,
+    orchestration: {
+      depth: depthRoute.depth,
+      reason: depthRoute.reason,
+      informationFields,
+      tasks: orchestration.tasks,
+      advisors: [],
+      manager: { agentId: 'orchestrator', status: 'collecting', source: 'adaptive-intake' },
+    },
+  };
+  plan.caseFile = buildDecisionCase({ session, plan, memories: [], depthRoute });
+  const nextSession = {
+    ...session,
+    state: sufficiency.complete ? 'READY' : 'WAIT',
+    plan,
+    askUser,
+    information_states: sufficiency.fieldStates,
+    memory_used: [],
+  };
+  return {
+    session: nextSession,
+    plan,
+    askUser,
+    nextQuestion: askUser[0] || null,
+    readiness: sufficiency.readiness,
+    informationFields: sufficiency.fieldStates,
+    openingLine: plan.openingLine,
+    round: plan.round,
+    maxRound: depthRoute.maxQuestions,
+    memory: [],
+  };
+}
+
+export default { routeDeliberationDepth, buildQuickPlan, buildIntakePlan };

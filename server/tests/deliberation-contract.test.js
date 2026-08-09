@@ -31,7 +31,7 @@ test('execute response always exposes one stable shape', () => {
   assert.deepEqual(Object.keys(response).sort(), [
     'askUser', 'caseConfirmationRequired', 'caseFile', 'clarifyRequired', 'cognitivePlan', 'conflicts', 'dynamicChoices', 'fallback', 'findings',
     'gaps', 'interruption', 'masterSummary', 'oracle', 'reason', 'replanned', 'sessionId', 'state',
-    'lensImpacts', 'lensReview',
+    'lensImpacts', 'lensReview', 'contributionGate', 'advisorFailures',
   ].sort());
   assert.equal(response.cognitivePlan.lensId, 1);
   assert.equal(response.lensImpacts[0].taskId, 'lens-task-1');

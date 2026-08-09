@@ -3,6 +3,7 @@ import { query } from '../services/db.js';
 import { generateUUID } from '../utils/id.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requireUser } from '../middleware/auth.js';
+import { requirePrincipal } from '../middleware/principal.js';
 
 const router = Router();
 
@@ -40,13 +41,13 @@ function validateLength(obj, fields) {
  */
 router.get(
   '/',
+  requirePrincipal,
   asyncHandler(async (req, res) => {
-    const { userId, limit = 50 } = req.query;
-    const filter = userId ? { user_id: userId } : {};
+    const { limit = 50 } = req.query;
     const result = await query({
       table: TABLE,
       action: 'select',
-      filter,
+      filter: { user_id: req.principal.userId },
       queryOptions: { orderBy: 'created_at:desc', limit: parseInt(limit, 10) || 50 },
     });
     res.json({ cards: result.rows, total: result.rowCount });
@@ -59,11 +60,12 @@ router.get(
  */
 router.get(
   '/:id',
+  requirePrincipal,
   asyncHandler(async (req, res) => {
     const result = await query({
       table: TABLE,
       action: 'select',
-      filter: { id: req.params.id },
+      filter: { id: req.params.id, user_id: req.principal.userId },
     });
     if (result.rowCount === 0) {
       return res.status(404).json({ error: '卡牌不存在' });
@@ -83,6 +85,20 @@ router.post(
   asyncHandler(async (req, res) => {
     const lenErr = validateLength(req.body, MAX_LEN);
     if (lenErr) return res.status(400).json({ error: lenErr });
+    const sourceSessionId = typeof req.body.sessionId === 'string'
+      ? req.body.sessionId.trim().slice(0, 120)
+      : '';
+    if (sourceSessionId) {
+      const existing = await query({
+        table: TABLE,
+        action: 'select',
+        filter: { user_id: req.userId, source_session_id: sourceSessionId },
+        queryOptions: { limit: 1 },
+      });
+      if (existing.rows[0]) {
+        return res.status(200).json({ card: existing.rows[0], idempotentReplay: true });
+      }
+    }
 
     const card = {
       id: generateUUID(),
@@ -101,6 +117,10 @@ router.post(
       pillars: JSON.stringify(req.body.pillars || {}),
       powerful_question: (req.body.powerfulQuestion || '').slice(0, MAX_LEN.powerful_question),
       framework: (req.body.framework || '').slice(0, MAX_LEN.framework),
+      source_session_id: sourceSessionId || null,
+      reversal_conditions: JSON.stringify(req.body.reversalConditions || []),
+      next_actions: JSON.stringify(req.body.nextActions || []),
+      evidence: JSON.stringify(req.body.evidence || []),
       created_at: new Date().toISOString(),
     };
 

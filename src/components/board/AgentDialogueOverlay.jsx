@@ -2,7 +2,12 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { COLORS } from './layoutConfig';
-import { getCustomAgents, getMarketAgents, recommendSubscribedAgents, subscribeAgent, unsubscribeAgent, deleteCustomAgent } from '../../utils/customAgent';
+import {
+  listAdvisorAssets,
+  subscribeAdvisorAsset,
+  unsubscribeAdvisorAsset,
+} from '../../services/advisorClient';
+import { deleteAdvisor } from '../../services/deliberationClient';
 import { recallRelevantMemories } from '../../services/memoryStore';
 // 零预设：不再导入 detectQuestionType / getAgentsForQuestion，改为按 inference.dimensions 与关键词做市场推荐
 import { sanitizeLLMText } from '../../utils/helpers';
@@ -308,7 +313,7 @@ function renderTextWithMentions(str, agents) {
  * - summary / path_reveal 阶段显示演 的总结
  * - 无框、居中、字距宽松，带打字机效果
  */
-export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, activeAgents, agentDialogues, selectedAgentIds, onAgentToggle, onConfirmAgents, onGoCast, awaitingUser, currentResponse, setCurrentResponse, onUserAdvance, agentCallResults, onFeedback, debateConvergence, mentions, toolCallState, candidateAgents, inference, onSaveGameState, onShowFeedbackToast }) {
+export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, activeAgents, agentDialogues, selectedAgentIds, onAgentToggle, onConfirmAgents, onGoCast, awaitingUser, currentResponse, setCurrentResponse, onUserAdvance, agentCallResults, onFeedback, debateConvergence, mentions, toolCallState, candidateAgents, inference, sessionId, onSaveGameState, onShowFeedbackToast }) {
   const navigate = useNavigate();
   // iPad/平板触屏优化检测（width<=1024 的平板，不含手机）
   const isIPad = typeof window !== 'undefined' && (/iPad/i.test(navigator.userAgent) || (window.innerWidth > 768 && window.innerWidth <= 1024));
@@ -349,10 +354,16 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
 
   // agent_select 阶段 market 推荐：零预设，用 inference.dimensions/perspectivePool + question 关键词打分，不再调用 detectQuestionType
   useEffect(() => {
+    let cancelled = false;
     if (phase === 'agent_select') {
-      setCustomAgents(getCustomAgents());
+      const loadCatalog = async () => {
       try {
-        const market = getMarketAgents();
+        const [mine, market] = await Promise.all([
+          listAdvisorAssets('mine'),
+          listAdvisorAssets('market'),
+        ]);
+        if (cancelled) return;
+        setCustomAgents(mine);
         const q = question || '';
         let recommended = [];
         if (market.length > 0) {
@@ -463,12 +474,20 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
             }
           }
         }
-        setMarketAgents(recommended);
-      } catch (e) { setMarketAgents([]); }
+        if (!cancelled) setMarketAgents(recommended);
+      } catch (e) {
+        if (!cancelled) {
+          setCustomAgents([]);
+          setMarketAgents([]);
+        }
+      }
+      };
+      loadCatalog();
     }
     // P0 Fix: 删掉 candidatePool 依赖！candidatePool 是每次 render 新生成的派生数组，
     // 放进依赖会导致 setMarketAgents()→re-render→candidatePool引用变→再trigger effect 死循环
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
   }, [phase, question, inference]);
 
   // Step 4: 切换智囊或新发言到达时，重置该智囊的打字机完成标记
@@ -487,11 +506,12 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeAgentIdx, agentDialogues, phase]);
 
-  const handleGoCast = () => {
-    if (typeof onSaveGameState === 'function') onSaveGameState();
-    // 传 snapshotSid（固定 key，用别名显示给用户可读标签），让 Agents 页显示「返回推演台」按钮
-    const snapshotKey = 'yance_game_session';
-    try { sessionStorage.setItem('resume_session_id', snapshotKey); } catch {}
+  const handleGoCast = async () => {
+    if (typeof onSaveGameState === 'function') await onSaveGameState();
+    const snapshotKey = sessionId || null;
+    if (snapshotKey) {
+      try { sessionStorage.setItem('resume_session_id', snapshotKey); } catch {}
+    }
     navigate('/agents', {
       state: { snapshotSid: snapshotKey, snapshotLabel: userInput ? `关于「${String(userInput).slice(0, 14)}」的推演` : '推演进行中' },
     });
@@ -564,7 +584,15 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
     const allAgents = [...presetAgents, ...customAgentsClean];
 
     // === T5：演推荐 / 演新维度 标记 ===
-    const recommendedSet = new Set(inference?.recommendedAgentIds || []);
+    const explicitRecommendedIds = Array.isArray(inference?.recommendedAgentIds)
+      ? inference.recommendedAgentIds.filter(Boolean)
+      : [];
+    const plannedRecommendedIds = Array.isArray(inference?.plan?.agents)
+      ? inference.plan.agents.map((agent) => agent?.id).filter(Boolean)
+      : [];
+    const recommendedSet = new Set(
+      explicitRecommendedIds.length > 0 ? explicitRecommendedIds : plannedRecommendedIds,
+    );
     const isRecommended = (agentId) => recommendedSet.has(agentId) ||
       presetAgents.some(p => p.id === agentId && (p._origId && recommendedSet.has(p._origId)));
     const isGeneratedAgent = (agent) => agent?.isGenerated || agent?.id?.startsWith('gen_') || String(agent?.id || '').includes('gen_');
@@ -586,29 +614,23 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
       return { agent: marketAgent, resolvedId: marketAgent.id, newlySubscribed: false };
     };
     // 订阅 / 取消订阅（市集按钮用，独立 onClick，不触发选中）
-    const toggleSubscribe = (e, marketAgent) => {
+    const toggleSubscribe = async (e, marketAgent) => {
       e.stopPropagation();
       e.preventDefault();
-      const originId = marketAgent.marketId || marketAgent.id;
+      const originId = marketAgent.publishedId || marketAgent.marketId;
+      if (!originId) return;
       const existing = subscribedByMarketId.get(originId);
-      if (existing) {
-        unsubscribeAgent(existing);
-      } else {
-        subscribeAgent(marketAgent);
-      }
-      // 刷新 customAgents state（重新读 localStorage）
-      const fresh = ensureUniqueIds(getCustomAgents(), 'cus');
-      const dedupedFresh = dedupeAgents([], fresh).filter(a => {
-        const key = `${String(a.name || '').trim()}::${String(a.stance || '').trim()}`;
-        return !presetAgents.some(p => `${String(p.name || '').trim()}::${String(p.stance || '').trim()}` === key);
-      });
-      setCustomAgents(fresh); // 存完整 fresh（用于内部），渲染用 local dedupedFresh 会在下次 render 重新计算
-      // 强制重新同步 subscribedByMarketId（setCustomAgents 触发重渲染后会重算）
-      subscribedByMarketId.clear();
-      for (const ca of dedupedFresh) {
-        if (ca.originMarketId) subscribedByMarketId.set(ca.originMarketId, ca);
-        if (ca.marketId) subscribedByMarketId.set(ca.marketId, ca);
-        subscribedByMarketId.set(ca.id, ca);
+      try {
+        if (existing) await unsubscribeAdvisorAsset(originId);
+        else await subscribeAdvisorAsset(originId);
+        const [fresh, market] = await Promise.all([
+          listAdvisorAssets('mine'),
+          listAdvisorAssets('market'),
+        ]);
+        setCustomAgents(fresh);
+        setMarketAgents(market);
+      } catch (error) {
+        onShowFeedbackToast?.(error?.message || '订阅操作失败');
       }
     };
 
@@ -784,6 +806,11 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
               )}
             </div>
             <div style={{ color: '#888', fontSize: '11px', marginTop: '2px' }}>{agent.stance}</div>
+            {(agent.reason || agent.assignmentReason || agent.task) && (
+              <div style={{ color: '#A99060', fontSize: '9px', marginTop: '3px', lineHeight: 1.4 }}>
+                ☯ 为何推荐：{agent.reason || agent.assignmentReason || agent.task}
+              </div>
+            )}
             {agent.desc && (
               <div style={{ color: '#666', fontSize: '10px', marginTop: '2px', lineHeight: 1.3 }}>{agent.desc}</div>
             )}
@@ -811,16 +838,19 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
       const srcColor = isSubscribed ? '#80C8A8' : '#F0B880';
       const gen = isGeneratedAgent(agent);
       const rec = isRecommended(agent.id);
-      const handleToggleSub = (e) => {
+      const handleToggleSub = async (e) => {
         e.stopPropagation();
         e.preventDefault();
-        if (!isSubscribed) {
-          deleteCustomAgent(agent.id);
-        } else {
-          unsubscribeAgent(agent);
+        try {
+          if (isSubscribed) {
+            await unsubscribeAdvisorAsset(agent.publishedId || agent.marketId);
+          } else {
+            await deleteAdvisor(agent.sourceId || String(agent.id).replace(/^custom_/, ''));
+          }
+          setCustomAgents(await listAdvisorAssets('mine'));
+        } catch (error) {
+          onShowFeedbackToast?.(error?.message || '智囊操作失败');
         }
-        const fresh = ensureUniqueIds(getCustomAgents(), 'cus');
-        setCustomAgents(fresh);
       };
       return (
         <motion.button

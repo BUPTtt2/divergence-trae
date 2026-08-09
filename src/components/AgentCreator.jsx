@@ -23,12 +23,13 @@ import {
 } from '../utils/customAgent';
 import { createAdvisor } from '../services/deliberationClient';
 import { getCurrentUserIdSync } from '../services/baseConfig';
+import { buildForgeReturnUrl } from '../game/councilModel';
 
 const EASE = [0.16, 1, 0.3, 1];
 
 const STEP_LABELS = ['赐名', '定关系', '演审问', '封印', '入营'];
 
-export default function AgentCreator({ onClose, onSaved, existingAgents = [] }) {
+export default function AgentCreator({ onClose, onSaved, existingAgents = [], returnContext = null }) {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
@@ -278,9 +279,22 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [] }) 
         persona: forgedAgent.persona,
         perspective: forgedAgent.stance,
         trigram: forgedAgent.trigram,
+        objective: `从${forgedAgent.stance}视角审查用户的真实决策，不替用户作决定`,
+        methodology: [
+          '先复述已确认事实，并把缺失信息保留为未知',
+          `只从${forgedAgent.stance}视角提出判断，避免和其他智囊重复`,
+          '给出可验证的反转条件与下一步行动',
+        ],
+        deliverable: '输出判断依据、关键未知、反转条件和一项可执行建议',
+        toolPolicy: { allow: [], deny: ['business_write'] },
+        evidencePolicy: { minimumLevel: 'E0' },
+        completionCriteria: ['不编造事实', '至少指出一个未知', '至少给出一个反转条件'],
+        safetyBoundaries: ['不替用户作最终决定', '不把卦象当作事实证据'],
+        budget: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 35000 },
       });
       // 合并 DB id 与铸造时的展示字段，供前端卡片显示
       const displayAgent = { ...forgedAgent, id: saved.id };
+      setForgedAgent(displayAgent);
       setStep(4);
       onSaved?.(displayAgent);
     } catch (e) {
@@ -292,7 +306,20 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [] }) 
 
   // 铸造完成后返回 sandbox 推演台，携带 state 标记供 Game.jsx 检测恢复
   const handleReturnToSandbox = () => {
-    navigate('/sandbox', { state: { returnToSandbox: true, newAgentCreated: true } });
+    const target = buildForgeReturnUrl({
+      sessionId: returnContext?.sessionId,
+      seatId: returnContext?.seatId,
+      advisorId: forgedAgent?.id,
+    });
+    navigate(target, {
+      state: {
+        returnToSandbox: true,
+        newAgentCreated: true,
+        snapshotSid: returnContext?.sessionId || null,
+        seatId: returnContext?.seatId || null,
+        advisorId: forgedAgent?.id || null,
+      },
+    });
     onClose?.();
   };
 

@@ -1,4 +1,4 @@
-import { motion, useReducedMotion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useNavigate, Link } from 'react-router-dom';
 import { SCENARIOS } from '../data/scripts';
 import Bagua from '../components/fx/Bagua';
@@ -21,8 +21,6 @@ const SCENARIO_TRIGRAMS = ['☲', '☷', '☱', '☳'];
 
 export default function Scenarios() {
   const navigate = useNavigate();
-  const reduce = useReducedMotion();
-
   return (
     <div className="min-h-screen overflow-x-hidden" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}>
       <AppNav variant="light" />
@@ -31,7 +29,7 @@ export default function Scenarios() {
         <span className="text-[10px] font-mono tracking-wide">
           <span style={{ color: '#999' }}>选局 / SELECT SCENARIO</span>
           <span className="mx-3" style={{ color: '#444' }}>|</span>
-          <span style={{ color: T.accent }}>1 / 4 已启</span>
+          <span style={{ color: T.accent }}>4 / 4 已启</span>
         </span>
       </div>
 
@@ -76,7 +74,7 @@ export default function Scenarios() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.08, duration: 0.6, ease: EASE }}
                   whileHover={{ y: -4 }}
-                  onClick={() => s.unlocked && navigate('/sandbox')}
+                  onClick={() => s.unlocked && navigate('/sandbox', { state: { initialQuestion: s.prompt, scenarioId: s.id, scenarioTitle: s.title } })}
                   className={`relative p-6 ${s.unlocked ? '' : 'opacity-55'}`}
                 >
                   {/* 八卦角标 */}

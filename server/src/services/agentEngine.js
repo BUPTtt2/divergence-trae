@@ -206,7 +206,7 @@ export function sanitizeAgentDialogue(rawText, question = '') {
     .trim();
 }
 
-export async function generateAgentDialogue(agent, question, previousDialogues = [], fullDialogueHistory = [], userId = null) {
+export async function generateAgentDialogue(agent, question, previousDialogues = [], fullDialogueHistory = [], userId = null, options = {}) {
   if (!agent || !question) {
     throw Object.assign(new Error('generateAgentDialogue 缺少 agent 或 question'), { type: 'INVALID_INPUT' });
   }
@@ -242,6 +242,16 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
     }
   }
 
+  const findingInstruction = options.mode === 'finding' ? `
+
+【本轮交付格式】
+案卷已经由用户确认，本轮不要继续采访用户。你必须给出一项独立、可反驳的判断，并严格按四段输出：
+【主张】一句明确但有条件的判断
+【依据】只使用用户已确认信息、给定证据和明确推理，不虚构事实
+【假设】用分号分隔尚未验证的前提；没有则写“无”
+【反转条件】用分号分隔会使主张失效或需要改路的信号
+不要输出上述四段以外的内容。` : '';
+
   const systemPrompt = `${basePrompt}${memoryContextInjection}
 
 【核心行为约束（P0修复，必须严格遵守）】
@@ -262,7 +272,7 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
 - 若前面有其他智囊发言，必须主动对其至少一位做明确表态：用"我同意X说的"、"反驳X的观点"、"补充X的判断"这类自然语言引用对方名字
 - 不要各说各话，要让用户看到观点之间的碰撞
 - 若发现前一位智囊遗漏了关键维度，主动补位（如钱谷没算隐性成本，你指出）
-- 你的发言要建立在前面观点之上，而不是平行重述问题`;
+- 你的发言要建立在前面观点之上，而不是平行重述问题${findingInstruction}`;
 
   // 构建上下文：之前的 Agent 发言（带 agentId 便于 LLM 精确引用）
   let contextText = '';
@@ -294,7 +304,7 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
 
   const userPrompt = `用户问：「${question}」${contextText}${agentContextText}
 
-请以 ${agent.name}（${agent.stance}）的身份，说 1-3 句话回应。不要复述用户问题。`;
+请以 ${agent.name}（${agent.stance}）的身份，${options.mode === 'finding' ? `完成任务“${options.task || '给出独立判断'}”，并按指定四段格式提交 finding` : '说 1-3 句话回应。不要复述用户问题'}。`;
 
   // v3.0 零预设：LLM 失败抛错（由调用方 withRetry 处理）
   // P0-2 修复：放宽长度限制，给Agent提问+讨论空间（之前200太挤）

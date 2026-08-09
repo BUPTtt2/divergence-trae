@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildQuickPlan, routeDeliberationDepth } from '../src/services/deliberationDepthRouter.js';
+import { buildInformationOrchestration } from '../src/services/informationSufficiency.js';
+import { buildIntakePlan, buildQuickPlan, routeDeliberationDepth } from '../src/services/deliberationDepthRouter.js';
 
 test('question risk selects an explicit field and round budget', () => {
   assert.deepEqual(routeDeliberationDepth('要不要吃饭'), {
@@ -20,14 +21,16 @@ test('question risk selects an explicit field and round budget', () => {
   assert.equal(routeDeliberationDepth('胸口疼要不要吃药').depth, 'deep');
 });
 
-test('quick food planning asks three non-leading fields and assigns complementary advisors', () => {
+test('quick food planning asks only the next non-leading field and assigns complementary advisors', () => {
   const result = buildQuickPlan({ id: 'sess_quick', question: '要不要吃饭', round: 1 });
 
   assert.equal(result.session.state, 'WAIT');
   assert.equal(result.plan.depth, 'quick');
   assert.equal(result.plan.agents.length, 2);
   assert.deepEqual(result.plan.dimensions.map((dimension) => dimension.name), ['身体信号', '进食情境', '当前目标']);
-  assert.deepEqual(result.askUser.map((item) => item.fieldId), ['body_signal', 'meal_context', 'current_goal']);
+  assert.deepEqual(result.askUser.map((item) => item.fieldId), ['body_signal']);
+  assert.equal(result.nextQuestion.fieldId, 'body_signal');
+  assert.equal(result.readiness.status, 'collecting');
   assert.equal(result.askUser.some((item) => /你现在有明显饥饿感/.test(item.question)), false);
   assert.equal(new Set(result.plan.agents.map((agent) => agent.perspective)).size, 2);
 });
@@ -43,7 +46,9 @@ test('quick food planning does not proceed when one vague answer is copied acros
 
   assert.equal(result.session.state, 'WAIT');
   assert.equal(result.plan.caseFile.confirmedByUser, false);
-  assert.equal(result.askUser.length, 3);
+  assert.equal(result.askUser.length, 1);
+  assert.equal(result.askUser[0].fieldId, 'body_signal');
+  assert.match(result.askUser[0].question, /2.*指|量表|选项|状态/);
   assert.equal(result.plan.caseFile.unknowns.length, 3);
 });
 
@@ -63,4 +68,55 @@ test('quick food planning upgrades after complete weight-management answers', ()
   assert.equal(result.plan.depth, 'standard');
   assert.equal(result.plan.orchestration.escalation.to, 'standard');
   assert.equal(result.plan.caseFile.unknowns.length, 0);
+  assert.equal(result.nextQuestion, null);
+  assert.equal(result.readiness.status, 'review');
+});
+
+test('standard product decisions stop at one adaptive question before any advisor is assigned', () => {
+  const session = {
+    id: 'sess_product_intake',
+    question: '复赛前应该继续加功能，还是先做稳定性？',
+    round: 1,
+    answers: [],
+  };
+  const route = routeDeliberationDepth(session.question);
+  const orchestration = buildInformationOrchestration({
+    question: session.question,
+    answers: session.answers,
+    round: session.round,
+    depth: route.depth,
+  });
+  const result = buildIntakePlan(session, orchestration, route);
+
+  assert.equal(result.session.state, 'WAIT');
+  assert.equal(result.plan.depth, 'standard');
+  assert.equal(result.plan.agents.length, 0);
+  assert.deepEqual(result.askUser.map((item) => item.fieldId), ['product_reality']);
+  assert.equal(result.plan.readiness.openRequiredFields.length, 3);
+});
+
+test('product intake reveals dependent questions one at a time and reaches review only when resolved', () => {
+  const question = '复赛前应该继续加功能，还是先做稳定性？';
+  const first = buildInformationOrchestration({
+    question,
+    answers: [{ fieldId: 'product_reality', answer: '核心流程能跑通，但 iPad 小窗布局仍会遮挡操作。' }],
+    round: 2,
+    depth: 'standard',
+  });
+  assert.equal(first.sufficiency.complete, false);
+  assert.equal(first.sufficiency.nextQuestion.id, 'delivery_constraint');
+
+  const complete = buildInformationOrchestration({
+    question,
+    answers: [
+      { fieldId: 'product_reality', answer: '核心流程能跑通，但 iPad 小窗布局仍会遮挡操作。' },
+      { fieldId: 'delivery_constraint', answer: '明天验收，必须保留完整提问、智囊推演与最终行动路径。' },
+      { fieldId: 'success_criterion', answer: '评审可以独立从头走完，并看见智囊各自的真实贡献。' },
+    ],
+    round: 4,
+    depth: 'standard',
+  });
+  assert.equal(complete.sufficiency.complete, true);
+  assert.equal(complete.sufficiency.nextQuestion, null);
+  assert.equal(complete.sufficiency.readiness.status, 'review');
 });

@@ -18,7 +18,7 @@ const MODE_KEY = 'yance:compass:mode';
 const HIDE_KEY = 'yance:compass:hidden';
 const NOTES_KEY = 'yance:notes';
 const GUAS_KEY = 'yance:compass:castlog';
-const DAILY_KEY = 'yance:compass:daily';
+const ACTIVE_SESSION_KEY = 'yance_active_deliberation_session';
 
 const TRIGRAMS = [
   { name: '乾', trigram: '☰', element: '天', gloss: '元亨利贞。初九潜龙勿用。' },
@@ -47,7 +47,7 @@ const KEYWORD_TO_GUA = [
 const TOOLS = [
   { id: 'back',   label: '返回', desc: '返回上一页',        rune: '☶', color: '#7A7468' },
   { id: 'cast',   label: '投卦', desc: '三枚铜钱立一卦',    rune: '☰', color: '#A8472E' },
-  { id: 'yan',    label: '问演', desc: '与演对话,问疑解惑',  rune: '演', color: '#A8472E' },
+  { id: 'yan',    label: '推演台', desc: '开始或继续真实推演', rune: '演', color: '#A8472E' },
   { id: 'note',   label: '落笔', desc: '此刻所感,落于灵台',  rune: '☱', color: '#7A7468' },
   { id: 'profile',label: '我',   desc: '个人资料与设置',     rune: '☯', color: '#A8472E' },
   { id: 'lock',   label: '镇纸', desc: '再点解除,固定位置',  rune: '☳', color: '#7A7468' },
@@ -92,8 +92,10 @@ export default function DraggableCompass() {
   const [unpackQ, setUnpackQ] = useState('');
   const [noteText, setNoteText] = useState('');
   const [noteCount, setNoteCount] = useState(0);
-  const [castCount, setCastCount] = useState(0);
   const [pressed, setPressed] = useState(false);
+  const [hasActiveSession, setHasActiveSession] = useState(() => {
+    try { return Boolean(sessionStorage.getItem(ACTIVE_SESSION_KEY)); } catch { return false; }
+  });
   // 三连抽同卦彩蛋
   const [streak, setStreak] = useState([]); // 最近 3 次抽卦结果
   const [combo, setCombo] = useState(null); // {gua, count}
@@ -119,10 +121,21 @@ export default function DraggableCompass() {
     try {
       setNoteCount(JSON.parse(localStorage.getItem(NOTES_KEY) || '[]').length);
       const log = JSON.parse(localStorage.getItem(GUAS_KEY) || '[]');
-      setCastCount(log.length);
       // 从日志中提取最近 3 条 trigram
       setStreak(log.slice(0, 3).map(x => x.name));
     } catch {}
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => {
+      try { setHasActiveSession(Boolean(sessionStorage.getItem(ACTIVE_SESSION_KEY))); } catch { setHasActiveSession(false); }
+    };
+    window.addEventListener('yance:active-session-changed', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.removeEventListener('yance:active-session-changed', refresh);
+      window.removeEventListener('focus', refresh);
+    };
   }, []);
 
   // Shift+H 恢复隐藏
@@ -154,7 +167,6 @@ export default function DraggableCompass() {
         const log = JSON.parse(localStorage.getItem(GUAS_KEY) || '[]');
         log.unshift({ ...r, ts: Date.now() });
         localStorage.setItem(GUAS_KEY, JSON.stringify(log.slice(0, 30)));
-        setCastCount(log.length);
         // 更新最近 3 次 streak
         const newStreak = [r.name, ...streak].slice(0, 3);
         setStreak(newStreak);
@@ -197,39 +209,6 @@ export default function DraggableCompass() {
     setUnpackQ('');
     setUnpackOpen(false);
   }, [unpackQ, showBubble]);
-
-  /* 玩法 2: 日签 - 每天首次访问给一个固定卦象 */
-  const handleDaily = useCallback(() => {
-    try {
-      const today = new Date().toDateString();
-      const stored = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-      let r;
-      if (stored.date === today && stored.gua) {
-        // 今日已抽过, 用同一天算
-        r = TRIGRAMS.find(t => t.name === stored.gua) || TRIGRAMS[0];
-        showBubble({
-          name: r.name,
-          trigram: r.trigram,
-          element: r.element,
-          gloss: `今日一卦「${r.name}」: ${r.gloss}`
-        }, 4000);
-        return;
-      }
-      // 今日首次, 根据日期生成固定卦
-      const dayHash = today.split('').reduce((s, c) => s + c.charCodeAt(0), 0);
-      r = TRIGRAMS[dayHash % TRIGRAMS.length];
-      localStorage.setItem(DAILY_KEY, JSON.stringify({ date: today, gua: r.name }));
-      showBubble({
-        name: r.name,
-        trigram: r.trigram,
-        element: r.element,
-        gloss: `今日一卦「${r.name}」: ${r.gloss}`
-      }, 4000);
-    } catch {
-      const r = TRIGRAMS[Math.floor(Math.random() * TRIGRAMS.length)];
-      showBubble(r, 4000);
-    }
-  }, [showBubble]);
 
   // 点击外部关闭菜单
   useEffect(() => {
@@ -335,9 +314,8 @@ export default function DraggableCompass() {
       setMenuOpen(false);
       handleCast();
     } else if (toolId === 'yan') {
-      // 问演: 打开全局"演"对话浮窗(功能从固定按钮迁移至此)
       setMenuOpen(false);
-      window.dispatchEvent(new CustomEvent('yance:open-yanchat', { bubbles: true }));
+      navigate('/sandbox');
     } else if (toolId === 'note') {
       setMenuOpen(false);
       setNoteOpen(true);
@@ -362,7 +340,7 @@ export default function DraggableCompass() {
         showBubble({ name: '归', trigram: '☰', element: '天', gloss: '自动召回。' }, 1500);
       }, 5000);
     }
-  }, [handleCast, handleDaily, showBubble, locked]);
+  }, [handleCast, showBubble, locked, navigate]);
 
   if (hidden) return null;
 
@@ -550,7 +528,7 @@ export default function DraggableCompass() {
       {/* 主浮件 */}
       <motion.div
         role="button"
-        aria-label="八卦罗盘"
+        aria-label={hasActiveSession ? '八卦罗盘，有一局推演可继续' : '八卦罗盘'}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -595,6 +573,25 @@ export default function DraggableCompass() {
             fontFamily: '"Ma Shan Zheng", serif',
             boxShadow: '0 0 6px rgba(168,71,46,0.6)',
           }}>{noteCount > 9 ? '9+' : noteCount}</div>
+        )}
+        {hasActiveSession && (
+          <motion.div
+            aria-hidden="true"
+            animate={reduce ? {} : { opacity: [0.72, 1, 0.72] }}
+            transition={{ duration: 1.8, repeat: Infinity }}
+            style={{
+              position: 'absolute', left: -8, bottom: -6,
+              minWidth: 26, height: 18, padding: '0 5px', borderRadius: 9,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: '#1A1410', color: '#F0D890',
+              border: '1px solid rgba(200,168,80,0.75)',
+              fontSize: 9, letterSpacing: '0.08em',
+              fontFamily: '"Ma Shan Zheng", serif',
+              boxShadow: '0 2px 8px rgba(22,20,16,0.28)',
+            }}
+          >
+            续演
+          </motion.div>
         )}
         {/* 三连彩蛋闪光 */}
         {combo && (

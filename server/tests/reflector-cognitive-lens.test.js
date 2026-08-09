@@ -261,7 +261,7 @@ test('用户问题或 Agent 中的裁决措辞不得污染可提交的原问题�
       ['business_advance', 'business_pause', 'business_hold'],
     );
     assert.equal(result.session.dynamicChoices.every((choice) => choice.label.includes(expectedTopic)), true);
-    assert.equal(result.session.dynamicChoices.every((choice) => choice.provenance === 'controlled-business-template'), true);
+    assert.equal(result.session.dynamicChoices.every((choice) => choice.provenance === 'rule-fallback'), true);
     assert.equal(result.session.dynamicChoices.every((choice) => choice.topic?.provenance === 'derived-from-user-question'), true);
     assert.equal(result.session.dynamicChoices.every((choice) => choice.generatedAdvice === null), true);
     assert.equal(result.session.dynamicChoices.some((choice) => choice.id.startsWith('lens_')), false);
@@ -295,7 +295,8 @@ test('安全的 Agent 总结恢复为证据派生选择并使用稳定 business 
     'business_evidence_1',
     'business_evidence_2',
   ]);
-  assert.equal(result.session.dynamicChoices.every((choice) => choice.provenance === 'evidence-derived'), true);
+  assert.equal(result.session.dynamicChoices.every((choice) => choice.provenance === 'agent-evidence'), true);
+  assert.equal(result.session.dynamicChoices.every((choice) => choice.findingIds.length === 6), true);
   assert.equal(result.session.dynamicChoices.every((choice) => choice.generatedAdvice === null), true);
   assert.equal(result.session.dynamicChoices.some((choice) => Object.hasOwn(choice, 'guaRecommendation')), false);
   assert.equal(result.session.dynamicChoices.some((choice) => choice.gua === '乾' || choice.gua === '坤'), false);
@@ -357,7 +358,7 @@ test('Agent 总结失败、空结果或卦象裁决输出时使用受控业务�
       'business_pause',
       'business_hold',
     ]);
-    assert.equal(result.session.dynamicChoices.every((choice) => choice.provenance === 'controlled-business-template'), true);
+    assert.equal(result.session.dynamicChoices.every((choice) => choice.provenance === 'rule-fallback'), true);
     assert.doesNotMatch(JSON.stringify({
       summary: result.session.masterSummary,
       choices: result.session.dynamicChoices,

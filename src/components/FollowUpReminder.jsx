@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getFollowUps, completeFollowUp, isBackendCircuitOpen } from '../services/apiClient';
-import { getPendingFollowUps, updateEpisodeOutcome } from '../services/memoryStore';
+import { getFollowUps, completeFollowUp } from '../services/apiClient';
 import { useNavigate } from 'react-router-dom';
 import './FollowUpReminder.css';
 
@@ -27,47 +26,16 @@ export default function FollowUpReminder() {
   const [isExpanded, setIsExpanded] = useState(false);
   const [completingId, setCompletingId] = useState(null);
   const [resultText, setResultText] = useState('');
+  const [resultStatus, setResultStatus] = useState('neutral');
   const [showResultInput, setShowResultInput] = useState(null);
 
   const loadFollowUps = useCallback(async () => {
-    // ★ 先查断路器：后端断了就直接走本地，不发 fetch，避免浏览器 net::ERR_FAILED 红日志
-    if (isBackendCircuitOpen()) {
-      console.debug('[FollowUpReminder] 后端已断路，跳过 API fetch，直接使用本地回访');
-      try {
-        const localPending = getPendingFollowUps();
-        if (localPending.length > 0) {
-          setFollowUps(localPending.map(ep => ({
-            id: ep.id, question: ep.question, decision: ep.decision,
-            hexagram: ep.guaName || ep.hexagram, createdAt: ep.createdAt, source: 'local',
-          })));
-        }
-      } catch (_) {}
-      return;
-    }
     try {
-      const data = await getFollowUps('pending');
-      if (data && data.items && data.items.length > 0) {
-        setFollowUps(data.items);
-        return;
-      }
+      const data = await getFollowUps('check');
+      setFollowUps(Array.isArray(data?.dueItems) ? data.dueItems : []);
     } catch (e) {
-      console.debug('[FollowUpReminder] 后端回访不可达，使用本地：', e?.message || 'network');
-    }
-    // 本地降级：从分层记忆系统获取到期回访
-    try {
-      const localPending = getPendingFollowUps();
-      if (localPending.length > 0) {
-        setFollowUps(localPending.map(ep => ({
-          id: ep.id,
-          question: ep.question,
-          decision: ep.decision,
-          hexagram: ep.guaName || ep.hexagram,
-          createdAt: ep.createdAt,
-          source: 'local',
-        })));
-      }
-    } catch (e2) {
-      console.debug('[FollowUpReminder] 本地回访加载失败:', e2?.message);
+      setFollowUps([]);
+      console.debug('[FollowUpReminder] 决策账本暂不可达:', e?.message || 'network');
     }
   }, []);
 
@@ -79,43 +47,20 @@ export default function FollowUpReminder() {
     if (!resultText.trim()) return;
     try {
       setCompletingId(id);
-      // 判断是本地还是后端
-      const item = followUps.find(f => f.id === id);
-      if (item?.source === 'local') {
-        // 本地分层记忆更新
-        const status = /好|顺|成|对|满意|开心|升|涨/.test(resultText) ? 'positive'
-          : /坏|糟|败|错|失|后悔|亏|跌/.test(resultText) ? 'negative'
-          : 'neutral';
-        updateEpisodeOutcome(id, resultText.trim(), status);
-      } else {
-        await completeFollowUp(id, resultText.trim());
-      }
+      await completeFollowUp(id, resultText.trim(), resultStatus);
       setFollowUps(prev => prev.filter(item => item.id !== id));
       setShowResultInput(null);
       setResultText('');
+      setResultStatus('neutral');
     } catch (e) {
       console.warn('[FollowUpReminder] 完成回访失败:', e.message);
-      // 失败时也尝试本地降级
-      try {
-        const status = /好|顺|成|对|满意|开心|升|涨/.test(resultText) ? 'positive'
-          : /坏|糟|败|错|失|后悔|亏|跌/.test(resultText) ? 'negative'
-          : 'neutral';
-        updateEpisodeOutcome(id, resultText.trim(), status);
-        setFollowUps(prev => prev.filter(item => item.id !== id));
-        setShowResultInput(null);
-        setResultText('');
-      } catch (e2) {
-      console.debug('[FollowUpReminder] 本地回访加载失败:', e2?.message);
-    }
     } finally {
       setCompletingId(null);
     }
-  }, [resultText, followUps]);
+  }, [resultStatus, resultText]);
 
-  const handleGoToCard = useCallback((cardId) => {
-    if (cardId) {
-      navigate('/collection');
-    }
+  const handleGoToCard = useCallback(() => {
+    navigate('/cards');
   }, [navigate]);
 
   const formatDate = (dateStr) => {
@@ -287,7 +232,7 @@ export default function FollowUpReminder() {
                         择 {item.decision}
                       </span>
                       <span style={{ color: T.muted, fontSize: '10px', fontFamily: 'monospace' }}>
-                        回访日：{formatDate(item.followUpDate || item.scheduledDate)}
+                        回访日：{formatDate(item.follow_up_date || item.followUpDate || item.scheduledDate)}
                       </span>
                     </div>
                   </div>
@@ -313,6 +258,32 @@ export default function FollowUpReminder() {
                           lineHeight: 1.6,
                         }}
                       />
+                      <div className="flex gap-2 mt-2" role="group" aria-label="行动结果">
+                        {[
+                          ['positive', '有效'],
+                          ['neutral', '尚不确定'],
+                          ['negative', '无效'],
+                        ].map(([value, label]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => setResultStatus(value)}
+                            aria-pressed={resultStatus === value}
+                            style={{
+                              flex: 1,
+                              padding: '5px 4px',
+                              background: resultStatus === value ? `${T.gold}20` : 'transparent',
+                              color: resultStatus === value ? T.goldLight : T.muted,
+                              border: `1px solid ${resultStatus === value ? T.gold : `${T.border}40`}`,
+                              borderRadius: '2px',
+                              fontSize: '10px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
                       <div className="flex gap-2 mt-2">
                         <motion.button
                           whileHover={{ scale: 1.02 }}
@@ -341,6 +312,7 @@ export default function FollowUpReminder() {
                           onClick={() => {
                             setShowResultInput(null);
                             setResultText('');
+                            setResultStatus('neutral');
                           }}
                           style={{
                             padding: '6px 12px',
@@ -361,7 +333,7 @@ export default function FollowUpReminder() {
                       <motion.button
                         whileHover={{ scale: 1.02, y: -1 }}
                         whileTap={{ scale: 0.98 }}
-                        onClick={() => handleGoToCard(item.cardId)}
+                        onClick={handleGoToCard}
                         style={{
                           flex: 1,
                           padding: '6px 12px',

@@ -7,7 +7,7 @@
  * - 埋点失败不影响主流程（全 try-catch）
  * - 只埋匿名 ID，不埋用户输入内容
  */
-import { API_BASE_URL } from './baseConfig.js';
+import { API_BASE_URL, getAccessTokenSync } from './baseConfig.js';
 
 const STORAGE_KEY = 'yance_anonymous_id';
 const QUEUE_BUFFER_KEY = 'yance_track_queue';
@@ -95,15 +95,14 @@ class Tracker {
           return u.origin === window.location.origin;
         } catch { return false; }
       })();
-      // sendBeacon 仅同源可用，跨域会被浏览器 ERR_ABORTED（无 CORS 协商）
-      if (typeof navigator !== 'undefined' && navigator.sendBeacon && isSameOrigin) {
-        const blob = new Blob([body], { type: 'application/json' });
-        if (navigator.sendBeacon(trackUrl, blob)) return;
+      const accessToken = getAccessTokenSync();
+      if (!accessToken) {
+        this._bufferToStorage(batch);
+        return;
       }
-      // fallback 到 fetch
       const resp = await fetch(trackUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
         body,
         keepalive: isSameOrigin,
       });
@@ -150,14 +149,11 @@ class Tracker {
           return u.origin === window.location.origin;
         } catch { return false; }
       })();
-      if (typeof navigator !== 'undefined' && navigator.sendBeacon && isSameOrigin) {
-        const blob = new Blob([payload], { type: 'application/json' });
-        const ok = navigator.sendBeacon(errUrl, blob);
-        if (ok) return;
-      }
+      const accessToken = getAccessTokenSync();
+      if (!accessToken) return;
       fetch(errUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
         body: payload,
         keepalive: isSameOrigin,
       }).catch(() => { /* ignore */ });

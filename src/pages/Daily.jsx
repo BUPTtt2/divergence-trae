@@ -1,12 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform, animate } from 'framer-motion';
 import { useNavigate, Link } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
 import CheckInModal from '../components/CheckInModal';
 import DailyWisdom from '../components/DailyWisdom';
 import DailyTasks from '../components/DailyTasks';
-import { getDaily, getLevelInfo } from '../services/apiClient';
-import AppNav from '../components/AppNav';
+import { getFollowUps, getLevelInfo } from '../services/apiClient';
 
 /* 滚动数字组件 - 幸运数字浮现效果 */
 function RollingNumber({ value, duration = 1.2 }) {
@@ -215,10 +214,14 @@ export default function Daily() {
   const [checkInStreak, setCheckInStreak] = useState(0);
   const [showDetail, setShowDetail] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
+  const [dueFollowUps, setDueFollowUps] = useState([]);
 
   useEffect(() => {
     setDailyData(getDailyData());
     loadLevelInfo();
+    getFollowUps('check')
+      .then((response) => setDueFollowUps(Array.isArray(response?.dueItems) ? response.dueItems : []))
+      .catch(() => setDueFollowUps([]));
   }, []);
 
   const loadLevelInfo = async () => {
@@ -276,6 +279,19 @@ export default function Daily() {
             />
           </div>
         </motion.div>
+
+        {dueFollowUps.length > 0 && (
+          <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-8 p-5" style={{ backgroundColor: '#FFF8E8', border: `1px solid ${T.gold}60`, borderRadius: 5 }}>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <div className="text-[10px] font-mono mb-2" style={{ color: T.gold }}>TODAY / 今日真正要处理的事</div>
+                <h2 className="text-lg font-serif mb-1">有 {dueFollowUps.length} 个决策到了回访时间</h2>
+                <p className="text-[11px]" style={{ color: T.muted }}>日签只提供仪式感；你的行动结果才会形成下一次推演可用的记忆。</p>
+              </div>
+              <button onClick={() => navigate('/collection')} className="min-h-11 px-4 text-[11px]" style={{ color: T.paperLight, backgroundColor: T.accent, borderRadius: 3 }}>去填写结果</button>
+            </div>
+          </motion.section>
+        )}
 
         {/* Main Fortune Card */}
         <motion.div

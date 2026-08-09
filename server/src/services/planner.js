@@ -20,13 +20,13 @@
 import { callLLM } from './llmRouter.js';
 import * as memoryService from './memoryService.js';
 import * as toolProbeService from './toolProbeService.js';
-import { evaluate as evaluateAutonomy } from './autonomyGate.js';
 import * as agentEngine from './agentEngine.js';
 import logger from './logger.js';
 import eventBus from './eventBus.js';
 import { evidenceDomainEvent, planDomainEvents } from './agentEventSemantics.js';
 import { withRetry } from './retryHelper.js';
-import { buildQuickPlan, routeDeliberationDepth } from './deliberationDepthRouter.js';
+import { buildIntakePlan, buildQuickPlan, routeDeliberationDepth } from './deliberationDepthRouter.js';
+import { buildInformationOrchestration } from './informationSufficiency.js';
 import { buildDecisionCase } from './decisionCaseService.js';
 import OrchestratorAgent from '../agents/system/OrchestratorAgent.js';
 import { run as runAgent } from '../agents/AgentRunner.js';
@@ -34,7 +34,7 @@ import { run as runAgent } from '../agents/AgentRunner.js';
 // ============ 常量 ============
 
 const LLM_TIMEOUT_MS = 20000;
-const MIN_FINDINGS = 3;
+const MIN_FINDINGS = 2;
 
 export async function callPlannerLLM(messages, options = {}, runtime = {}) {
   const call = runtime.call || callLLM;
@@ -510,7 +510,35 @@ export async function plan(session, dependencies = {}) {
   const question = session.question_context || session.questionContext || session.question || '';
   logger.info('[Planner] Plan 阶段开始', { sessionId: session.id, userId, question: question.slice(0, 60) });
 
-  const depthRoute = routeDeliberationDepth(question);
+  const depthRoute = routeDeliberationDepth(session.question || question);
+  const adaptiveIntake = buildInformationOrchestration({
+    question,
+    answers: session.answers || [],
+    round: session.round,
+    depth: depthRoute.depth,
+  });
+  if (depthRoute.depth !== 'quick' && !adaptiveIntake.sufficiency.complete) {
+    const result = buildIntakePlan(session, adaptiveIntake, depthRoute);
+    const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
+    const saved = await saveSession(result.session);
+    result.session.id = saved.id || session.id;
+    const correlationId = `plan_${result.session.id}_${result.round}`;
+    for (const domainEvent of planDomainEvents(result.plan, result.askUser)) {
+      await eventBus.emit(result.session.id, {
+        ...domainEvent,
+        actor: 'planner',
+        correlationId,
+        taskId: domainEvent.data?.taskId,
+      });
+    }
+    logger.info('[Planner] 自适应信息门禁等待用户', {
+      sessionId: result.session.id,
+      depth: depthRoute.depth,
+      fieldId: result.askUser[0]?.fieldId,
+      readiness: result.readiness.status,
+    });
+    return result;
+  }
   if (depthRoute.depth === 'quick') {
     let quickOrchestration = null;
     try {
@@ -681,6 +709,9 @@ export async function plan(session, dependencies = {}) {
     askUser: [],
     minFindings: MIN_FINDINGS,
     analysis: agentResult.analysis || '',
+    informationFields: adaptiveIntake.informationFields,
+    informationStates: adaptiveIntake.sufficiency.fieldStates,
+    readiness: adaptiveIntake.sufficiency.readiness,
   };
 
   // 6. 自主性判定（Step 4 接入 autonomyGate）
@@ -691,29 +722,15 @@ export async function plan(session, dependencies = {}) {
   session.memory_used = [];
   session.replan_count = session.replan_count ?? 0;
 
-  // v3.0 零预设：autonomyGate 失败抛错，不降级到 EXECUTE
-  const autonomy = await evaluateAutonomy(session, confirmedMemories, toolResults);
-  let askUser = [];
-  let openingLine = autonomy.openingLine || '';
-  if (autonomy.action === 'ASK') {
-    session.state = 'WAIT';
-    session.askUser = autonomy.questions;
-    askUser = autonomy.questions;
-    logger.info('[Planner] 自主性判定 → ASK（转 WAIT）', {
-      round: autonomy.round,
-      source: autonomy.questions[0]?.source,
-      question: autonomy.questions[0]?.question,
-    });
-  } else {
-    session.state = 'READY';
-    session.askUser = [];
-    askUser = [];
-    logger.info('[Planner] 自主性判定 → EXECUTE', {
-      action: autonomy.action,
-      round: autonomy.round,
-      reason: autonomy.reason || '',
-    });
-  }
+  const askUser = [];
+  const openingLine = '案卷必需信息已收齐。接下来由编排总管提出阵容建议，再由你决定谁真正入席。';
+  session.state = 'READY';
+  session.askUser = [];
+  session.information_states = adaptiveIntake.sufficiency.fieldStates;
+  logger.info('[Planner] 自适应信息门禁通过 → READY', {
+    round: session.round,
+    coverage: adaptiveIntake.sufficiency.readiness.coverage,
+  });
 
   // 把 askUser/round/openingLine 回填进 plan，随 plan JSONB 字段持久化（saveSession 持久化 plan）
   deliberationPlan.askUser = askUser;

@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
-import { getCalendar, getUserId } from '../services/apiClient';
+import { getCards, getFollowUps, getUserId } from '../services/apiClient';
+import { buildDecisionCalendar } from './calendarModel';
 
 const T = {
   paper: '#F2EDE0',
@@ -26,29 +27,27 @@ export default function Calendar() {
   const navigate = useNavigate();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
-  const [collection, setCollection] = useState([]);
+  const [entries, setEntries] = useState([]);
+  const [loadError, setLoadError] = useState('');
 
-  // 加载推演记录：优先调 getCalendar 后端，失败降级 localStorage
-  const loadCollection = useCallback(async () => {
+  const loadCalendar = useCallback(async () => {
     try {
-      const remote = await getCalendar(getUserId());
-      if (Array.isArray(remote)) {
-        setCollection(remote);
-        try { localStorage.setItem('yance_collection', JSON.stringify(remote)); } catch {}
-        return;
-      }
+      const [cards, followUpResult] = await Promise.all([
+        getCards(getUserId()),
+        getFollowUps(),
+      ]);
+      setEntries(buildDecisionCalendar(cards, followUpResult?.items || []));
+      setLoadError('');
     } catch (e) {
-      console.warn('[Calendar] 后端不可用，降级 localStorage:', e.message);
+      console.warn('[Calendar] 决策日历加载失败:', e.message);
+      setEntries([]);
+      setLoadError(e?.message || '决策日历暂不可用');
     }
-    try {
-      const saved = JSON.parse(localStorage.getItem('yance_collection') || '[]');
-      setCollection(saved);
-    } catch {}
   }, []);
 
   useEffect(() => {
-    loadCollection();
-  }, [loadCollection]);
+    loadCalendar();
+  }, [loadCalendar]);
 
   const monthDays = useMemo(() => {
     const year = currentDate.getFullYear();
@@ -63,13 +62,12 @@ export default function Calendar() {
     
     for (let day = 1; day <= lastDay.getDate(); day++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const hasCard = collection.some(c => c.date?.startsWith(dateStr));
-      const cards = collection.filter(c => c.date?.startsWith(dateStr));
-      days.push({ day, dateStr, hasCard, cards, isEmpty: false });
+      const dayEntries = entries.filter((entry) => entry.date === dateStr);
+      days.push({ day, dateStr, hasCard: dayEntries.length > 0, entries: dayEntries, isEmpty: false });
     }
     
     return days;
-  }, [currentDate, collection]);
+  }, [currentDate, entries]);
 
   const prevMonth = () => {
     setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
@@ -121,8 +119,8 @@ export default function Calendar() {
           style={{ backgroundColor: T.paperLight, borderRadius: 4, border: `1px solid ${T.border}` }}
         >
           <div>
-            <div className="text-2xl font-serif font-bold" style={{ color: T.accent }}>{collection.length}</div>
-            <div className="text-[10px] font-mono" style={{ color: T.muted }}>总推演次数</div>
+            <div className="text-2xl font-serif font-bold" style={{ color: T.accent }}>{entries.filter((entry) => entry.kind === 'decision').length}</div>
+            <div className="text-[10px] font-mono" style={{ color: T.muted }}>真实命签</div>
           </div>
           <div className="w-px h-12" style={{ backgroundColor: T.border }} />
           <div>
@@ -131,10 +129,8 @@ export default function Calendar() {
           </div>
           <div className="w-px h-12" style={{ backgroundColor: T.border }} />
           <div>
-            <div className="text-2xl font-serif font-bold" style={{ color: T.ink }}>
-              {collection.length > 0 ? Math.round(30 * collection.length / monthDays.filter(d => !d.isEmpty).length) : 0}%
-            </div>
-            <div className="text-[10px] font-mono" style={{ color: T.muted }}>月活跃度</div>
+            <div className="text-2xl font-serif font-bold" style={{ color: T.ink }}>{entries.filter((entry) => entry.kind === 'follow-up' && entry.status === 'pending').length}</div>
+            <div className="text-[10px] font-mono" style={{ color: T.muted }}>待回访</div>
           </div>
         </motion.div>
 
@@ -175,7 +171,7 @@ export default function Calendar() {
                 </span>
                 {item.hasCard && (
                   <span className="absolute bottom-1 text-[8px]" style={{ color: T.accent }}>
-                    ×{item.cards.length}
+                    ×{item.entries.length}
                   </span>
                 )}
               </motion.div>
@@ -194,7 +190,7 @@ export default function Calendar() {
               className="overflow-hidden mt-8"
             >
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-serif font-bold">{selectedDate.dateStr} 的推演记录</h3>
+                <h3 className="text-lg font-serif font-bold">{selectedDate.dateStr} 的决策节点</h3>
                 <button
                   onClick={() => setSelectedDate(null)}
                   className="text-[10px] font-mono"
@@ -204,9 +200,9 @@ export default function Calendar() {
                 </button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {selectedDate.cards.map((card, i) => (
+                {selectedDate.entries.map((entry, i) => (
                   <motion.div
-                    key={card.id}
+                    key={`${entry.kind}:${entry.id}`}
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: i * 0.1 }}
@@ -214,11 +210,19 @@ export default function Calendar() {
                     style={{ backgroundColor: T.paperLight, borderRadius: 4, border: `1px solid ${T.border}` }}
                   >
                     <div className="flex items-center gap-2 mb-2">
-                      <span className="text-xl">{card.trigram}</span>
-                      <span className="text-[11px] font-semibold">{card.gua}</span>
+                      <span className="text-xl">{entry.kind === 'follow-up' ? '⏱' : entry.trigram || '☯'}</span>
+                      <span className="text-[11px] font-semibold">{entry.kind === 'follow-up' ? '结果回访' : entry.gua || '决策命签'}</span>
                     </div>
-                    <div className="text-[10px] font-mono mb-1" style={{ color: T.muted }}>{card.title}</div>
-                    <div className="text-[12px]">{card.decision}</div>
+                    <div className="text-[10px] font-mono mb-1" style={{ color: T.muted }}>{entry.title || entry.question}</div>
+                    <div className="text-[12px]">{entry.decision || entry.summary}</div>
+                    {entry.kind === 'follow-up' && (
+                      <button
+                        onClick={() => navigate('/collection')}
+                        style={{ minHeight: 44, marginTop: 10, padding: '8px 12px', color: T.accent, border: `1px solid ${T.accent}40`, borderRadius: 3 }}
+                      >
+                        {entry.status === 'completed' ? '查看回访' : '去记录结果'}
+                      </button>
+                    )}
                   </motion.div>
                 ))}
               </div>
@@ -227,7 +231,14 @@ export default function Calendar() {
         </AnimatePresence>
 
         {/* Empty State */}
-        {collection.length === 0 && (
+        {loadError && (
+          <div style={{ marginTop: 24, padding: 12, color: T.accent, border: `1px solid ${T.accent}40`, borderRadius: 4 }}>
+            {loadError}
+            <button onClick={loadCalendar} style={{ marginLeft: 12, minHeight: 44, padding: '6px 12px' }}>重试</button>
+          </div>
+        )}
+
+        {!loadError && entries.length === 0 && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

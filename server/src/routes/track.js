@@ -1,34 +1,37 @@
 /**
  * 埋点数据接收与聚合路由
- * - POST /api/track        接收前端批量埋点（存内存数组）
+ * - POST /api/track        接收前端批量埋点（持久化）
  * - GET  /api/track/metrics 返回聚合指标（首签完成率/LLM成功率/分享率/回访率）
  * - GET  /api/track/events   返回最近 N 条原始事件（调试用）
  * - POST /api/track/error    前端关键错误上报
  *
- * 存储策略：内存数组（最多 5000 条，溢出丢弃最旧），单实例部署够用
+ * 存储策略：PostgreSQL / 内存 DB adapter，同一签名用户隔离。
  */
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { recordLLMResult } from '../middleware/errorMonitor.js';
+import { requirePrincipal } from '../middleware/principal.js';
+import { query } from '../services/db.js';
+import { generateUUID } from '../utils/id.js';
 
 const router = Router();
 
-const MAX_EVENTS = 5000;
-const events = []; // 内存事件存储
-
-/**
- * 记录一条事件到内存
- */
-function pushEvent(event) {
-  if (!event || !event.event) return;
-  events.push(event);
-  if (events.length > MAX_EVENTS) {
-    events.splice(0, events.length - MAX_EVENTS);
-  }
+async function pushEvent(event, userId) {
+  if (!event || !event.event) return null;
+  const normalized = {
+    id: generateUUID(),
+    user_id: userId,
+    session_id: String(event.sessionId || '').slice(0, 120) || null,
+    event_name: String(event.event).slice(0, 80),
+    properties: event.properties && typeof event.properties === 'object' ? event.properties : {},
+    occurred_at: new Date(Number(event.timestamp) || Date.now()).toISOString(),
+  };
+  await query({ table: 'product_events', action: 'insert', data: normalized });
   // 同步给错误监控（用于 LLM 错误率告警）
   if (event.event === 'llm_result') {
-    recordLLMResult(event.properties);
+    recordLLMResult(normalized.properties);
   }
+  return normalized;
 }
 
 /**
@@ -37,6 +40,7 @@ function pushEvent(event) {
  */
 router.post(
   '/',
+  requirePrincipal,
   asyncHandler(async (req, res) => {
     const { events: batch } = req.body || {};
     if (!Array.isArray(batch) || batch.length === 0) {
@@ -45,7 +49,7 @@ router.post(
     // 限制单批大小
     const safe = batch.slice(0, 100);
     for (const e of safe) {
-      pushEvent(e);
+      await pushEvent(e, req.principal.userId);
     }
     res.json({ received: safe.length });
   })
@@ -58,10 +62,11 @@ router.post(
  */
 router.post(
   '/error',
+  requirePrincipal,
   asyncHandler(async (req, res) => {
     const { message, stack, phase } = req.body || {};
     if (!message) return res.status(400).json({ error: '缺少 message' });
-    pushEvent({
+    await pushEvent({
       event: 'error',
       userId: req.body.userId || 'unknown',
       sessionId: req.body.sessionId || 'unknown',
@@ -72,7 +77,7 @@ router.post(
         phase: phase ? String(phase) : undefined,
         source: 'frontend',
       },
-    });
+    }, req.principal.userId);
     res.json({ received: 1 });
   })
 );
@@ -87,7 +92,19 @@ router.post(
  */
 router.get(
   '/metrics',
+  requirePrincipal,
   asyncHandler(async (req, res) => {
+    const stored = await query({
+      table: 'product_events',
+      action: 'select',
+      filter: { user_id: req.principal.userId },
+      queryOptions: { orderBy: 'occurred_at:desc', limit: 5000 },
+    });
+    const events = (stored.rows || []).map((row) => ({
+      event: row.event_name,
+      timestamp: new Date(row.occurred_at).getTime(),
+      properties: typeof row.properties === 'string' ? JSON.parse(row.properties || '{}') : (row.properties || {}),
+    }));
     const now = Date.now();
     const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
     const thirtyDaysAgo = now - THIRTY_DAYS_MS;
@@ -148,16 +165,30 @@ router.get(
  */
 router.get(
   '/events',
+  requirePrincipal,
   asyncHandler(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 100, 1000);
     const eventFilter = req.query.event;
-    let result = events;
+    const stored = await query({
+      table: 'product_events',
+      action: 'select',
+      filter: { user_id: req.principal.userId },
+      queryOptions: { orderBy: 'occurred_at:desc', limit },
+    });
+    let result = (stored.rows || []).map((row) => ({
+      id: row.id,
+      event: row.event_name,
+      userId: row.user_id,
+      sessionId: row.session_id,
+      timestamp: new Date(row.occurred_at).getTime(),
+      properties: typeof row.properties === 'string' ? JSON.parse(row.properties || '{}') : (row.properties || {}),
+    }));
     if (eventFilter) {
-      result = events.filter((e) => e.event === eventFilter);
+      result = result.filter((e) => e.event === eventFilter);
     }
     res.json({
-      events: result.slice(-limit).reverse(),
-      total: events.length,
+      events: result.slice(0, limit),
+      total: result.length,
     });
   })
 );

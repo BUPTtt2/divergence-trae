@@ -5,6 +5,8 @@ export const DELIBERATION_EXECUTE_STATE = Object.freeze({
   FAILED: 'FAILED',
   PAUSED: 'PAUSED',
   READY: 'READY',
+  DELIBERATION_BLOCKED: 'DELIBERATION_BLOCKED',
+  ROUND_REVIEW: 'ROUND_REVIEW',
 });
 
 function nonEmptyString(value, field) {
@@ -62,5 +64,7 @@ export function normalizeExecuteResponse(input = {}) {
     caseFile: input.caseFile || null,
     askUser: Array.isArray(input.askUser) ? input.askUser : [],
     interruption: input.interruption || null,
+    contributionGate: input.contributionGate || null,
+    advisorFailures: Array.isArray(input.advisorFailures) ? input.advisorFailures : [],
   };
 }

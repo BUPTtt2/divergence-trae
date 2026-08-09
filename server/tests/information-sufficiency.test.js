@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   assessInformationSufficiency,
   buildQuickInformationFields,
+  interpretInformationAnswer,
 } from '../src/services/informationSufficiency.js';
 
 test('food quick planning asks for three independent decision fields without assuming hunger', () => {
@@ -30,6 +31,49 @@ test('one ambiguous reply does not close every information gap', () => {
   assert.equal(result.complete, false);
   assert.deepEqual(result.answeredFieldIds, []);
   assert.equal(result.missingFields.length, 3);
+  assert.equal(result.nextQuestion.id, 'body_signal');
+  assert.equal(result.readiness.status, 'collecting');
+});
+
+test('bare number stays ambiguous when body signal question has no scale', () => {
+  const field = buildQuickInformationFields('要不要吃饭')[0];
+  const result = interpretInformationAnswer({ field, answer: '2', question: field.prompt });
+
+  assert.equal(result.status, 'ambiguous');
+  assert.match(result.followUp, /2.*指|量表|选项/);
+  assert.equal(result.normalizedValue, '');
+});
+
+test('food intake asks one next question and uses the prior interpretation', () => {
+  const fields = buildQuickInformationFields('要不要吃饭');
+  const first = assessInformationSufficiency({ question: '要不要吃饭', answers: [], fields, round: 1 });
+  assert.equal(first.nextQuestion.id, 'body_signal');
+
+  const second = assessInformationSufficiency({
+    question: '要不要吃饭',
+    fields,
+    round: 2,
+    answers: [{ fieldId: 'body_signal', answer: '只是嘴馋，没有明显饥饿感' }],
+  });
+
+  assert.equal(second.nextQuestion.id, 'meal_context');
+  assert.equal(second.readiness.status, 'collecting');
+  assert.equal(second.fieldStates.find((field) => field.id === 'body_signal').status, 'answered');
+});
+
+test('an ambiguous answer is followed up on the same field before dependent questions', () => {
+  const fields = buildQuickInformationFields('要不要吃饭');
+  const result = assessInformationSufficiency({
+    question: '要不要吃饭',
+    fields,
+    round: 2,
+    answers: [{ fieldId: 'body_signal', answer: '2' }],
+  });
+
+  assert.equal(result.nextQuestion.id, 'body_signal');
+  assert.equal(result.nextQuestion.source, 'rule-gate');
+  assert.match(result.nextQuestion.prompt, /2.*指|量表|选项/);
+  assert.deepEqual(result.readiness.unresolvedAmbiguities, ['body_signal']);
 });
 
 test('field-specific food answers can reveal a weight-management intent and upgrade depth', () => {
@@ -47,6 +91,8 @@ test('field-specific food answers can reveal a weight-management intent and upgr
 
   assert.equal(result.complete, true);
   assert.deepEqual(result.missingFields, []);
+  assert.equal(result.nextQuestion, null);
+  assert.equal(result.readiness.status, 'review');
   assert.equal(result.escalation.changed, true);
   assert.equal(result.escalation.to, 'standard');
   assert.ok(result.intentSignals.includes('weight_management'));
@@ -67,4 +113,6 @@ test('explicitly skipped fields remain unknown but authorize a conditional quick
   assert.equal(result.complete, true);
   assert.equal(result.authorizedUnknowns, true);
   assert.equal(result.missingFields.length, 3);
+  assert.deepEqual(result.readiness.authorizedUnknowns, fields.map((field) => field.id));
+  assert.equal(result.readiness.status, 'review');
 });

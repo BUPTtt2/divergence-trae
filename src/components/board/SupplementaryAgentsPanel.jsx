@@ -2,11 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { SUPPLEMENTARY_AGENTS } from '../../data/supplementaryAgents';
-import {
-  getCustomAgents,
-  getMarketAgents,
-  recommendSubscribedAgents,
-} from '../../utils/customAgent';
+import { listAdvisorAssets } from '../../services/advisorClient';
 
 const BORDER_COLOR = '#C8A850';
 const GLOW_COLOR = '#F0D890';
@@ -24,18 +20,35 @@ export default function SupplementaryAgentsPanel({
   const [recommendedMarket, setRecommendedMarket] = useState([]);
 
   useEffect(() => {
-    try {
-      const saved = getCustomAgents();
-      setCustomAgentsList(saved);
-      const market = getMarketAgents();
-      setMarketAgents(market);
-      if (questionContext) {
-        const recs = recommendSubscribedAgents(questionContext);
-        setRecommendedMarket(recs);
-      }
-    } catch (e) {
-      console.warn('加载Agent列表失败', e);
-    }
+    let cancelled = false;
+    Promise.all([listAdvisorAssets('mine'), listAdvisorAssets('market')])
+      .then(([mine, market]) => {
+        if (cancelled) return;
+        setCustomAgentsList(mine);
+        setMarketAgents(market);
+        const tokens = String(questionContext || '').match(/[\u4e00-\u9fa5]{2,4}/g) || [];
+        const recommended = mine
+          .filter((agent) => agent.isSubscribed)
+          .map((agent) => ({
+            agent,
+            score: tokens.reduce((score, token) => (
+              `${agent.name} ${agent.stance} ${agent.desc}`.includes(token) ? score + 1 : score
+            ), 0),
+          }))
+          .filter((item) => item.score > 0)
+          .sort((left, right) => right.score - left.score)
+          .slice(0, 2)
+          .map((item) => item.agent);
+        setRecommendedMarket(recommended);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn('加载真实智囊列表失败', error);
+        setCustomAgentsList([]);
+        setMarketAgents([]);
+        setRecommendedMarket([]);
+      });
+    return () => { cancelled = true; };
   }, [showSupplementary, questionContext]);
 
   const isAgentAdded = (agentId) => {

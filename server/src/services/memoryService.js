@@ -224,6 +224,28 @@ export async function claimExecute(sessionId, {
   }
 
   const persisted = await getSession(sessionId);
+  const completedRound = persisted?.execute_status === 'completed';
+  if (completedRound) {
+    if (persisted.execute_action_id === normalizedActionId) {
+      return { claimed: false, claimToken: null, session: persisted };
+    }
+    result = await query({
+      table: SESSIONS_TABLE,
+      action: 'compare-and-set',
+      id: sessionId,
+      expected: {
+        execute_action_id: persisted.execute_action_id,
+        execute_status: 'completed',
+        execute_claim_token: persisted.execute_claim_token,
+        execute_lease_expires_at: persisted.execute_lease_expires_at,
+      },
+      data,
+    });
+    if (result.rowCount === 1) {
+      return { claimed: true, claimToken, session: result.rows[0] };
+    }
+    return { claimed: false, claimToken: null, session: await getSession(sessionId) };
+  }
   const expired = persisted?.execute_status === 'running'
     && Number(persisted.execute_lease_expires_at) <= normalizedNow;
   if (!expired) return { claimed: false, claimToken: null, session: persisted };

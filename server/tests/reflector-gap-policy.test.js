@@ -42,3 +42,31 @@ test('partial perspective coverage is surfaced as unknown instead of rerunning e
     ['verified', 'unknown'],
   );
 });
+
+test('reflector fails closed when the confirmed council has not contributed', async () => {
+  const session = {
+    id: 'sess_missing_contributions',
+    question: '要不要吃饭',
+    state: 'REFLECT',
+    plan: {
+      depth: 'standard',
+      selectedAgentIds: ['health', 'reflection'],
+      dimensions: [],
+    },
+    findings: [],
+    tool_results: [],
+  };
+
+  const result = await reflect(session, {
+    callLLMFn: async () => null,
+    generateMasterSummaryFn: async () => {
+      throw new Error('insufficient findings must not reach summary generation');
+    },
+  });
+
+  assert.equal(result.session.state, 'DELIBERATION_BLOCKED');
+  assert.equal(result.oracle, null);
+  assert.deepEqual(result.session.dynamicChoices, []);
+  assert.equal(result.session.masterSummary, '');
+  assert.equal(result.contributionGate.allowed, false);
+});

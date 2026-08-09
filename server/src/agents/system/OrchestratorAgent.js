@@ -42,7 +42,7 @@ export class OrchestratorAgent extends BaseAgent {
         plan: {
           questionType: '即时日常选择',
           dimensions: orchestration.dimensions,
-          questions: orchestration.sufficiency.missingFields.map((field) => ({
+          questions: (orchestration.sufficiency.nextQuestion ? [orchestration.sufficiency.nextQuestion] : []).map((field) => ({
             id: field.id,
             dimension: field.id,
             text: field.prompt,

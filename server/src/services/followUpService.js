@@ -49,7 +49,14 @@ export async function getPendingFollowUps(userId) {
   return result.rows;
 }
 
-export async function completeFollowUp(followUpId, resultNote) {
+export async function completeFollowUp(followUpId, userId, resultNote, outcomeStatus = 'neutral') {
+  const existing = await query({
+    table: TABLE,
+    action: 'select',
+    filter: { id: followUpId, user_id: userId },
+    queryOptions: { limit: 1 },
+  });
+  if (!existing.rows[0]) return null;
   const result = await query({
     table: TABLE,
     action: 'update',
@@ -57,6 +64,7 @@ export async function completeFollowUp(followUpId, resultNote) {
     data: {
       status: 'completed',
       result_note: resultNote || '',
+      outcome_status: outcomeStatus,
     },
   });
 

@@ -23,6 +23,7 @@
  */
 
 import logger from './logger.js';
+import { validateDeliberationContribution } from './deliberationContribution.js';
 import { callLLM } from './llmRouter.js';
 import * as agentEngine from './agentEngine.js';
 import {
@@ -494,7 +495,7 @@ function buildControlledBusinessChoices(question) {
       gua: '乾',
       keyPoints: ['以已验证事实为基础', '先满足原有审批要求', '保留可撤回检查点'],
       topic: { ...topic },
-      provenance: 'controlled-business-template',
+      provenance: 'rule-fallback',
       generatedAdvice: null,
       isDynamic: true,
     },
@@ -507,7 +508,7 @@ function buildControlledBusinessChoices(question) {
       gua: '坎',
       keyPoints: ['等待关键信息补齐', '继续监测原有风险', '达到复核条件后重评'],
       topic: { ...topic },
-      provenance: 'controlled-business-template',
+      provenance: 'rule-fallback',
       generatedAdvice: null,
       isDynamic: true,
     },
@@ -520,7 +521,7 @@ function buildControlledBusinessChoices(question) {
       gua: '艮',
       keyPoints: ['延续当前业务安排', '记录事实与约束快照', '由用户决定后续变更'],
       topic: { ...topic },
-      provenance: 'controlled-business-template',
+      provenance: 'rule-fallback',
       generatedAdvice: null,
       isDynamic: true,
     },
@@ -548,23 +549,27 @@ function normalizeBusinessText(value, maxLength) {
 function preLensDialogue(findings) {
   const dialogueHistory = {};
   const agentIds = [];
+  const sourceFindings = [];
   for (const finding of Array.isArray(findings) ? findings : []) {
     if (!finding || finding.lensTaskId || finding.source === 'lens-review') continue;
     const agentId = String(finding.agentId || '').trim();
     const content = String(finding.content || '').trim();
     if (!agentId || !content) continue;
+    sourceFindings.push(finding);
     if (!dialogueHistory[agentId]) {
       dialogueHistory[agentId] = [];
       agentIds.push(agentId);
     }
     dialogueHistory[agentId].push(content);
   }
-  return { agentIds, dialogueHistory };
+  return { agentIds, dialogueHistory, sourceFindings };
 }
 
-function normalizeEvidenceDerivedSummary(generated) {
+function normalizeEvidenceDerivedSummary(generated, sourceRefs = {}) {
   const summary = normalizeBusinessText(generated?.summary, 360);
-  if (!summary || !Array.isArray(generated?.options) || generated.options.length === 0) return null;
+  const findingIds = [...new Set((sourceRefs.findingIds || []).filter(Boolean))];
+  const evidenceIds = [...new Set((sourceRefs.evidenceIds || []).filter(Boolean))];
+  if (!summary || findingIds.length === 0 || !Array.isArray(generated?.options) || generated.options.length === 0) return null;
   const choices = [];
   for (const [index, option] of generated.options.slice(0, 3).entries()) {
     const label = normalizeBusinessText(option?.label, 24);
@@ -580,7 +585,9 @@ function normalizeEvidenceDerivedSummary(generated) {
       icon: palette.icon,
       gua: '',
       keyPoints,
-      provenance: 'evidence-derived',
+      provenance: 'agent-evidence',
+      findingIds,
+      evidenceIds,
       generatedAdvice: null,
       isDynamic: true,
     });
@@ -590,10 +597,17 @@ function normalizeEvidenceDerivedSummary(generated) {
 
 async function buildBusinessDecisionProjection(session, findings, generateMasterSummaryFn) {
   const question = session?.questionContext || session?.question_context || session?.question || '';
-  const { agentIds, dialogueHistory } = preLensDialogue(findings);
+  const { agentIds, dialogueHistory, sourceFindings } = preLensDialogue(findings);
   try {
     const generated = await generateMasterSummaryFn(question, agentIds, dialogueHistory);
-    const normalized = normalizeEvidenceDerivedSummary(generated);
+    const sourceRefs = {
+      findingIds: sourceFindings.map((finding) => finding?.findingId || finding?.id).filter(Boolean),
+      evidenceIds: sourceFindings.flatMap((finding) => [
+        ...(Array.isArray(finding?.evidenceIds) ? finding.evidenceIds : []),
+        finding?.evidenceId,
+      ]).filter(Boolean),
+    };
+    const normalized = normalizeEvidenceDerivedSummary(generated, sourceRefs);
     if (normalized) return normalized;
   } catch (error) {
     logger.warn('[Reflector] Agent 总结失败，使用受控业务回退', { sessionId: session?.id, error: error.message });
@@ -640,6 +654,29 @@ export async function reflect(session, dependencies = {}) {
   const dimensions = session?.plan?.dimensions || [];
   const toolResults = session?.tool_results || session?.toolResults || [];
   const replanCount = Number(session?.replan_count) || 0;
+
+  const contributionGate = validateDeliberationContribution(session);
+  if (!contributionGate.allowed) {
+    session.state = 'DELIBERATION_BLOCKED';
+    session.oracle = null;
+    session.dynamicChoices = [];
+    session.masterSummary = '';
+    logger.warn('[Reflector] 智囊贡献不足，停止生成总结与命牌', {
+      sessionId: session?.id,
+      requiredCount: contributionGate.requiredCount,
+      actualCount: contributionGate.actualCount,
+    });
+    return {
+      session,
+      oracle: null,
+      conflicts: [],
+      gaps: [],
+      aggregated: null,
+      replanned: false,
+      reason: contributionGate.reason,
+      contributionGate,
+    };
+  }
 
   // 1. 聚合
   const aggregated = aggregateFindings(findings, toolResults);

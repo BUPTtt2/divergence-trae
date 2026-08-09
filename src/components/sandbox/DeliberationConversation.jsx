@@ -35,6 +35,40 @@ function ActivityTrail({ projection }) {
   );
 }
 
+function CouncilRound({ projection, assignments }) {
+  const projectedAgents = projection?.agents || {};
+  const advisors = (Array.isArray(assignments) ? assignments : [])
+    .filter((agent) => agent && agent.role !== 'master')
+    .map((agent) => ({ ...agent, ...(projectedAgents[agent.id] || {}) }));
+  const approval = projection?.approval;
+  const statusCopy = {
+    assigned: '等待执行',
+    running: '正在判断',
+    completed: '本轮已完成',
+    failed: '本轮失败',
+  };
+  if (advisors.length === 0) return null;
+  return (
+    <section className="deliberation-conversation__round" aria-label="本轮智囊判断">
+      <header>
+        <span><strong>本轮推演</strong><small>每条内容来自已确认智囊的独立调用</small></span>
+        <em>{approval?.contributionGate?.actualCount || advisors.filter((agent) => agent.contribution).length}/{approval?.contributionGate?.requiredCount || advisors.length} 已达门槛</em>
+      </header>
+      <ol>
+        {advisors.map((agent) => (
+          <li key={agent.id} data-status={agent.status || 'assigned'}>
+            <div><b>{agent.agentName || agent.name || agent.id}</b><span>{statusCopy[agent.status] || '等待执行'}</span></div>
+            <small>{agent.task || agent.reason || agent.assignmentReason || '围绕案卷给出独立判断'}</small>
+            {agent.contribution && <p>{agent.contribution}</p>}
+            {agent.status === 'failed' && <p className="is-failed">{agent.reason || '没有取得可用结论，可重试或更换智囊。'}</p>}
+          </li>
+        ))}
+      </ol>
+      {approval?.prompt && <p className="deliberation-conversation__round-prompt">{approval.prompt}</p>}
+    </section>
+  );
+}
+
 export default function DeliberationConversation({
   phase,
   question,
@@ -78,8 +112,9 @@ export default function DeliberationConversation({
     return onAdvance();
   };
 
-  const heading = isPlanning ? '正在理解你的问题' : isClarify ? clarifyInteraction.heading : '多智囊正在推演';
-  const subheading = answerPending ? '系统正在更新案卷与下一步计划' : '点击过程可查看真实 Session 事件';
+  const roundAwaitingReview = projection?.status === 'awaiting-round-review';
+  const heading = isPlanning ? '正在理解你的问题' : isClarify ? clarifyInteraction.heading : roundAwaitingReview ? '本轮判断已到齐' : '多智囊正在推演';
+  const subheading = answerPending ? '系统正在更新案卷与下一步计划' : roundAwaitingReview ? '先检查智囊观点，再决定是否进入汇总' : '点击过程可查看真实 Session 事件';
   const assignedAdvisors = (Array.isArray(assignments) ? assignments : []).filter((agent) => agent && agent.role !== 'master');
 
   return (
@@ -118,7 +153,9 @@ export default function DeliberationConversation({
 
       <ActivityTrail projection={projection} />
 
-      {assignedAdvisors.length > 0 && (
+      {isDebate && <CouncilRound projection={projection} assignments={assignedAdvisors} />}
+
+      {assignedAdvisors.length > 0 && !isDebate && (
         <section className="deliberation-conversation__assignments" aria-label="演的智囊分派">
           <header><strong>演·编排总管的分派</strong><small>{assignedAdvisors.length} 位智囊按问题动态加入</small></header>
           <p className="deliberation-conversation__manager-state">
@@ -165,7 +202,7 @@ export default function DeliberationConversation({
               ? <button type="button" className="is-secondary" onClick={onResume}>恢复推演</button>
               : <button type="button" className="is-secondary" onClick={() => onInterject('PAUSE')}>暂停推演</button>)}
             <button type="button" className="is-primary" onClick={isClarify ? submitClarifications : submit} disabled={answerPending || (isClarify && !clarificationComplete)}>
-              {isClarify ? clarifyInteraction.submitLabel : currentResponse.trim() ? `发送${MODE_COPY[mode][0]}` : '开始 / 继续推演'}
+              {isClarify ? clarifyInteraction.submitLabel : currentResponse.trim() ? `发送${MODE_COPY[mode][0]}` : roundAwaitingReview ? '确认本轮 · 进入汇总' : '开始 / 继续推演'}
             </button>
           </div>
         </div>

@@ -5,6 +5,8 @@ import {
   resolveSandboxRuntime,
   mapDeliberationPhase,
   mapServerStateToInternalPhase,
+  mapSessionToInternalPhase,
+  selectedAdvisorIdsForSession,
   adaptFateTicket,
 } from './sandboxRuntime.js';
 import * as sandboxRuntime from './sandboxRuntime.js';
@@ -31,6 +33,32 @@ test('commit event cannot reset the Agent flow to idle before completion', () =>
   assert.equal(mapServerStateToInternalPhase('ORACLE'), 'choice');
   assert.equal(mapServerStateToInternalPhase('COMMIT'), 'committing');
   assert.equal(mapServerStateToInternalPhase('COMPLETE'), 'done');
+  assert.equal(mapServerStateToInternalPhase('ROUND_REVIEW'), 'debate');
+  assert.equal(mapServerStateToInternalPhase('DELIBERATION_BLOCKED'), 'debate');
+});
+
+test('a confirmed case pauses at council selection until the user confirms the lineup', () => {
+  assert.equal(mapSessionToInternalPhase({
+    state: 'EXECUTE',
+    plan: { councilStatus: 'draft', caseFile: { confirmedByUser: true } },
+  }), 'council');
+  assert.equal(mapSessionToInternalPhase({
+    state: 'EXECUTE',
+    plan: { councilStatus: 'confirmed', caseFile: { confirmedByUser: true } },
+  }), 'debate');
+});
+
+test('restored sessions preserve the council lineup confirmed by the user', () => {
+  assert.deepEqual(selectedAdvisorIdsForSession({
+    plan: {
+      councilStatus: 'confirmed',
+      selectedAgentIds: ['health'],
+      agents: [{ id: 'health' }, { id: 'risk' }],
+    },
+  }), ['health']);
+  assert.deepEqual(selectedAdvisorIdsForSession({
+    plan: { councilStatus: 'draft', agents: [{ id: 'health' }, { id: 'risk' }] },
+  }), []);
 });
 
 test('authoritative fate ticket is adapted to the existing view contract', () => {

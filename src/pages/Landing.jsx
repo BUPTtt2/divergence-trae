@@ -1147,6 +1147,11 @@ export default function Landing() {
   const { scrollY } = useScroll();
   const heroY = useTransform(scrollY, [0, 600], [0, -60]);
   const baguaRotate = useTransform(scrollY, [0, 800], [0, 30]);
+  const [hasActiveSession, setHasActiveSession] = useState(false);
+
+  useEffect(() => {
+    try { setHasActiveSession(Boolean(sessionStorage.getItem('yance_active_deliberation_session'))); } catch { setHasActiveSession(false); }
+  }, []);
 
   /* 首访引导 - 7 步惊艳序列 */
   const [showGuide, setShowGuide] = useState(() => {
@@ -1287,7 +1292,7 @@ export default function Landing() {
                   className="px-6 py-3 text-[12px] font-medium text-white"
                   style={{ backgroundColor: T.ink, borderRadius: 3 }}
                 >
-                  立卦开演
+                  {hasActiveSession ? '继续上次推演' : '立卦开演'}
                 </motion.button>
                 <motion.button
                   whileHover={{ y: -2 }}
@@ -1853,5 +1858,4 @@ export default function Landing() {
     </div>
   );
 }
-
 

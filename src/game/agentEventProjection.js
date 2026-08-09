@@ -5,6 +5,10 @@ const MOTION_BY_EVENT = Object.freeze({
   CASE_DRAFTED: 'case-review',
   MEMORY_RECALLED: 'memory-review',
   CASE_CONFIRMED: 'case-confirmed',
+  COUNCIL_CONFIRMED: 'council-confirmed',
+  ROUND_STARTED: 'round-start',
+  ROUND_AWAITING_USER: 'round-review',
+  CONCLUSION_READY: 'conclusion-ready',
   TOOL_STARTED: 'evidence-search',
   EVIDENCE_ACCEPTED: 'evidence-accepted',
   EVIDENCE_REJECTED: 'evidence-rejected',
@@ -27,7 +31,11 @@ function activityFor(event) {
     UNKNOWN_IDENTIFIED: ['发现信息缺口', payload.reason || payload.question || payload.label || '需要补充关键信息'],
     CASE_DRAFTED: ['案卷已形成', `${payload.factCount || 0} 项事实、${payload.unknownCount || 0} 项未知，等待你确认`],
     MEMORY_RECALLED: ['发现相关历史信息', `${payload.count || 0} 条记忆待你决定是否用于本轮`],
-    CASE_CONFIRMED: ['案卷已确认', `${payload.factCount || 0} 项事实已封存，开始推演`],
+    CASE_CONFIRMED: ['案卷已确认', `${payload.factCount || 0} 项事实已封存，等待你确认智囊阵容`],
+    COUNCIL_CONFIRMED: ['智囊会已定', `${payload.advisorCount || 0} 位智囊已入阵，开始执行本局任务`],
+    ROUND_STARTED: ['本轮开始', `${(payload.advisorIds || []).length} 位已确认智囊正在独立判断`],
+    ROUND_AWAITING_USER: ['本轮等待你确认', payload.prompt || payload.reason || '可追问、纠正、补充或继续汇总'],
+    CONCLUSION_READY: ['贡献门槛已通过', `${payload.contributionGate?.actualCount || 0} 位智囊结论将进入汇总`],
     USER_INTERJECTED: [
       payload.commandType === 'CORRECTION' ? '你纠正了案卷' : payload.commandType === 'QUESTION' ? '你追问了智囊' : payload.commandType === 'PAUSE' ? '你要求暂停' : '你补充了事实',
       payload.content || '指令已进入推演队列',
@@ -37,6 +45,7 @@ function activityFor(event) {
     AGENT_STARTED: [`${payload.agentName || '智囊'}开始处理`, payload.taskLabel || payload.taskId || '正在执行任务'],
     AGENT_COMPLETED: [`${payload.agentName || '智囊'}完成任务`, payload.summary || payload.finding || '贡献已写入案卷'],
     AGENT_FAILED: [`${payload.agentName || '智囊'}执行失败`, payload.reason || payload.error || '主链将继续处理'],
+    ADVISOR_FAILED: [`${payload.agentName || '智囊'}未完成判断`, payload.reason || '可重试或返回智囊会更换'],
     ADVISOR_SPEAK: [`${payload.agentName || '智囊'}提出判断`, payload.content || '公开贡献已写入案卷'],
     TOOL_STARTED: ['开始查证', payload.query || payload.tool || '正在调用证据工具'],
     EVIDENCE_ACCEPTED: ['证据已入卷', payload.summary || payload.sourceName || '来源已记录'],
@@ -209,14 +218,36 @@ export function applyAgentEvent(state, event, options = {}) {
       next.status = 'awaiting-case-confirmation';
       break;
     case 'CASE_CONFIRMED':
+      next.status = 'awaiting-council-confirmation';
+      break;
+    case 'COUNCIL_CONFIRMED': {
       next.status = 'executing';
+      const selectedIds = new Set(Array.isArray(payload.advisorIds) ? payload.advisorIds : []);
+      if (selectedIds.size > 0) {
+        next.agents = Object.fromEntries(
+          Object.entries(state.agents || {}).filter(([agentId]) => selectedIds.has(agentId)),
+        );
+      }
+      break;
+    }
+    case 'ROUND_STARTED':
+      next.status = 'executing';
+      break;
+    case 'ROUND_AWAITING_USER':
+      next.status = 'awaiting-round-review';
+      next.approval = { ...payload, eventId: event.eventId };
+      break;
+    case 'CONCLUSION_READY':
+      next.status = 'reflecting';
+      next.approval = null;
       break;
     case 'AGENT_ASSIGNED':
     case 'AGENT_STARTED':
     case 'AGENT_COMPLETED':
-    case 'AGENT_FAILED': {
+    case 'AGENT_FAILED':
+    case 'ADVISOR_FAILED': {
       const agentId = payload.agentId || event.actorId;
-      const status = ({ AGENT_ASSIGNED: 'assigned', AGENT_STARTED: 'running', AGENT_COMPLETED: 'completed', AGENT_FAILED: 'failed' })[event.type];
+      const status = ({ AGENT_ASSIGNED: 'assigned', AGENT_STARTED: 'running', AGENT_COMPLETED: 'completed', AGENT_FAILED: 'failed', ADVISOR_FAILED: 'failed' })[event.type];
       next.agents = { ...state.agents, [agentId]: { ...state.agents[agentId], ...payload, id: agentId, status, taskId: payload.taskId || event.taskId } };
       break;
     }
@@ -341,7 +372,9 @@ export function projectSessionSnapshot(session = {}, options = {}) {
     label: dimension.name || dimension.label || String(dimension),
     status: 'restored',
   })));
-  projection.agents = Object.fromEntries((session.plan?.agents || []).filter((agent) => agent?.id).map((agent) => [
+  const confirmedIds = new Set(session.plan?.councilStatus === 'confirmed' ? (session.plan?.selectedAgentIds || []) : []);
+  const restoredAgents = (session.plan?.agents || []).filter((agent) => agent?.id && (confirmedIds.size === 0 || confirmedIds.has(agent.id)));
+  projection.agents = Object.fromEntries(restoredAgents.map((agent) => [
     agent.id,
     { ...agent, agentId: agent.id, agentName: agent.name, status: 'restored' },
   ]));
@@ -355,6 +388,15 @@ export function projectSessionSnapshot(session = {}, options = {}) {
     const id = finding.id || finding.claimId || `snapshot_claim_${index + 1}`;
     return [id, { ...finding, id, status: 'restored' }];
   }));
+  for (const finding of session.findings || []) {
+    if (!finding?.agentId || !projection.agents[finding.agentId]) continue;
+    projection.agents[finding.agentId] = {
+      ...projection.agents[finding.agentId],
+      status: 'completed',
+      contribution: finding.claim || finding.content || '',
+      findingId: finding.findingId || finding.id,
+    };
+  }
   projection.revisions = Array.from({ length: Math.min(Number(session.replanCount || 0), 20) }, (_, index) => ({
     id: `snapshot_revision_${index + 1}`,
     status: 'restored',
@@ -390,6 +432,7 @@ export function projectSessionSnapshot(session = {}, options = {}) {
   projection.lastSequence = Number(options.lastSequence || 0);
   projection.status = ({
     PLAN: 'planning', WAIT: 'planning', EXECUTE: 'researching', DELIBERATE: 'researching',
+    ROUND_REVIEW: 'awaiting-round-review', DELIBERATION_BLOCKED: 'degraded',
     REFLECT: 'researching', ORACLE: 'awaiting-approval', COMMIT: 'committing', COMPLETE: 'completed',
     FAILED: 'degraded',
   })[session.state] || 'idle';
@@ -397,6 +440,13 @@ export function projectSessionSnapshot(session = {}, options = {}) {
     projection.approval = {
       prompt: '推演已形成分岔，请选择由你确认的路径。',
       choices: (session.dynamicChoices || []).map((choice) => ({ id: choice.id, label: choice.label })),
+      restored: true,
+    };
+  }
+  if (session.state === 'ROUND_REVIEW') {
+    projection.approval = {
+      prompt: '本轮智囊已完成独立判断。你可以追问、纠正、补充，或确认进入汇总。',
+      contributionGate: session.contributionGate || null,
       restored: true,
     };
   }

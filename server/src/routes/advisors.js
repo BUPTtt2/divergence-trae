@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requireUser } from '../middleware/auth.js';
+import { requirePrincipal } from '../middleware/principal.js';
 import {
   listAdvisors,
   getAdvisor,
@@ -8,6 +9,12 @@ import {
   updateAdvisor,
   deleteAdvisor,
 } from '../services/customAdvisorService.js';
+import {
+  listCatalog,
+  publishOwnedAdvisor,
+  subscribeAdvisor,
+  unsubscribeAdvisor,
+} from '../services/advisorCatalogService.js';
 
 const router = Router();
 
@@ -28,6 +35,58 @@ function validateLength(obj, fields) {
   }
   return null;
 }
+
+router.get(
+  '/catalog',
+  requirePrincipal,
+  asyncHandler(async (req, res) => {
+    const assets = await listCatalog({
+      userId: req.principal.userId,
+      source: String(req.query.source || 'all'),
+      query: String(req.query.query || ''),
+      limit: req.query.limit,
+    });
+    res.json({ assets, total: assets.length, source: String(req.query.source || 'all') });
+  })
+);
+
+router.post(
+  '/market/:id/subscribe',
+  requirePrincipal,
+  asyncHandler(async (req, res) => {
+    const result = await subscribeAdvisor({
+      userId: req.principal.userId,
+      publishedAdvisorId: req.params.id,
+    });
+    if (!result) return res.status(404).json({ error: '市集智囊不存在' });
+    return res.status(result.created ? 201 : 200).json(result);
+  })
+);
+
+router.delete(
+  '/market/:id/subscribe',
+  requirePrincipal,
+  asyncHandler(async (req, res) => {
+    const result = await unsubscribeAdvisor({
+      userId: req.principal.userId,
+      publishedAdvisorId: req.params.id,
+    });
+    res.json(result);
+  })
+);
+
+router.post(
+  '/:id/publish',
+  requirePrincipal,
+  asyncHandler(async (req, res) => {
+    const result = await publishOwnedAdvisor({
+      userId: req.principal.userId,
+      advisorId: req.params.id,
+    });
+    if (!result) return res.status(404).json({ error: '智囊不存在或无权发布' });
+    return res.status(result.created ? 201 : 200).json(result);
+  })
+);
 
 router.get(
   '/',
@@ -64,6 +123,7 @@ router.post(
     if (lenErr) return res.status(400).json({ error: lenErr });
 
     const advisor = await createAdvisor(req.userId, {
+      ...req.body,
       name,
       persona,
       perspective,

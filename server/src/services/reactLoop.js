@@ -29,6 +29,7 @@ import eventBus from './eventBus.js';
 import { evidenceDomainEvent } from './agentEventSemantics.js';
 import * as memoryService from './memoryService.js';
 import { consumePendingCommands } from './deliberationCommandService.js';
+import { validateDeliberationContribution } from './deliberationContribution.js';
 
 const MAX_ROUNDS = 4;
 const MAX_LLM_CALLS = 12;
@@ -88,6 +89,65 @@ export function resolveAdvisorAgents(requestedAgentIds, advisorPool, fallbackCou
   }
 
   return resolved.length > 0 ? resolved : pool.slice(0, fallbackCount);
+}
+
+function acceptedEvidenceIds(state) {
+  return (state.toolResults || [])
+    .map((result) => result?.evidence?.id || result?.evidence?.evidenceId)
+    .filter(Boolean);
+}
+
+function extractFindingSection(text, label, nextLabels) {
+  const escapedNext = nextLabels.map((item) => `【${item}】`).join('|');
+  const match = String(text || '').match(new RegExp(`【${label}】([\\s\\S]*?)(?=${escapedNext ? `(?:${escapedNext})|$` : '$'})`));
+  return String(match?.[1] || '').trim();
+}
+
+function splitFindingList(value) {
+  return String(value || '')
+    .split(/[；;\n]/)
+    .map((item) => item.trim().replace(/[。；;]+$/, ''))
+    .filter((item) => item && item !== '无' && item !== '暂无');
+}
+
+export function parseAdvisorFindingText(text) {
+  const normalized = String(text || '').trim();
+  const claim = extractFindingSection(normalized, '主张', ['依据', '假设', '反转条件']);
+  const reasoning = extractFindingSection(normalized, '依据', ['假设', '反转条件']);
+  const assumptions = splitFindingList(extractFindingSection(normalized, '假设', ['反转条件']));
+  const reversalConditions = splitFindingList(extractFindingSection(normalized, '反转条件', []));
+  return {
+    claim: claim || normalized,
+    reasoning,
+    assumptions,
+    reversalConditions,
+  };
+}
+
+function createAdvisorFinding(agent, content, state, round, index) {
+  const findingId = `finding_${round}_${agent.id}_${index + 1}`;
+  const parsed = parseAdvisorFindingText(content);
+  const evidenceIds = acceptedEvidenceIds(state);
+  return {
+    id: findingId,
+    findingId,
+    agentId: agent.id,
+    agentName: agent.name,
+    task: state.plan?.assignments?.find((assignment) => assignment.agentId === agent.id)?.task
+      || state.plan?.dimensions?.find((dimension) => dimension.perspective === perspectiveForAgent(agent))?.name
+      || '围绕用户问题给出独立判断',
+    claim: parsed.claim,
+    content,
+    reasoning: parsed.reasoning,
+    assumptions: parsed.assumptions,
+    confidence: 0.72,
+    evidenceIds,
+    evidenceRefs: evidenceIds,
+    reversalConditions: parsed.reversalConditions,
+    stance: agent.stance || '',
+    perspective: perspectiveForAgent(agent),
+    source: 'advisor-runtime',
+  };
 }
 
 /**
@@ -244,8 +304,11 @@ function parseThinkAction(text) {
  * @param {object} state 推演状态（可变，会追加 findings/toolResults/dialogue）
  * @returns {Promise<object>} { state: 'REFLECT'|'CLARIFY', askUser?: [...] }
  */
-async function applyUserCommands(sessionId, state) {
-  const commands = await consumePendingCommands(sessionId, state.userId);
+async function applyUserCommands(sessionId, state, dependencies = {}) {
+  const consumeCommands = dependencies.consumePendingCommandsFn || consumePendingCommands;
+  const emit = dependencies.emitFn || eventBus.emit.bind(eventBus);
+  const commands = await consumeCommands(sessionId, state.userId);
+  let openedNewRound = false;
   for (const command of commands) {
     const type = command.command_type;
     if (type === 'PAUSE') return { state: 'PAUSED', command };
@@ -254,9 +317,19 @@ async function applyUserCommands(sessionId, state) {
     const prefix = type === 'QUESTION'
       ? `用户向${command.target_agent_id || '智囊团'}追问`
       : '用户补充事实';
+    if (!openedNewRound) {
+      state.previousFindings = [...(state.findings || [])];
+      state.findings = [];
+      state.roundReviewConfirmed = false;
+      state.plan = {
+        ...(state.plan || {}),
+        deliberationRound: Number(state.plan?.deliberationRound || 1) + 1,
+      };
+      openedNewRound = true;
+    }
     state.questionContext = `${state.questionContext}\n${prefix}：${command.content}`.trim();
     state.dialogue.push({ role: 'user', content: `${prefix}：${command.content}`, round: 0 });
-    await eventBus.emit(sessionId, {
+    await emit(sessionId, {
       type: 'USER_CONTEXT_APPLIED',
       data: { commandId: command.id, commandType: type, content: command.content },
       actor: state.userId,
@@ -267,9 +340,77 @@ async function applyUserCommands(sessionId, state) {
   return null;
 }
 
-export async function runReActLoop(sessionId, state) {
+async function runConfirmedCouncil(sessionId, state, round, dependencies = {}) {
+  const emit = dependencies.emitFn || eventBus.emit.bind(eventBus);
+  const generateDialogue = dependencies.generateAgentDialogueFn || generateAgentDialogue;
+  const selectedIds = state.plan?.selectedAgentIds || [];
+  const selectedSet = new Set(selectedIds);
+  const pool = (state.advisorPool || []).filter((agent) => selectedSet.size === 0 || selectedSet.has(agent.id));
+  const completedIds = new Set((state.findings || []).map((finding) => finding.agentId));
+  const agents = pool.filter((agent) => !completedIds.has(agent.id));
+  const failures = [];
+
+  await emit(sessionId, {
+    type: 'ROUND_STARTED',
+    data: { round, advisorIds: agents.map((agent) => agent.id), purpose: '收集已确认智囊的独立判断' },
+    actor: 'yan', correlationId: state.actionId, taskId: `react_round_${round}`, visibility: 'public',
+  });
+
+  for (const [index, agent] of agents.entries()) {
+    await emit(sessionId, {
+      type: 'AGENT_STARTED',
+      data: { agentId: agent.id, agentName: agent.name, taskId: `react_round_${round}` },
+      actor: agent.id, correlationId: state.actionId, taskId: `react_round_${round}`, visibility: 'public',
+    });
+    try {
+      const text = await withRetry(
+        () => withTimeout(
+          () => generateDialogue(
+            agent,
+            state.questionContext || state.question,
+            state.findings || [],
+            [],
+            state.userId,
+            { mode: 'finding', task: state.plan?.assignments?.find((assignment) => assignment.agentId === agent.id)?.task },
+          ),
+          ADVISOR_TIMEOUT_MS,
+          `智囊${agent.name}发言`,
+        ),
+        { retries: 1, delayMs: 1000, name: `agent_${agent.id}` },
+      );
+      const content = String(text || '').trim().slice(0, 600);
+      if (!content) throw new Error('智囊没有返回可用结论');
+      state.llmCallCount++;
+      const finding = createAdvisorFinding(agent, content, state, round, index);
+      state.findings = [...(state.findings || []), finding];
+      await emit(sessionId, {
+        type: 'ADVISOR_SPEAK',
+        data: finding,
+        actor: agent.id, correlationId: state.actionId, taskId: `react_round_${round}`, visibility: 'public',
+      });
+      await emit(sessionId, {
+        type: 'AGENT_COMPLETED',
+        data: { agentId: agent.id, agentName: agent.name, findingId: finding.findingId },
+        actor: agent.id, correlationId: state.actionId, taskId: `react_round_${round}`, visibility: 'public',
+      });
+    } catch (error) {
+      failures.push({ agentId: agent.id, agentName: agent.name, reason: error.message });
+      await emit(sessionId, {
+        type: 'ADVISOR_FAILED',
+        data: { agentId: agent.id, agentName: agent.name, reason: error.message, retryable: true },
+        actor: agent.id, correlationId: state.actionId, taskId: `react_round_${round}`, visibility: 'public',
+      });
+    }
+  }
+
+  return failures;
+}
+
+export async function runReActLoop(sessionId, state, dependencies = {}) {
   const startTime = Date.now();
   state.llmCallCount = state.llmCallCount || 0;
+  const callLanguageModel = dependencies.callLLMFn || callLLM;
+  const emit = dependencies.emitFn || eventBus.emit.bind(eventBus);
 
   // ===== P6：ReAct 循环开始前预加载记忆（一次加载，全程复用，避免重复查库）=====
   let cachedMemories = { profile: '', related: [] };
@@ -316,7 +457,7 @@ export async function runReActLoop(sessionId, state) {
   };
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
-    const interruption = await applyUserCommands(sessionId, state);
+    const interruption = await applyUserCommands(sessionId, state, dependencies);
     if (interruption) return interruption;
     // 超时检查
     if (Date.now() - startTime > DELIBERATE_TIMEOUT_MS) {
@@ -338,7 +479,7 @@ export async function runReActLoop(sessionId, state) {
     try {
       thinkText = await withRetry(
         () => withTimeout(
-          () => callLLM(
+          () => callLanguageModel(
             [{ role: 'system', content: systemPrompt }, { role: 'user', content: blackboard }],
             { maxTokens: 300, temperature: 0.4 }
           ),
@@ -350,7 +491,7 @@ export async function runReActLoop(sessionId, state) {
     } catch (err) {
       logger.error('[ReAct] Think 失败', { sessionId, round, error: err.message });
       const errType = classifyLLMError(err);
-      eventBus.emit(sessionId, { type: 'ERROR', data: { error: `演思考失败: ${err.message}`, type: errType } });
+      await emit(sessionId, { type: 'ERROR', data: { error: `演思考失败: ${err.message}`, type: errType } });
       // Think 失败不预设，直接进入 REFLECT（用已有 findings）
       break;
     }
@@ -359,7 +500,7 @@ export async function runReActLoop(sessionId, state) {
     const action = parseThinkAction(thinkText);
 
     // 记录 Think 事件
-    await eventBus.emit(sessionId, {
+    await emit(sessionId, {
       type: 'REACT_THINK',
       data: { thought: action.reason, round },
       actor: 'yan',
@@ -367,7 +508,7 @@ export async function runReActLoop(sessionId, state) {
       taskId: `react_round_${round}`,
       visibility: 'internal',
     });
-    await eventBus.emit(sessionId, {
+    await emit(sessionId, {
       type: 'AGENT_STARTED',
       data: { agentId: 'yan', agentName: '演', taskId: `react_round_${round}`, label: `第 ${round} 轮推演` },
       actor: 'yan',
@@ -476,7 +617,7 @@ export async function runReActLoop(sessionId, state) {
             const batch = agents.slice(i, i + BATCH);
             const results = await Promise.allSettled(
               batch.map(async (agent) => {
-                await eventBus.emit(sessionId, {
+                await emit(sessionId, {
                   type: 'AGENT_STARTED',
                   data: { agentId: agent.id, agentName: agent.name, taskId: `react_round_${round}` },
                   actor: agent.id,
@@ -486,12 +627,13 @@ export async function runReActLoop(sessionId, state) {
                 });
                 const text = await withRetry(
                   () => withTimeout(
-                    () => generateAgentDialogue(
+                    () => (dependencies.generateAgentDialogueFn || generateAgentDialogue)(
                       agent,
                       state.questionContext || state.question,
                       state.findings || [],
                       [],
-                      state.userId
+                      state.userId,
+                      { mode: 'finding', task: state.plan?.assignments?.find((assignment) => assignment.agentId === agent.id)?.task }
                     ),
                     ADVISOR_TIMEOUT_MS,
                     `智囊${agent.name}发言`
@@ -500,29 +642,23 @@ export async function runReActLoop(sessionId, state) {
                 );
                 state.llmCallCount++;
 
-                const content = (text || '').slice(0, 300);
-                const perspective = perspectiveForAgent(agent);
-                const finding = {
-                  agentId: agent.id,
-                  agentName: agent.name,
-                  content,
-                  stance: agent.stance || '',
-                  perspective,
-                };
+                const content = String(text || '').trim().slice(0, 600);
+                if (!content) throw new Error('智囊没有返回可用结论');
+                const finding = createAdvisorFinding(agent, content, state, round, i);
 
                 if (!state.findings) state.findings = [];
                 state.findings.push(finding);
 
                 // 记录事件 + 推送 SSE
-                await eventBus.emit(sessionId, {
+                await emit(sessionId, {
                   type: 'ADVISOR_SPEAK',
-                  data: { agentId: agent.id, agentName: agent.name, content, stance: agent.stance || '', perspective },
+                  data: finding,
                   actor: agent.id,
                   correlationId: state.actionId,
                   taskId: `react_round_${round}`,
                   visibility: 'public',
                 });
-                await eventBus.emit(sessionId, {
+                await emit(sessionId, {
                   type: 'AGENT_COMPLETED',
                   data: { agentId: agent.id, agentName: agent.name, taskId: `react_round_${round}` },
                   actor: agent.id,
@@ -538,12 +674,13 @@ export async function runReActLoop(sessionId, state) {
             const failed = results.filter((r) => r.status === 'rejected');
             if (failed.length === batch.length && batch.length > 0) {
               logger.error('[ReAct] 智囊批次全失败', { sessionId, round, agents: batch.map((a) => a.id) });
-              eventBus.emit(sessionId, {
-                type: 'ERROR',
-                data: { error: `智囊发言失败: ${failed[0].reason?.message || '未知'}` },
-              });
+              await Promise.all(batch.map((agent, failedIndex) => emit(sessionId, {
+                type: 'ADVISOR_FAILED',
+                data: { agentId: agent.id, agentName: agent.name, reason: failed[failedIndex]?.reason?.message || '未知', retryable: true },
+                actor: agent.id, correlationId: state.actionId, taskId: `react_round_${round}`, visibility: 'public',
+              })));
             }
-            const interruption = await applyUserCommands(sessionId, state);
+            const interruption = await applyUserCommands(sessionId, state, dependencies);
             if (interruption) return interruption;
           }
           observation = `${agents.length}位智囊已发言`;
@@ -618,7 +755,53 @@ export async function runReActLoop(sessionId, state) {
     elapsed: Date.now() - startTime,
   });
 
-  return { state: 'REFLECT' };
+  let contributionGate = validateDeliberationContribution(state);
+  let advisorFailures = [];
+  if (!contributionGate.allowed) {
+    advisorFailures = await runConfirmedCouncil(
+      sessionId,
+      state,
+      Math.min(MAX_ROUNDS + 1, 5),
+      dependencies,
+    );
+    contributionGate = validateDeliberationContribution(state);
+  }
+
+  if (!contributionGate.allowed) {
+    await emit(sessionId, {
+      type: 'ROUND_AWAITING_USER',
+      data: {
+        reason: contributionGate.reason,
+        contributionGate,
+        advisorFailures,
+        actions: ['retry_failed_advisors', 'replace_advisor', 'return_to_council'],
+      },
+      actor: 'yan', correlationId: state.actionId, visibility: 'public',
+    });
+    return { state: 'DELIBERATION_BLOCKED', contributionGate, advisorFailures };
+  }
+
+  if (state.roundReviewConfirmed !== true) {
+    await emit(sessionId, {
+      type: 'ROUND_AWAITING_USER',
+      data: {
+        round: state.plan?.deliberationRound || 1,
+        contributionGate,
+        findingIds: (state.findings || []).map((finding) => finding.findingId).filter(Boolean),
+        prompt: '本轮智囊已完成独立判断。你可以追问、纠正、补充，或确认进入汇总。',
+        actions: ['question_advisor', 'correct_case', 'supplement_fact', 'continue_to_summary'],
+      },
+      actor: 'yan', correlationId: state.actionId, visibility: 'public',
+    });
+    return { state: 'ROUND_REVIEW', contributionGate };
+  }
+
+  await emit(sessionId, {
+    type: 'CONCLUSION_READY',
+    data: { contributionGate, findingIds: (state.findings || []).map((finding) => finding.findingId).filter(Boolean) },
+    actor: 'yan', correlationId: state.actionId, visibility: 'public',
+  });
+  return { state: 'REFLECT', contributionGate };
 }
 
 export default { runReActLoop };

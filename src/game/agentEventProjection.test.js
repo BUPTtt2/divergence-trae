@@ -86,6 +86,35 @@ test('advisor speech enters the readable activity trail as a public contribution
   assert.equal(state.agents.health.status, 'running');
 });
 
+test('round review exposes the user gate and preserves advisor contributions', () => {
+  let state = createArenaProjection();
+  state = applyAgentEvent(state, event(1, 'ADVISOR_SPEAK', {
+    agentId: 'health', agentName: '衡生', content: '先确认身体信号。', findingId: 'finding_health',
+  }));
+  state = applyAgentEvent(state, event(2, 'ROUND_AWAITING_USER', {
+    prompt: '检查本轮观点后再进入汇总。',
+    contributionGate: { actualCount: 1, requiredCount: 1 },
+  }));
+
+  assert.equal(state.status, 'awaiting-round-review');
+  assert.equal(state.agents.health.contribution, '先确认身体信号。');
+  assert.equal(state.approval.contributionGate.actualCount, 1);
+  assert.equal(state.activity.at(-1).title, '本轮等待你确认');
+});
+
+test('council confirmation keeps only the advisors the user actually selected', () => {
+  let state = createArenaProjection();
+  state = applyAgentEvent(state, event(1, 'AGENT_ASSIGNED', { agentId: 'health', agentName: '养生' }));
+  state = applyAgentEvent(state, event(2, 'AGENT_ASSIGNED', { agentId: 'risk', agentName: '风眼' }));
+  state = applyAgentEvent(state, event(3, 'COUNCIL_CONFIRMED', {
+    advisorIds: ['health'],
+    advisorCount: 1,
+  }));
+
+  assert.deepEqual(Object.keys(state.agents), ['health']);
+  assert.equal(state.activity.at(-1).detail, '1 位智囊已入阵，开始执行本局任务');
+});
+
 test('replayed events restore structure without entrance motion', () => {
   const state = applyAgentEvent(
     createArenaProjection(),
@@ -240,6 +269,23 @@ test('session snapshot restores arena structure before consuming missing events'
   assert.equal(state.motionCue, null);
   assert.equal(state.activity[0].title, '案卷已恢复');
   assert.match(state.activity[0].detail, /1 项任务、1 位智囊/);
+});
+
+test('round review snapshot restores only the confirmed council and its visible findings', () => {
+  const state = projectSessionSnapshot({
+    state: 'ROUND_REVIEW',
+    plan: {
+      councilStatus: 'confirmed',
+      selectedAgentIds: ['health'],
+      agents: [{ id: 'health', name: '衡生' }, { id: 'risk', name: '风眼' }],
+    },
+    findings: [{ findingId: 'finding_health', agentId: 'health', content: '先确认身体信号。' }],
+  });
+
+  assert.deepEqual(Object.keys(state.agents), ['health']);
+  assert.equal(state.agents.health.contribution, '先确认身体信号。');
+  assert.equal(state.status, 'awaiting-round-review');
+  assert.match(state.approval.prompt, /确认进入汇总/);
 });
 
 test('session snapshot restores Lens projection without replaying its ceremony', () => {

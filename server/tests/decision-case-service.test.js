@@ -93,6 +93,29 @@ test('decision case keeps inferred understanding separate from confirmed user fa
   assert.equal(decisionCase.unknowns[0].id, 'current_goal');
 });
 
+test('decision case keeps ambiguous answer out of confirmed facts', () => {
+  const informationFields = [{
+    id: 'body_signal',
+    prompt: '你此刻更接近哪种状态：真正饿、只是嘴馋、吃撑了，还是没有食欲？',
+    reason: '先区分身体需要和进食冲动。',
+    required: true,
+  }];
+  const decisionCase = buildDecisionCase({
+    session: {
+      question: '要不要吃饭',
+      answers: [{ fieldId: 'body_signal', answer: '2' }],
+    },
+    plan: { informationFields, askUser: [] },
+    depthRoute: { depth: 'quick', reason: '低风险日常选择', maxQuestions: 3 },
+  });
+
+  assert.equal(decisionCase.facts.length, 0);
+  assert.equal(decisionCase.unknowns[0].id, 'body_signal');
+  assert.equal(decisionCase.unknowns[0].status, 'ambiguous');
+  assert.equal(decisionCase.readiness.status, 'collecting');
+  assert.deepEqual(decisionCase.readiness.unresolvedAmbiguities, ['body_signal']);
+});
+
 test('explicitly skipped fields stay visible as authorized unknowns without blocking review', () => {
   const decisionCase = buildDecisionCase({
     session: {

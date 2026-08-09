@@ -4,7 +4,14 @@ import { useNavigate, Link } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
 import AppNav from '../components/AppNav';
 import { AGENT_MAP } from '../data/agents';
-import { getCustomAgents, deleteCustomAgent, publishAgent, getMarketAgents, subscribeAgent } from '../utils/customAgent';
+import {
+  listAdvisorAssets,
+  publishAdvisorAsset,
+  subscribeAdvisorAsset,
+  unsubscribeAdvisorAsset,
+} from '../services/advisorClient';
+import { deleteAdvisor } from '../services/deliberationClient';
+import { createPost, getCommunityPosts, likePost } from '../services/apiClient';
 import { getUserProfile, updateUserProfile, getAvatarOptions, getColorOptions, regenerateNickname } from '../utils/userProfile';
 import { useAuth } from '../context/AuthContext.jsx';
 
@@ -24,83 +31,10 @@ const T = {
 
 const EASE = [0.16, 1, 0.3, 1];
 
-const TOPICS = [
-  { id: 't1', title: '30 岁转行还来得及吗？', tag: '职业', heat: 2341, replies: 128, time: '12 分钟前', trigram: '☴' },
-  { id: 't2', title: '该不该为了薪资放弃兴趣？', tag: '财务', heat: 1820, replies: 95, time: '38 分钟前', trigram: '☰' },
-  { id: 't3', title: '创业 vs 打工的终极选择', tag: '人生', heat: 3104, replies: 210, time: '1 小时前', trigram: '☳' },
-  { id: 't4', title: '一段感情里该不该先提分手', tag: '情感', heat: 1456, replies: 73, time: '2 小时前', trigram: '☱' },
-  { id: 't5', title: '现在该不该梭哈 AI 概念股', tag: '财务', heat: 2891, replies: 184, time: '3 小时前', trigram: '☵' },
-  { id: 't6', title: '如何应对 35 岁职场天花板', tag: '职业', heat: 1967, replies: 112, time: '4 小时前', trigram: '☶' },
-];
-
-const SHARES = [
-  {
-    id: 's1', user: '云隐客', avatar: '云', color: '#5078A8',
-    gua: '乾', trigram: '☰', title: '辞职创业一年回看',
-    question: '离开大厂做 AI infra, 一年后回看这笔账',
-    decision: '抓住机会', verse: '元亨利贞。初九潜龙勿用。',
-    time: '2 小时前', likes: 247, replies: 38,
-  },
-  {
-    id: 's2', user: '清辉', avatar: '清', color: '#A87898',
-    gua: '咸', trigram: '☱', title: '长跑五年的关系抉择',
-    question: '该继续这段看不到未来的感情吗',
-    decision: '稳守当前', verse: '亨, 利贞。取女吉。',
-    time: '5 小时前', likes: 182, replies: 47,
-  },
-  {
-    id: 's3', user: '南山下', avatar: '南', color: '#508870',
-    gua: '渐', trigram: '☴', title: '从杭州到深圳的城市迁移',
-    question: '要不要去深圳加入新团队',
-    decision: '探索新路', verse: '渐之进也。女归吉, 利贞。',
-    time: '8 小时前', likes: 156, replies: 29,
-  },
-  {
-    id: 's4', user: '风止时', avatar: '风', color: '#A84848',
-    gua: '坎', trigram: '☵', title: '梭哈 AI 概念股后的反思',
-    question: '全仓 AI ETF, 一个月回撤 20%',
-    decision: '规避风险', verse: '习坎, 有孚, 维心亨。',
-    time: '1 天前', likes: 412, replies: 96,
-  },
-  {
-    id: 's5', user: '青竹', avatar: '青', color: '#C88848',
-    gua: '大有', trigram: '☰', title: 'Offer 抉择实录',
-    question: '新公司涨 40%, 团队未知',
-    decision: '抓住机会', verse: '元亨。柔得尊位。',
-    time: '1 天前', likes: 198, replies: 41,
-  },
-  {
-    id: 's6', user: '观海', avatar: '观', color: '#685888',
-    gua: '艮', trigram: '☶', title: '买不买房的半年推演',
-    question: '现在该不该入场',
-    decision: '稳守当前', verse: '艮其背, 不获其身。',
-    time: '2 天前', likes: 87, replies: 22,
-  },
-];
-
-const DISCUSSIONS = [
-  { id: 'd1', title: 'Agent 辩论机制真的能帮到决策吗？', replies: 42, lastActive: '1 小时前', tag: '机制' },
-  { id: 'd2', title: '希望增加「考研vs就业」剧本', replies: 67, lastActive: '30 分钟前', tag: '需求' },
-  { id: 'd3', title: '命运卡可以分享到小红书吗？', replies: 28, lastActive: '4 小时前', tag: '功能' },
-  { id: 'd4', title: '卦辞解读可以更通俗吗', replies: 35, lastActive: '2 小时前', tag: '建议' },
-  { id: 'd5', title: '镜渊这个 Agent 让我重新审视过往', replies: 51, lastActive: '3 小时前', tag: '反馈' },
-  { id: 'd6', title: '可否增加导出 PDF 功能', replies: 19, lastActive: '5 小时前', tag: '功能' },
-];
-
-const SAGES = [
-  { id: 'g1', name: '王司辰', desc: '36 次推演 · 8 次回望', count: 36, tag: '反思者' },
-  { id: 'g2', name: '林知远', desc: '24 次推演 · 创业向导', count: 24, tag: '探索者' },
-  { id: 'g3', name: '苏清越', desc: '52 次推演 · 情感专家', count: 52, tag: '共情者' },
-  { id: 'g4', name: '周慎言', desc: '18 次推演 · 风险偏好', count: 18, tag: '稳健派' },
-];
-
 const TABS = [
-  { id: 'discover', label: '发现' },
+  { id: 'discover', label: '真实分享' },
   { id: 'market', label: '智囊市集' },
-  { id: 'shares', label: '命签' },
-  { id: 'discuss', label: '讨论' },
   { id: 'my_agents', label: '我的智囊' },
-  { id: 'sages', label: '高人' },
 ];
 
 function formatDate(timestamp) {
@@ -128,221 +62,6 @@ function SectionTitle({ kicker, title, accent }) {
   );
 }
 
-function TopicRow({ topic, index }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, x: -10 }}
-      whileInView={{ opacity: 1, x: 0 }}
-      viewport={{ once: true, amount: 0.2 }}
-      transition={{ delay: index * 0.05, duration: 0.5, ease: EASE }}
-      whileHover={{ x: 4 }}
-      className="flex items-center gap-4 py-3.5 px-4 cursor-pointer group transition-colors"
-      style={{ borderBottom: `1px solid ${T.border}` }}
-    >
-      <div
-        className="w-10 h-10 flex items-center justify-center text-lg font-serif shrink-0"
-        style={{
-          color: T.accent,
-          backgroundColor: T.paperLight,
-          border: `1px solid ${T.border}`,
-          borderRadius: 3,
-        }}
-      >
-        {topic.trigram}
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <h3
-            className="text-[14px] font-medium truncate transition-colors"
-            style={{ color: T.ink }}
-          >
-            {topic.title}
-          </h3>
-        </div>
-        <div className="flex items-center gap-3 text-[10px] font-mono" style={{ color: T.muted }}>
-          <span
-            className="px-1.5 py-0.5"
-            style={{
-              color: T.accent,
-              backgroundColor: `${T.accent}10`,
-              border: `1px solid ${T.accent}30`,
-              borderRadius: 2,
-            }}
-          >
-            {topic.tag}
-          </span>
-          <span>热度 {topic.heat.toLocaleString()}</span>
-          <span>·</span>
-          <span>{topic.replies} 回复</span>
-          <span>·</span>
-          <span>{topic.time}</span>
-        </div>
-      </div>
-
-      <span
-        className="text-[11px] font-mono opacity-0 group-hover:opacity-100 transition-opacity"
-        style={{ color: T.accent }}
-      >
-        参与 →
-      </span>
-    </motion.div>
-  );
-}
-
-function ShareCard({ share, index }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, amount: 0.15 }}
-      transition={{ delay: index * 0.06, duration: 0.6, ease: EASE }}
-      whileHover={{ y: -4 }}
-      className="relative overflow-hidden cursor-pointer"
-      style={{
-        borderRadius: 6,
-        backgroundColor: '#0E0A06',
-        border: `1px solid ${share.color}40`,
-        boxShadow: `0 4px 24px ${share.color}20`,
-      }}
-    >
-      <div
-        className="relative px-5 py-4"
-        style={{ background: `linear-gradient(180deg, ${share.color}15 0%, transparent 100%)` }}
-      >
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2.5">
-            <div
-              className="w-9 h-9 flex items-center justify-center text-sm font-serif font-bold"
-              style={{
-                color: T.paperLight,
-                backgroundColor: share.color,
-                borderRadius: 3,
-                boxShadow: `0 0 12px ${share.color}80`,
-              }}
-            >
-              {share.avatar}
-            </div>
-            <div>
-              <div className="text-[13px] font-medium" style={{ color: T.paperLight }}>
-                {share.user}
-              </div>
-              <div className="text-[10px] font-mono" style={{ color: T.muted }}>{share.time}</div>
-            </div>
-          </div>
-          <div
-            className="text-3xl font-serif font-bold"
-            style={{
-              color: T.goldLight,
-              textShadow: `0 0 16px ${share.color}80`,
-            }}
-          >
-            {share.trigram}
-          </div>
-        </div>
-
-        <h3
-          className="text-[15px] font-serif font-semibold mb-1"
-          style={{ color: T.goldLight }}
-        >
-          {share.gua} · {share.title}
-        </h3>
-        <div className="text-[11px]" style={{ color: '#A09888' }}>
-          {share.question}
-        </div>
-      </div>
-
-      <div
-        className="px-5 py-3"
-        style={{
-          borderTop: `1px dashed ${share.color}30`,
-          borderBottom: `1px dashed ${share.color}30`,
-        }}
-      >
-        <div className="text-[10px] font-mono tracking-wider mb-1" style={{ color: T.muted }}>卦辞</div>
-        <div
-          className="text-[12px] font-serif leading-relaxed italic mb-2"
-          style={{ color: T.goldLight, opacity: 0.9 }}
-        >
-          {share.verse}
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-mono" style={{ color: T.muted }}>终局</span>
-          <span
-            className="text-[12px] font-serif font-semibold"
-            style={{ color: share.color, textShadow: `0 0 8px ${share.color}60` }}
-          >
-            择「{share.decision}」
-          </span>
-        </div>
-      </div>
-
-      <div
-        className="px-5 py-2.5 flex items-center justify-between"
-        style={{ backgroundColor: `${share.color}10` }}
-      >
-        <div className="flex items-center gap-4 text-[10px] font-mono" style={{ color: T.muted }}>
-          <span>♥ {share.likes}</span>
-          <span>◈ {share.replies}</span>
-        </div>
-        <span className="text-[10px] font-mono" style={{ color: share.color }}>
-          查看 →
-        </span>
-      </div>
-    </motion.div>
-  );
-}
-
-function SageCard({ sage, index }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, amount: 0.2 }}
-      transition={{ delay: index * 0.06, duration: 0.5, ease: EASE }}
-      whileHover={{ y: -3 }}
-      className="p-5 cursor-pointer"
-      style={{
-        borderRadius: 5,
-        backgroundColor: T.paperLight,
-        border: `1px solid ${T.border}`,
-      }}
-    >
-      <div className="flex items-center gap-3 mb-3">
-        <div
-          className="w-12 h-12 flex items-center justify-center text-base font-serif font-bold"
-          style={{
-            color: T.paperLight,
-            backgroundColor: T.ink,
-            borderRadius: 3,
-            boxShadow: `0 0 16px ${T.gold}40`,
-          }}
-        >
-          {sage.name[0]}
-        </div>
-        <div className="flex-1">
-          <div className="text-[13px] font-semibold" style={{ color: T.ink }}>{sage.name}</div>
-          <div className="text-[10px] font-mono" style={{ color: T.muted }}>{sage.desc}</div>
-        </div>
-      </div>
-      <div className="flex items-center justify-between pt-3" style={{ borderTop: `1px dashed ${T.border}` }}>
-        <span
-          className="text-[9px] font-mono px-1.5 py-0.5"
-          style={{
-            color: T.accent,
-            backgroundColor: `${T.accent}10`,
-            border: `1px solid ${T.accent}30`,
-            borderRadius: 2,
-          }}
-        >
-          {sage.tag}
-        </span>
-        <span className="text-[10px] font-mono" style={{ color: T.muted }}>关注 →</span>
-      </div>
-    </motion.div>
-  );
-}
-
 export default function Community() {
   const navigate = useNavigate();
   const { status, offline, user } = useAuth();
@@ -350,7 +69,6 @@ export default function Community() {
   const [customAgents, setCustomAgents] = useState([]);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [marketAgents, setMarketAgents] = useState([]);
-  const [publishedIds, setPublishedIds] = useState(new Set());
   const [subscribedTip, setSubscribedTip] = useState('');
   const [marketSort, setMarketSort] = useState('hot'); // hot | new
   const [marketSearch, setMarketSearch] = useState('');
@@ -360,6 +78,11 @@ export default function Community() {
   const [editBio, setEditBio] = useState('');
   const [editAvatar, setEditAvatar] = useState('');
   const [editColor, setEditColor] = useState('');
+  const [communityPosts, setCommunityPosts] = useState([]);
+  const [communityMessage, setCommunityMessage] = useState('');
+  const [postTitle, setPostTitle] = useState('');
+  const [postContent, setPostContent] = useState('');
+  const [postTag, setPostTag] = useState('决策复盘');
 
   // 市集推荐位：本周精选（订阅数最高3个）
   const featuredAgents = useMemo(() => {
@@ -388,44 +111,108 @@ export default function Community() {
   const agents = useMemo(() => Object.values(AGENT_MAP).filter(a => a.role !== 'master'), []);
 
   useEffect(() => {
-    setCustomAgents(getCustomAgents());
-    setMarketAgents(getMarketAgents());
-    setPublishedIds(new Set(getCustomAgents().filter(a => a.originMarketId).map(a => a.originMarketId)));
+    let cancelled = false;
+    Promise.all([listAdvisorAssets('owned'), listAdvisorAssets('market')])
+      .then(([owned, market]) => {
+        if (cancelled) return;
+        setCustomAgents(owned);
+        setMarketAgents(market);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setCustomAgents([]);
+        setMarketAgents([]);
+        setSubscribedTip(error?.message || '真实智囊目录暂不可用');
+      });
+    getCommunityPosts('new')
+      .then((postsResponse) => {
+        if (!cancelled) setCommunityPosts(Array.isArray(postsResponse?.posts) ? postsResponse.posts : []);
+      })
+      .catch((error) => {
+        if (!cancelled) setCommunityMessage(error?.message || '真实社区内容暂不可用');
+      });
     const p = getUserProfile();
     setProfile(p);
     setEditNickname(p.nickname);
     setEditBio(p.bio || '');
     setEditAvatar(p.avatar);
     setEditColor(p.color);
+    return () => { cancelled = true; };
   }, []);
 
-  const handleDeleteAgent = (agentId) => {
-    deleteCustomAgent(agentId);
-    setCustomAgents(getCustomAgents());
-    setDeleteConfirm(null);
+  const refreshCommunityPosts = async () => {
+    const response = await getCommunityPosts('new');
+    setCommunityPosts(Array.isArray(response?.posts) ? response.posts : []);
   };
 
-  // 整体14: 发布智囊到市集
-  const handlePublish = (agent) => {
-    const res = publishAgent(agent);
-    if (res.ok) {
-      setMarketAgents(getMarketAgents());
+  const handleCreatePost = async () => {
+    if (!postTitle.trim() || !postContent.trim()) {
+      setCommunityMessage('请先写标题和真实经历。');
+      return;
+    }
+    try {
+      await createPost({ title: postTitle.trim(), content: postContent.trim(), tag: postTag, userName: profile?.nickname || '匿名' });
+      setPostTitle('');
+      setPostContent('');
+      setCommunityMessage('分享已发布。');
+      await refreshCommunityPosts();
+    } catch (error) {
+      setCommunityMessage(error?.message || '发布失败');
+    }
+  };
+
+  const handleLikePost = async (postId) => {
+    try {
+      await likePost(postId);
+      await refreshCommunityPosts();
+    } catch (error) {
+      setCommunityMessage(error?.message || '操作失败');
+    }
+  };
+
+  const refreshAdvisorAssets = async () => {
+    const [owned, market] = await Promise.all([
+      listAdvisorAssets('owned'),
+      listAdvisorAssets('market'),
+    ]);
+    setCustomAgents(owned);
+    setMarketAgents(market);
+  };
+
+  const handleDeleteAgent = async (agentId) => {
+    const agent = customAgents.find((item) => item.id === agentId);
+    try {
+      await deleteAdvisor(agent?.sourceId || String(agentId).replace(/^custom_/, ''));
+      await refreshAdvisorAssets();
+      setDeleteConfirm(null);
+    } catch (error) {
+      setSubscribedTip(error?.message || '删除失败');
+    }
+  };
+
+  const handlePublish = async (agent) => {
+    try {
+      const asset = await publishAdvisorAsset(agent.sourceId);
+      await refreshAdvisorAssets();
       setSubscribedTip(`「${agent.name}」已发布到市集`);
       setTimeout(() => setSubscribedTip(''), 2500);
-    } else {
-      setSubscribedTip('已发布过,或发布失败');
+      return asset;
+    } catch (error) {
+      setSubscribedTip(error?.message || '发布失败');
       setTimeout(() => setSubscribedTip(''), 2500);
     }
   };
 
-  // 整体14: 从市集订阅智囊
-  const handleSubscribe = (agent) => {
-    const newAgent = subscribeAgent(agent);
-    if (newAgent) {
-      setCustomAgents(getCustomAgents());
-      setPublishedIds(prev => new Set([...prev, agent.marketId || agent.id]));
-      setSubscribedTip(`已订阅「${agent.name}」,可在推演台使用`);
+  const handleSubscribe = async (agent) => {
+    const publishedId = agent.publishedId || agent.marketId;
+    try {
+      if (agent.subscribed) await unsubscribeAdvisorAsset(publishedId);
+      else await subscribeAdvisorAsset(publishedId);
+      await refreshAdvisorAssets();
+      setSubscribedTip(agent.subscribed ? `已取消订阅「${agent.name}」` : `已订阅「${agent.name}」，可在推演台使用`);
       setTimeout(() => setSubscribedTip(''), 2500);
+    } catch (error) {
+      setSubscribedTip(error?.message || '订阅操作失败');
     }
   };
 
@@ -521,11 +308,39 @@ export default function Community() {
           {activeTab === 'discover' && (
             <>
               <section>
-                <SectionTitle kicker="HOT TOPICS / 热门话题" title="众人之问" accent="有何共鸣？" />
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8">
-                  {TOPICS.map((t, i) => (
-                    <TopicRow key={t.id} topic={t} index={i} />
-                  ))}
+                <SectionTitle kicker="REAL STORIES / 真实分享" title="行动之后" accent="再回来看看" />
+                <div className="grid lg:grid-cols-[0.9fr_1.1fr] gap-6 mb-10">
+                  <div className="p-5" style={{ backgroundColor: T.paperLight, border: `1px solid ${T.border}`, borderRadius: 5 }}>
+                    <div className="text-[11px] font-mono mb-4" style={{ color: T.accent }}>发布一次真实复盘</div>
+                    <input value={postTitle} onChange={(event) => setPostTitle(event.target.value.slice(0, 100))} placeholder="标题：做了什么决定？" className="w-full min-h-11 px-3 mb-3 text-[12px]" style={{ border: `1px solid ${T.border}`, background: '#fff' }} />
+                    <textarea value={postContent} onChange={(event) => setPostContent(event.target.value.slice(0, 2000))} placeholder="写下依据、行动和已经发生的结果，不必证明卦准不准。" rows={5} className="w-full p-3 mb-3 text-[12px]" style={{ border: `1px solid ${T.border}`, background: '#fff' }} />
+                    <div className="flex gap-3">
+                      <select value={postTag} onChange={(event) => setPostTag(event.target.value)} className="min-h-11 px-3 text-[11px]" style={{ border: `1px solid ${T.border}`, background: '#fff' }}>
+                        {['决策复盘', '行动结果', '方法讨论'].map((tag) => <option key={tag}>{tag}</option>)}
+                      </select>
+                      <button onClick={handleCreatePost} className="min-h-11 flex-1 px-4 text-[11px]" style={{ color: T.paperLight, backgroundColor: T.ink, borderRadius: 3 }}>确认发布</button>
+                    </div>
+                    {communityMessage && <div className="mt-3 text-[10px]" role="status" style={{ color: T.muted }}>{communityMessage}</div>}
+                  </div>
+                  <div className="space-y-3">
+                    {communityPosts.map((post, index) => (
+                      <motion.article key={post.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.04 }} className="p-5" style={{ backgroundColor: T.paperLight, border: `1px solid ${T.border}`, borderRadius: 5 }}>
+                        <div className="flex items-center justify-between gap-3 mb-2">
+                          <span className="text-[9px] font-mono px-2 py-1" style={{ color: T.accent, border: `1px solid ${T.accent}30` }}>{post.tag || '综合'}</span>
+                          <span className="text-[9px]" style={{ color: T.muted }}>{formatDate(post.created_at)}</span>
+                        </div>
+                        <h3 className="text-[15px] font-semibold mb-2">{post.title}</h3>
+                        <p className="text-[12px] leading-6 mb-4" style={{ color: T.muted }}>{post.content}</p>
+                        <div className="flex items-center justify-between text-[10px]" style={{ color: T.muted }}>
+                          <span>{post.user_name || '匿名'} · {post.replies || 0} 条讨论</span>
+                          <button onClick={() => handleLikePost(post.id)} className="min-h-11 px-3" style={{ color: T.accent, border: `1px solid ${T.accent}30` }}>认同 {post.likes || 0}</button>
+                        </div>
+                      </motion.article>
+                    ))}
+                    {communityPosts.length === 0 && (
+                      <div className="p-10 text-center" style={{ border: `1px dashed ${T.border}`, color: T.muted }}>还没有真实分享。第一条内容应当来自真实用户，而不是系统伪造。</div>
+                    )}
+                  </div>
                 </div>
               </section>
 
@@ -682,7 +497,7 @@ export default function Community() {
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     {featuredAgents.map((agent, i) => {
-                      const subscribed = customAgents.some(a => a.originMarketId === (agent.marketId || agent.id));
+                      const subscribed = Boolean(agent.subscribed);
                       return (
                         <motion.div
                           key={'feat_' + (agent.marketId || agent.id)}
@@ -710,11 +525,11 @@ export default function Community() {
                             <p className="text-[10px] leading-relaxed mb-2" style={{ color: T.muted, minHeight: 28 }}>{agent.desc || '匿名智囊,视角独到'}</p>
                             <button
                               onClick={() => handleSubscribe(agent)}
-                              disabled={subscribed}
+                              disabled={agent.publishedByMe}
                               className="w-full py-1 text-[10px] font-medium"
-                              style={{ color: subscribed ? T.muted : T.paperLight, backgroundColor: subscribed ? T.border : T.ink, borderRadius: 2, cursor: subscribed ? 'default' : 'pointer' }}
+                              style={{ color: subscribed ? T.muted : T.paperLight, backgroundColor: subscribed ? T.border : T.ink, borderRadius: 2, cursor: agent.publishedByMe ? 'default' : 'pointer' }}
                             >
-                              {subscribed ? '已订阅' : '+ 订阅'}
+                              {agent.publishedByMe ? '我的发布' : subscribed ? '取消订阅' : '+ 订阅'}
                             </button>
                           </div>
                         </motion.div>
@@ -764,7 +579,7 @@ export default function Community() {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredMarketAgents.map((agent, i) => {
-                    const subscribed = customAgents.some(a => a.originMarketId === (agent.marketId || agent.id));
+                    const subscribed = Boolean(agent.subscribed);
                     return (
                       <motion.div
                         key={agent.marketId || agent.id}
@@ -795,16 +610,16 @@ export default function Community() {
                           <p className="text-[11px] leading-relaxed mb-3" style={{ color: T.muted, minHeight: 32 }}>{agent.desc || '匿名智囊,视角独到'}</p>
                           <button
                             onClick={() => handleSubscribe(agent)}
-                            disabled={subscribed}
+                            disabled={agent.publishedByMe}
                             className="w-full py-1.5 text-[10px] font-medium"
                             style={{
                               color: subscribed ? T.muted : T.paperLight,
                               backgroundColor: subscribed ? T.border : T.ink,
                               borderRadius: 2,
-                              cursor: subscribed ? 'default' : 'pointer',
+                              cursor: agent.publishedByMe ? 'default' : 'pointer',
                             }}
                           >
-                            {subscribed ? '已订阅' : '+ 订阅此智囊'}
+                            {agent.publishedByMe ? '我的发布' : subscribed ? '取消订阅' : '+ 订阅此智囊'}
                           </button>
                         </div>
                       </motion.div>
@@ -815,117 +630,6 @@ export default function Community() {
             </section>
           )}
 
-          {activeTab === 'shares' && (
-            <section>
-              <SectionTitle kicker="FATE SHARED / 命签分享" title="他人的终局" accent="或可作镜" />
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {SHARES.map((s, i) => (
-                  <ShareCard key={s.id} share={s} index={i} />
-                ))}
-              </div>
-
-              <motion.div
-                initial={{ opacity: 0 }}
-                whileInView={{ opacity: 1 }}
-                viewport={{ once: true }}
-                className="mt-10 text-center"
-              >
-                <button
-                  onClick={() => navigate('/sandbox')}
-                  className="px-6 py-2.5 text-[11px] font-medium"
-                  style={{ color: T.paperLight, backgroundColor: T.ink, borderRadius: 3 }}
-                >
-                  分享我的命签 →
-                </button>
-              </motion.div>
-            </section>
-          )}
-
-          {activeTab === 'discuss' && (
-            <section>
-              <SectionTitle kicker="DISCUSSIONS / 讨论区" title="议题与争鸣" accent="汇聚成海" />
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {DISCUSSIONS.map((d, i) => (
-                  <motion.div
-                    key={d.id}
-                    initial={{ opacity: 0, y: 12 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true, amount: 0.15 }}
-                    transition={{ delay: i * 0.05, duration: 0.5, ease: EASE }}
-                    whileHover={{ y: -2 }}
-                    className="p-5 cursor-pointer"
-                    style={{
-                      borderRadius: 5,
-                      backgroundColor: T.paperLight,
-                      border: `1px solid ${T.border}`,
-                    }}
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <span
-                        className="text-[9px] font-mono px-1.5 py-0.5"
-                        style={{
-                          color: T.accent,
-                          backgroundColor: `${T.accent}10`,
-                          border: `1px solid ${T.accent}30`,
-                          borderRadius: 2,
-                        }}
-                      >
-                        {d.tag}
-                      </span>
-                      <span className="text-[10px] font-mono" style={{ color: T.muted }}>{d.lastActive}</span>
-                    </div>
-                    <h3 className="text-[14px] font-medium mb-2" style={{ color: T.ink }}>{d.title}</h3>
-                    <div className="flex items-center justify-between text-[10px] font-mono" style={{ color: T.muted }}>
-                      <span>{d.replies} 回复</span>
-                      <span style={{ color: T.accent }}>进入 →</span>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-
-              <motion.div
-                initial={{ opacity: 0 }}
-                whileInView={{ opacity: 1 }}
-                viewport={{ once: true }}
-                className="mt-10 text-center"
-              >
-                <button
-                  onClick={() => navigate('/sandbox')}
-                  className="px-6 py-2.5 text-[11px] font-medium border"
-                  style={{ color: T.ink, borderColor: T.ink, borderRadius: 3 }}
-                >
-                  发起新议题 →
-                </button>
-              </motion.div>
-            </section>
-          )}
-
-          {activeTab === 'sages' && (
-            <section>
-              <SectionTitle kicker="SAGES / 高人榜" title="推演如棋" accent="有人已历百局" />
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {SAGES.map((s, i) => (
-                  <SageCard key={s.id} sage={s} index={i} />
-                ))}
-              </div>
-
-              <motion.div
-                initial={{ opacity: 0 }}
-                whileInView={{ opacity: 1 }}
-                viewport={{ once: true }}
-                className="mt-10 p-6 text-center"
-                style={{
-                  borderRadius: 6,
-                  backgroundColor: T.paperLight,
-                  border: `1px dashed ${T.border}`,
-                }}
-              >
-                <p className="text-[12px] font-serif" style={{ color: T.muted }}>
-                  每月推演数前 10 位, 自动进入高人榜
-                </p>
-              </motion.div>
-            </section>
-          )}
         </div>
       </div>
 

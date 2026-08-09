@@ -5,6 +5,8 @@ const SERVER_TO_VIEW_PHASE = Object.freeze({
   READY: 'case_file_confirm',
   EXECUTE: 'agent_debate',
   DELIBERATE: 'agent_debate',
+  ROUND_REVIEW: 'agent_debate',
+  DELIBERATION_BLOCKED: 'agent_debate',
   REFLECT: 'summary',
   ORACLE: 'summary',
   COMMIT: 'committing',
@@ -20,6 +22,8 @@ const SERVER_TO_INTERNAL_PHASE = Object.freeze({
   READY: 'ready',
   EXECUTE: 'debate',
   DELIBERATE: 'debate',
+  ROUND_REVIEW: 'debate',
+  DELIBERATION_BLOCKED: 'debate',
   REFLECT: 'choice',
   ORACLE: 'choice',
   COMMIT: 'committing',
@@ -38,6 +42,27 @@ export function mapDeliberationPhase(state) {
 
 export function mapServerStateToInternalPhase(state) {
   return SERVER_TO_INTERNAL_PHASE[String(state || '').toUpperCase()] || 'idle';
+}
+
+export function mapSessionToInternalPhase(session) {
+  const state = String(session?.state || '').toUpperCase();
+  if (
+    state === 'EXECUTE'
+    && session?.plan?.caseFile?.confirmedByUser === true
+    && session?.plan?.councilStatus !== 'confirmed'
+  ) {
+    return 'council';
+  }
+  return mapServerStateToInternalPhase(state);
+}
+
+export function selectedAdvisorIdsForSession(session) {
+  const plan = session?.plan || {};
+  const confirmedIds = Array.isArray(plan.selectedAgentIds)
+    ? plan.selectedAgentIds.filter(Boolean)
+    : [];
+  if (plan.councilStatus === 'confirmed' && confirmedIds.length > 0) return confirmedIds;
+  return [];
 }
 
 export function shouldResumePlanning(state) {
@@ -104,6 +129,8 @@ export default {
   resolveSandboxRuntime,
   mapDeliberationPhase,
   mapServerStateToInternalPhase,
+  mapSessionToInternalPhase,
+  selectedAdvisorIdsForSession,
   shouldResumePlanning,
   shouldRequestPlanning,
   adaptFateTicket,

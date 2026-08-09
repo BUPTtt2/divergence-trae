@@ -196,7 +196,7 @@ test('concurrent commits with the same actionId share one authoritative result',
   assert.equal(second.idempotentReplay, true);
 });
 
-test('a failed planner attempt becomes one persisted fallback instead of overlapping retries', async () => {
+test('a failed planner attempt persists one next question instead of falsely closing the case', async () => {
   const session = await ownedSession({
     state: 'WAIT',
     round: 2,
@@ -213,9 +213,9 @@ test('a failed planner attempt becomes one persisted fallback instead of overlap
 
   assert.equal(attempts, 1);
   assert.equal(result.fallback, true);
-  assert.equal(result.session.state, 'READY');
-  assert.equal(result.askUser.length, 0);
-  assert.equal(restored.state, 'READY');
+  assert.equal(result.session.state, 'WAIT');
+  assert.equal(result.askUser.length, 1);
+  assert.equal(restored.state, 'WAIT');
   assert.equal(restored.plan.round, 2);
   assert.equal(restored.question_context, session.questionContext);
   assert.deepEqual(restored.answers, session.answers);
@@ -385,7 +385,7 @@ test('every clarification answer is accumulated into the next planning context',
   assert.match(plannedContext, /通勤约35公里/);
 });
 
-test('the third clarification answer closes the case without another planner pass', async () => {
+test('clarification count never closes the case without another readiness evaluation', async () => {
   const session = await ownedSession({
     question_context: '是否换工作 当前租期六个月',
     answers: [{ answer: '当前租期六个月' }],
@@ -397,18 +397,31 @@ test('the third clarification answer closes the case without another planner pas
     },
   });
   let plannerCalls = 0;
+  const planSessionFn = async (current) => {
+    plannerCalls += 1;
+    const askUser = [{ fieldId: 'growth', question: '成长空间具体差在哪？', reason: '决定换工作的收益是否真实' }];
+    const plan = { ...current.plan, askUser, round: current.round };
+    return {
+      session: { ...current, state: 'WAIT', plan, askUser },
+      plan,
+      askUser,
+      openingLine: '',
+      round: current.round,
+      memory: [],
+    };
+  };
 
   const result = await engine.answer(
     session.id,
     [{ answer: '通勤约35公里' }],
     { userId: session.user_id },
-    { planSessionFn: async () => { plannerCalls += 1; } },
+    { planSessionFn },
   );
   const restored = await memoryService.getSession(session.id);
 
-  assert.equal(plannerCalls, 0);
-  assert.equal(result.state, 'READY');
-  assert.deepEqual(result.askUser, []);
+  assert.equal(plannerCalls, 1);
+  assert.equal(result.state, 'WAIT');
+  assert.equal(result.askUser.length, 1);
   assert.match(restored.question_context, /当前租期六个月/);
   assert.match(restored.question_context, /通勤约35公里/);
 });

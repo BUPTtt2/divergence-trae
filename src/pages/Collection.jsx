@@ -3,8 +3,16 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
 import NoteModal from '../components/NoteModal';
-import { getCards, updateCard, deleteCard, shareCard, getUserId, getCardNotes } from '../services/apiClient';
-import { getPendingFollowUps, updateEpisodeOutcome } from '../services/memoryStore';
+import {
+  completeFollowUp,
+  deleteCard,
+  getCardNotes,
+  getCards,
+  getFollowUps,
+  scheduleFollowUp,
+  shareCard,
+  updateCard,
+} from '../services/apiClient';
 import tracker from '../services/tracker';
 import AppNav from '../components/AppNav';
 
@@ -34,146 +42,6 @@ const ACHIEVEMENTS = [
   { id: 'fifty', name: '大衍之数', desc: '完成五十次推演', icon: '☷', threshold: 50 },
 ];
 
-/* 八个真实卦象示例 - 配真实卦辞与推演结局 */
-const SAMPLE_CARDS = [
-  {
-    id: 'demo-offer',
-    gua: '大有',
-    trigram: '☰',
-    element: '火',
-    color: T.accent,
-    rarity: 'rare',
-    title: 'Offer 抉择',
-    question: '新公司涨薪 40%, 但要面对全新团队',
-    decision: '抓住机会',
-    style: '机会型',
-    advisors: ['钱谷', '路向', '风眼', '镜渊'],
-    verse: '元亨。柔得尊位, 大亨以正。',
-    summary: '立于尊位, 上下应之。薪资虽涨, 仍需先算清账目。',
-    date: '2026-05-14',
-    pillars: { year: '丙午', month: '癸巳', day: '戊申', hour: '甲子' },
-  },
-  {
-    id: 'demo-city',
-    gua: '渐',
-    trigram: '☴',
-    element: '风',
-    color: '#5078A8',
-    rarity: 'epic',
-    title: '城市迁移',
-    question: '要不要离开熟悉的城市去深圳',
-    decision: '探索新路',
-    style: '机会型',
-    advisors: ['心禾', '路向', '云图', '镜渊'],
-    verse: '渐之进也。女归吉, 利贞。',
-    summary: '鸿渐于陆, 其羽可用为仪。循序而进, 远行可成。',
-    date: '2026-04-22',
-    pillars: { year: '丙午', month: '壬辰', day: '甲午', hour: '丙寅' },
-  },
-  {
-    id: 'demo-career',
-    gua: '乾',
-    trigram: '☰',
-    element: '天',
-    color: T.gold,
-    rarity: 'legendary',
-    title: '创业开局',
-    question: '该继续打工还是辞职做 AI 创业',
-    decision: '稳守当前',
-    style: '稳健型',
-    advisors: ['钱谷', '路向', '风眼', '云图', '震行'],
-    verse: '元亨利贞。初九潜龙勿用。',
-    summary: '龙现田中, 见龙在田, 利见大人。当下蓄势, 时机未到。',
-    date: '2026-03-08',
-    pillars: { year: '丙午', month: '辛卯', day: '乙亥', hour: '庚辰' },
-  },
-  {
-    id: 'demo-rel',
-    gua: '咸',
-    trigram: '☱',
-    element: '泽',
-    color: '#A87898',
-    rarity: 'common',
-    title: '情感抉择',
-    question: '该接受他的表白吗',
-    decision: '稳守当前',
-    style: '稳健型',
-    advisors: ['心禾', '兑言', '镜渊'],
-    verse: '亨, 利贞。取女吉。',
-    summary: '山泽通气, 二气感应以相与。顺其自然, 莫强求。',
-    date: '2026-02-19',
-    pillars: { year: '丙午', month: '庚寅', day: '壬戌', hour: '丁未' },
-  },
-  {
-    id: 'demo-invest',
-    gua: '坎',
-    trigram: '☵',
-    element: '水',
-    color: '#A84848',
-    rarity: 'rare',
-    title: '投资风险',
-    question: '该梭哈 AI 概念股吗',
-    decision: '规避风险',
-    style: '稳健型',
-    advisors: ['钱谷', '风眼', '镜渊', '云图'],
-    verse: '习坎, 有孚, 维心亨。行有尚。',
-    summary: '重险陷身, 唯诚信可通。满目红绿, 不如先观潮退。',
-    date: '2026-01-30',
-    pillars: { year: '丙午', month: '己丑', day: '丙申', hour: '癸巳' },
-  },
-  {
-    id: 'demo-study',
-    gua: '屯',
-    trigram: '☳',
-    element: '雷',
-    color: T.rust,
-    rarity: 'common',
-    title: '考研抉择',
-    question: '考研还是直接工作',
-    decision: '抓住机会',
-    style: '机会型',
-    advisors: ['路向', '心禾', '云图', '镜渊', '震行'],
-    verse: '元亨利贞。勿用有攸往。',
-    summary: '云雷之动, 见险而止。时方屯邅, 宜静不宜动。',
-    date: '2025-12-15',
-    pillars: { year: '乙巳', month: '戊子', day: '庚午', hour: '甲申' },
-  },
-  {
-    id: 'demo-house',
-    gua: '艮',
-    trigram: '☶',
-    element: '山',
-    color: '#508870',
-    rarity: 'epic',
-    title: '置业决断',
-    question: '现在该不该买房',
-    decision: '稳守当前',
-    style: '稳健型',
-    advisors: ['钱谷', '路向', '风眼', '云图'],
-    verse: '艮其背, 不获其身。行其庭, 不见其人。',
-    summary: '兼山之象, 止其所也。时机未至, 静观其变为上。',
-    date: '2025-11-04',
-    pillars: { year: '乙巳', month: '丁亥', day: '辛未', hour: '戊戌' },
-  },
-  {
-    id: 'demo-friend',
-    gua: '兑',
-    trigram: '☱',
-    element: '泽',
-    color: '#48A898',
-    rarity: 'rare',
-    title: '人际冲突',
-    question: '该不该和合伙人说清楚分歧',
-    decision: '抓住机会',
-    style: '机会型',
-    advisors: ['兑言', '心禾', '镜渊'],
-    verse: '兑, 亨, 利贞。',
-    summary: '两泽相丽, 朋友讲习。坦诚为上, 莫让疑虑积成疾。',
-    date: '2025-09-21',
-    pillars: { year: '乙巳', month: '癸酉', day: '乙卯', hour: '壬午' },
-  },
-];
-
 const RARITY_CONFIG = {
   common: { label: '普通', color: '#7A7468', border: '#D9D2C0', glow: 'none' },
   rare: { label: '稀有', color: '#5078A8', border: '#80A8D8', glow: '#5078A840' },
@@ -181,8 +49,28 @@ const RARITY_CONFIG = {
   legendary: { label: '传说', color: '#C8A850', border: '#F0D890', glow: '#C8A85060' },
 };
 
+function parseStructuredValue(value, fallback) {
+  if (value == null || value === '') return fallback;
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+
+function normalizeDecisionCard(card) {
+  const createdAt = card.created_at || card.createdAt;
+  return {
+    ...card,
+    advisors: parseStructuredValue(card.advisors, []),
+    pillars: parseStructuredValue(card.pillars, {}),
+    reversalConditions: parseStructuredValue(card.reversal_conditions ?? card.reversalConditions, []),
+    nextActions: parseStructuredValue(card.next_actions ?? card.nextActions, []),
+    evidence: parseStructuredValue(card.evidence, []),
+    powerfulQuestion: card.powerfulQuestion || card.powerful_question || '',
+    date: card.date || (createdAt ? String(createdAt).slice(0, 10) : ''),
+  };
+}
+
 /* 卡牌面 - 真实视觉(卦象 + 卦辞 + 四柱 + 终局) */
-function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay }) {
+function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay, onScheduleFollowUp }) {
   const [showShare, setShowShare] = useState(false);
   const [noteCount, setNoteCount] = useState(0);
   // 编辑模式：标题 / 个人感悟(summary) / 承诺文字(decision)
@@ -190,15 +78,9 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
   const [editTitle, setEditTitle] = useState(card.title || '');
   const [editSummary, setEditSummary] = useState(card.summary || '');
   const [editDecision, setEditDecision] = useState(card.decision || '');
-  // 整体15: 决策回顾闭环 - 命签到期回访对比
-  const [isReviewing, setIsReviewing] = useState(false);
-  const [reviewText, setReviewText] = useState(card.reviewOutcome || '');
+  const [followUpDays, setFollowUpDays] = useState(7);
   const rarity = card.rarity || 'common';
   const rarityConfig = RARITY_CONFIG[rarity];
-
-  // 是否到期可回访 (整体15)
-  const todayStr = new Date().toISOString().split('T')[0];
-  const reviewDue = card.reviewAfter && todayStr >= card.reviewAfter;
 
   useEffect(() => {
     if (!isUser || !card.id) return;
@@ -236,14 +118,6 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
   // 取消编辑
   const handleCancelEdit = () => {
     setIsEditing(false);
-  };
-
-  // 整体15: 保存回访 - 记录实际结局, 标记 reviewed
-  const handleSaveReview = () => {
-    const updated = { ...card, reviewOutcome: reviewText.trim(), reviewed: true, reviewedAt: todayStr };
-    if (onSave) onSave(updated);
-    setIsReviewing(false);
-    try { tracker.track('revisit', { cardId: card.id, withOutcome: !!reviewText.trim() }); } catch (e) { /* ignore */ }
   };
 
   // 分享：调用后端 shareCard
@@ -573,82 +447,6 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
         )}
       </div>
 
-      {/* 整体15: 决策回顾闭环 - 命签到期回访对比 (仅用户卡 + 有 reviewAfter) */}
-      {isUser && card.reviewAfter && (
-        <div
-          className="px-5 py-3"
-          style={{
-            borderTop: `1px dashed ${reviewDue ? T.accent + '50' : T.border}`,
-            backgroundColor: reviewDue ? `${T.accent}05` : 'transparent',
-          }}
-        >
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-mono tracking-wider" style={{ color: reviewDue ? T.accent : T.muted }}>
-              {card.reviewed ? '回访已记' : (reviewDue ? '回访到期' : `回访于 ${card.reviewAfter}`)}
-            </span>
-            {reviewDue && !card.reviewed && !isReviewing && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setReviewText(''); setIsReviewing(true); }}
-                className="text-[10px] font-mono px-2 py-0.5"
-                style={{ color: T.paperLight, border: `1px solid ${T.accent}`, borderRadius: 2, backgroundColor: T.accent, cursor: 'pointer' }}
-              >
-                回访此签
-              </button>
-            )}
-          </div>
-          {/* 原叙事 (承诺时的判断) */}
-          {card.narrative && (
-            <div className="mb-2">
-              <div className="text-[9px] font-mono" style={{ color: T.muted }}>立签时所判</div>
-              <div className="text-[11px] font-serif leading-relaxed" style={{ color: T.inkSoft, whiteSpace: 'pre-line' }}>
-                {card.narrative}
-              </div>
-            </div>
-          )}
-          {/* 回访输入 */}
-          {isReviewing && (
-            <div className="mb-2">
-              <div className="text-[9px] font-mono mb-1" style={{ color: T.accent }}>三十日已过,实际如何?</div>
-              <textarea
-                className="text-[12px] font-serif leading-relaxed w-full px-2 py-1"
-                style={{ color: T.ink, border: `1px solid ${T.accent}`, borderRadius: 2, outline: 'none', minHeight: '50px', resize: 'vertical' }}
-                value={reviewText}
-                onChange={(e) => setReviewText(e.target.value.slice(0, 120))}
-                placeholder="写下此刻的真实结局,与当初所判对照……"
-                maxLength={120}
-                onClick={(e) => e.stopPropagation()}
-              />
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleSaveReview(); }}
-                  className="text-[10px] font-mono px-2 py-0.5"
-                  style={{ color: T.paperLight, border: `1px solid ${T.accent}`, borderRadius: 2, backgroundColor: T.accent, cursor: 'pointer' }}
-                >记下</button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setIsReviewing(false); }}
-                  className="text-[10px] font-mono px-2 py-0.5"
-                  style={{ color: T.muted, border: `1px solid ${T.border}`, borderRadius: 2, backgroundColor: 'transparent', cursor: 'pointer' }}
-                >作罢</button>
-              </div>
-            </div>
-          )}
-          {/* 已记回访 - 对照展示 */}
-          {card.reviewed && card.reviewOutcome && (
-            <div className="mt-1 p-2" style={{ border: `1px solid ${T.gold}40`, borderRadius: 3, backgroundColor: `${T.gold}06` }}>
-              <div className="text-[9px] font-mono mb-0.5" style={{ color: T.gold }}>实际结局 · {card.reviewedAt}</div>
-              <div className="text-[11px] font-serif leading-relaxed" style={{ color: T.ink }}>
-                {card.reviewOutcome}
-              </div>
-              {card.epilogue && (
-                <div className="text-[10px] font-serif mt-1.5 pt-1.5" style={{ color: T.muted, borderTop: `1px dashed ${T.border}`, whiteSpace: 'pre-line' }}>
-                  {card.epilogue}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* 卡底角标: 决策名 + 操作按钮 */}
       <div
         className="px-5 py-2 flex items-center justify-between flex-wrap gap-2"
@@ -699,6 +497,24 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
               </span>
               {isUser && (
                 <>
+                  <select
+                    value={followUpDays}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setFollowUpDays(Number(e.target.value))}
+                    aria-label="选择回访时间"
+                    className="text-[10px] font-mono px-2 min-h-11"
+                    style={{ color: T.ink, border: `1px solid ${T.border}`, borderRadius: 2, backgroundColor: T.paperLight }}
+                  >
+                    {[3, 7, 30, 90].map((days) => <option key={days} value={days}>{days}天</option>)}
+                  </select>
+                  <motion.button
+                    onClick={(e) => { e.stopPropagation(); onScheduleFollowUp?.(card, followUpDays); }}
+                    whileTap={{ scale: 0.98 }}
+                    className="text-[10px] font-mono px-3 min-h-11"
+                    style={{ color: T.paperLight, border: `1px solid ${T.accent}`, borderRadius: 2, backgroundColor: T.accent, cursor: 'pointer' }}
+                  >
+                    设回访
+                  </motion.button>
                   <motion.button
                     onClick={(e) => { e.stopPropagation(); if (onOpenNotes) onOpenNotes(card); }}
                     whileHover={{ scale: 1.05 }}
@@ -840,7 +656,8 @@ export default function Collection() {
   // 决策回顾闭环 - 30天到期回访
   const [followUps, setFollowUps] = useState([]);
   const [completedFollowUps, setCompletedFollowUps] = useState([]);
-  const [followUpStats, setFollowUpStats] = useState({ total: 0, positive: 0, negative: 0, neutral: 0, accuracy: 0 });
+  const [followUpStats, setFollowUpStats] = useState({ total: 0, positive: 0, negative: 0, neutral: 0 });
+  const [followUpMessage, setFollowUpMessage] = useState('');
   const [reviewingId, setReviewingId] = useState(null);
   const [outcomeText, setOutcomeText] = useState('');
   const [outcomeStatus, setOutcomeStatus] = useState('neutral');
@@ -855,81 +672,86 @@ export default function Collection() {
     setTimeout(() => setNoteModalCard(null), 300);
   }, []);
 
-  // 加载卡牌：优先后端 getCards，失败降级 localStorage
   const loadCards = useCallback(async () => {
-    // 先尝试后端
     try {
-      const remote = await getCards(getUserId());
-      if (Array.isArray(remote) && remote.length >= 0) {
-        setUserCards(remote);
-        // 同步到 localStorage 作为缓存
-        try { localStorage.setItem('yance_collection', JSON.stringify(remote)); } catch (e) { /* ignore */ }
-        return;
-      }
+      const remote = await getCards();
+      setUserCards(Array.isArray(remote) ? remote.map(normalizeDecisionCard) : []);
     } catch (e) {
-      // 后端不可用，降级到 localStorage
-      console.warn('[Collection] 后端不可用，降级 localStorage:', e.message);
+      setUserCards([]);
+      setFollowUpMessage(`决策账本暂未载入：${e.message}`);
     }
+  }, []);
+
+  const loadFollowUps = useCallback(async () => {
     try {
-      const saved = JSON.parse(localStorage.getItem('yance_collection') || '[]');
-      setUserCards(saved);
-    } catch (e) { /* ignore */ }
+      const response = await getFollowUps();
+      const items = Array.isArray(response?.items) ? response.items : [];
+      const today = new Date().toISOString().slice(0, 10);
+      const due = items.filter((item) => item.status === 'pending' && item.follow_up_date <= today);
+      const completed = items.filter((item) => item.status === 'completed');
+      setFollowUps(due);
+      setCompletedFollowUps(completed);
+      setFollowUpStats({
+        total: completed.length,
+        positive: completed.filter((item) => item.outcome_status === 'positive').length,
+        negative: completed.filter((item) => item.outcome_status === 'negative').length,
+        neutral: completed.filter((item) => !item.outcome_status || item.outcome_status === 'neutral').length,
+      });
+    } catch (error) {
+      setFollowUpMessage(`回访记录暂未载入：${error.message}`);
+    }
   }, []);
 
   useEffect(() => {
     loadCards();
+    loadFollowUps();
     try {
       const savedAchievements = JSON.parse(localStorage.getItem('yance_achievements') || '{}');
       setAchievements(savedAchievements);
     } catch (e) { /* ignore */ }
-    // 加载到期待回访的决策
-    try { setFollowUps(getPendingFollowUps()); setCompletedFollowUps(getCompletedFollowUps()); setFollowUpStats(getFollowUpStats()); } catch (e) { /* ignore */ }
-  }, [loadCards]);
+  }, [loadCards, loadFollowUps]);
 
-  const handleSubmitOutcome = useCallback((id) => {
+  const handleSubmitOutcome = useCallback(async (id) => {
     if (!outcomeText.trim()) return;
-    updateEpisodeOutcome(id, outcomeText.trim(), outcomeStatus);
-    setFollowUps(prev => prev.filter(ep => ep.id !== id));
-    setReviewingId(null);
-    setOutcomeText('');
-    setOutcomeStatus('neutral');
-    // 刷新已完成对照与统计
-    try { setCompletedFollowUps(getCompletedFollowUps()); setFollowUpStats(getFollowUpStats()); } catch (e) { /* ignore */ }
-  }, [outcomeText, outcomeStatus]);
-
-  // 保存编辑：调 updateCard，失败降级 localStorage
-  const handleSaveCard = useCallback(async (updatedCard) => {
-    // 先更新本地 state，保证 UI 立即响应
-    setUserCards(prev => prev.map(c => (c.id === updatedCard.id ? { ...c, ...updatedCard } : c)));
-    // 同步 localStorage
     try {
-      const cached = JSON.parse(localStorage.getItem('yance_collection') || '[]');
-      const newCached = cached.map(c => (c.id === updatedCard.id ? { ...c, ...updatedCard } : c));
-      localStorage.setItem('yance_collection', JSON.stringify(newCached));
-    } catch (e) { /* ignore */ }
-    // 调后端
+      await completeFollowUp(id, outcomeText.trim(), outcomeStatus);
+      setReviewingId(null);
+      setOutcomeText('');
+      setOutcomeStatus('neutral');
+      setFollowUpMessage('行动结果已写入决策账本。');
+      await loadFollowUps();
+    } catch (error) {
+      setFollowUpMessage(`提交失败：${error.message}`);
+    }
+  }, [loadFollowUps, outcomeText, outcomeStatus]);
+
+  const handleScheduleFollowUp = useCallback(async (card, daysLater) => {
+    try {
+      await scheduleFollowUp(card.id, card.question, card.decision, daysLater);
+      setFollowUpMessage(`已为“${card.title || card.question}”设置 ${daysLater} 天后回访。`);
+      await loadFollowUps();
+    } catch (error) {
+      setFollowUpMessage(`设置失败：${error.message}`);
+    }
+  }, [loadFollowUps]);
+
+  const handleSaveCard = useCallback(async (updatedCard) => {
     try {
       await updateCard(updatedCard.id, updatedCard);
+      setUserCards(prev => prev.map(c => (c.id === updatedCard.id ? { ...c, ...updatedCard } : c)));
+      setFollowUpMessage('命签修改已写入决策账本。');
     } catch (e) {
-      console.warn('[Collection] updateCard 后端失败，已降级 localStorage:', e.message);
+      setFollowUpMessage(`保存失败，未修改账本：${e.message}`);
     }
   }, []);
 
-  // 删除卡牌：调 deleteCard，失败降级 localStorage
   const handleDeleteCard = useCallback(async (id) => {
-    // 先更新本地 state
-    setUserCards(prev => prev.filter(c => c.id !== id));
-    // 同步 localStorage
-    try {
-      const cached = JSON.parse(localStorage.getItem('yance_collection') || '[]');
-      const newCached = cached.filter(c => c.id !== id);
-      localStorage.setItem('yance_collection', JSON.stringify(newCached));
-    } catch (e) { /* ignore */ }
-    // 调后端
     try {
       await deleteCard(id);
+      setUserCards(prev => prev.filter(c => c.id !== id));
+      setFollowUpMessage('命签已从决策账本删除。');
     } catch (e) {
-      console.warn('[Collection] deleteCard 后端失败，已降级 localStorage:', e.message);
+      setFollowUpMessage(`删除失败，账本未改变：${e.message}`);
     }
   }, []);
 
@@ -963,13 +785,10 @@ export default function Collection() {
     achievements: Object.keys(achievements).length,
   }), [userCards, achievements]);
 
-  // 总卡牌 = 用户推演 + 示例
-  const allCards = useMemo(() => {
-    return [
-      ...userCards.map((c) => ({ ...c, isUser: true })),
-      ...SAMPLE_CARDS.map((c) => ({ ...c, isUser: false })),
-    ];
-  }, [userCards]);
+  const allCards = useMemo(
+    () => userCards.map((card) => ({ ...card, isUser: true })),
+    [userCards],
+  );
 
   // 按五行统计
   const elementCount = useMemo(() => {
@@ -992,6 +811,12 @@ export default function Collection() {
         </span>
       </div>
 
+      {followUpMessage && (
+        <div className="px-6 py-3 text-center text-[11px]" role="status" style={{ color: T.ink, backgroundColor: '#FFF8E8', borderBottom: `1px solid ${T.gold}40` }}>
+          {followUpMessage}
+        </div>
+      )}
+
       {/* 决策回顾闭环 - 30天到期回访 + 实际结局对照 */}
       {followUps.length > 0 && (
         <section className="px-6 py-6" style={{ backgroundColor: '#FFF8E8', borderBottom: `1px solid ${T.gold}40` }}>
@@ -1011,10 +836,9 @@ export default function Collection() {
                         </div>
                         <div className="text-[12px]" style={{ color: T.muted }}>
                           <span>当时抉择：{ep.decision || '—'}</span>
-                          {ep.guaName && <span className="ml-3">卦：{ep.guaName}</span>}
                         </div>
                         <div className="text-[10px] mt-1" style={{ color: T.accent }}>
-                          至今 {Math.round((Date.now() - (ep.createdAt || Date.now())) / 86400000)} 天 · 实际结果如何？
+                          原定 {ep.follow_up_date} 回访 · 实际结果如何？
                         </div>
                       </div>
                       {reviewingId === ep.id ? (
@@ -1068,16 +892,8 @@ export default function Collection() {
               {/* 统计概览 */}
               <div className="flex items-center gap-4 mb-4 flex-wrap">
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded" style={{ background: '#fff', border: `1px solid ${T.border}` }}>
-                  <span className="text-[10px]" style={{ color: T.muted }}>卦象准度</span>
-                  <motion.span
-                    initial={{ scale: 0.6, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ type: 'spring', stiffness: 200, damping: 14 }}
-                    className="text-[16px] font-bold"
-                    style={{ color: followUpStats.accuracy >= 60 ? '#80A880' : followUpStats.accuracy >= 40 ? T.gold : '#C87060' }}
-                  >
-                    {followUpStats.accuracy}%
-                  </motion.span>
+                  <span className="text-[10px]" style={{ color: T.muted }}>已完成回访</span>
+                  <span className="text-[16px] font-bold" style={{ color: T.gold }}>{followUpStats.total}</span>
                 </div>
                 {[
                   { v: followUpStats.positive, l: '如愿', c: '#80A880' },
@@ -1094,15 +910,8 @@ export default function Collection() {
               {/* 对照列表 */}
               <div className="flex flex-col gap-3">
                 {completedFollowUps.slice(0, 10).map((ep, idx) => {
-                  const statusColor = ep.outcomeStatus === 'positive' ? '#80A880' : ep.outcomeStatus === 'negative' ? '#C87060' : T.muted;
-                  const statusLabel = ep.outcomeStatus === 'positive' ? '如愿' : ep.outcomeStatus === 'negative' ? '未如' : '中性';
-                  const days = Math.round(((ep.outcomeAt || Date.now()) - (ep.createdAt || Date.now())) / 86400000);
-                  // 卦象命中判断：正向卦象(乾/离/兑/震/大有/泰/益/升)对应positive算命中
-                  const positiveGuas = ['乾', '离', '兑', '震', '大有', '泰', '益', '升'];
-                  const isPositiveGua = positiveGuas.some(g => (ep.guaName || '').includes(g));
-                  const isHit = ep.outcomeStatus !== 'neutral' && ((isPositiveGua && ep.outcomeStatus === 'positive') || (!isPositiveGua && ep.outcomeStatus === 'negative'));
-                  const hitLabel = ep.outcomeStatus === 'neutral' ? '中性' : (isHit ? '卦中' : '卦偏');
-                  const hitColor = ep.outcomeStatus === 'neutral' ? T.muted : (isHit ? T.gold : T.accent);
+                  const statusColor = ep.outcome_status === 'positive' ? '#80A880' : ep.outcome_status === 'negative' ? '#C87060' : T.muted;
+                  const statusLabel = ep.outcome_status === 'positive' ? '如愿' : ep.outcome_status === 'negative' ? '未如' : '中性';
                   return (
                     <motion.div
                       key={ep.id}
@@ -1115,10 +924,9 @@ export default function Collection() {
                       {/* 左：演之预言 */}
                       <div>
                         <div className="flex items-center gap-2 mb-2">
-                          <span className="text-[9px] font-mono tracking-[0.2em] px-1.5 py-0.5 rounded" style={{ color: T.gold, background: `${T.gold}15` }}>演之预言</span>
-                          {ep.guaName && <span className="text-[11px]" style={{ color: T.ink }}>{ep.guaName}</span>}
-                          <span className="inline-flex items-center text-[9px] px-1.5 py-0.5 rounded" style={{ color: hitColor, border: `1px solid ${hitColor}40` }}>
-                            {isHit ? '✦' : '○'} {hitLabel}
+                          <span className="text-[9px] font-mono tracking-[0.2em] px-1.5 py-0.5 rounded" style={{ color: T.gold, background: `${T.gold}15` }}>立签决策</span>
+                          <span className="inline-flex items-center text-[9px] px-1.5 py-0.5 rounded" style={{ color: T.gold, border: `1px solid ${T.gold}40` }}>
+                            原决策
                           </span>
                         </div>
                         <div className="text-[12px] mb-1" style={{ color: T.ink }}>
@@ -1132,10 +940,10 @@ export default function Collection() {
                       <div>
                         <div className="flex items-center gap-2 mb-2">
                           <span className="text-[9px] font-mono tracking-[0.2em] px-1.5 py-0.5 rounded" style={{ color: statusColor, background: `${statusColor}15` }}>汝之实际</span>
-                          <span className="text-[10px]" style={{ color: T.muted }}>{days} 天后</span>
+                          <span className="text-[10px]" style={{ color: T.muted }}>回访于 {ep.follow_up_date}</span>
                         </div>
                         <div className="text-[12px] mb-2" style={{ color: T.ink, lineHeight: 1.6 }}>
-                          {ep.outcome}
+                          {ep.result_note}
                         </div>
                         <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded" style={{ color: statusColor, border: `1px solid ${statusColor}40` }}>
                           <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor }} />
@@ -1305,7 +1113,7 @@ export default function Collection() {
                 命签<span style={{ color: T.accent }}>陈列</span>
               </h2>
               <p className="text-[11px] font-mono mt-1" style={{ color: T.muted }}>
-                {userCards.length} 张来自你的推演, {SAMPLE_CARDS.length} 张示例
+                只展示你真实完成并保存的决策，不混入示例命签
               </p>
             </div>
             <button
@@ -1336,10 +1144,22 @@ export default function Collection() {
                   onShare={handleShareCard}
                   onOpenNotes={handleOpenNotes}
                   onReplay={setReplayCard}
+                  onScheduleFollowUp={handleScheduleFollowUp}
                 />
               </motion.div>
             ))}
           </div>
+
+          {allCards.length === 0 && (
+            <div className="px-6 py-16 text-center" style={{ border: `1px dashed ${T.border}`, borderRadius: 6, backgroundColor: T.paperLight }}>
+              <div className="text-3xl mb-4" style={{ color: T.gold }}>☷</div>
+              <h3 className="text-xl font-serif mb-2">这里还没有真实命签</h3>
+              <p className="text-[12px] mb-6" style={{ color: T.muted }}>完成一轮推演、选择路径并保存后，决策与后续行动才会出现在这里。</p>
+              <button onClick={() => navigate('/sandbox')} className="min-h-11 px-5 text-[12px]" style={{ color: T.paperLight, backgroundColor: T.accent, borderRadius: 3 }}>
+                开始一次推演
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

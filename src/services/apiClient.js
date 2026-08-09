@@ -663,8 +663,9 @@ export async function interpretHexagram(hexagram, question, agentDialogues) {
  * 获取用户的所有命运卡
  * GET /api/cards?userId=xxx
  */
-export async function getCards(userId) {
-  return request(`/api/cards?userId=${encodeURIComponent(userId)}`);
+export async function getCards() {
+  const result = await request('/api/cards');
+  return Array.isArray(result?.cards) ? result.cards : [];
 }
 
 /**
@@ -1118,11 +1119,12 @@ export async function scheduleFollowUp(cardId, question, decision, daysLater = 7
  * PUT /api/follow-up/:id
  * @param {string} id - 回访记录ID
  * @param {string} result - 回访结果/心得
+ * @param {'positive'|'negative'|'neutral'} status - 行动结果分类
  */
-export async function completeFollowUp(id, result) {
+export async function completeFollowUp(id, result, status = 'neutral') {
   return request(`/api/follow-up/${encodeURIComponent(id)}`, {
     method: 'PUT',
-    body: JSON.stringify({ result }),
+    body: JSON.stringify({ result, status }),
   });
 }
 

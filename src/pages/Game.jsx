@@ -1,11 +1,12 @@
 import { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useLocation } from 'react-router-dom';
 import Board from '../components/board/GameBoard';
-import ChoiceHud from '../components/board/ChoiceHud';
 import AgentDialogueOverlay from '../components/board/AgentDialogueOverlay';
 import ProcessStepper from '../components/board/ProcessStepper';
 import DeliberationConversation from '../components/sandbox/DeliberationConversation';
-import FateCardPanel from '../components/fate/FateCardPanel';
+import CouncilWorkbench from '../components/sandbox/CouncilWorkbench';
+import DecisionArtifact from '../components/sandbox/DecisionArtifact';
 import DecisionCaseReviewPanel from '../components/yan/DecisionCaseReviewPanel';
 import { COLORS } from '../components/board/layoutConfig';
 import { detectQuestionType } from '../data/agents';
@@ -16,8 +17,6 @@ import useSandboxFlow from '../game/useSandboxFlow';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
-const RUST_COLOR = 'var(--ink-stamp, #A8472E)';
-const PAPER_COLOR = 'var(--paper, #FAF6EC)';
 const DEFAULT_CHOICES = [
   { id: 'opportunity', label: '抓住机会', color: COLORS.choice.opportunity, glowColor: '#E8B880', icon: '☰', gua: '大有',
     verse: '元亨。先据要津，后补疏漏。',
@@ -157,22 +156,25 @@ function _renderNavButton(phase, ctx) {
 }
 
 export default function Game() {
-  const flow = useSandboxFlow({ DEFAULT_CHOICES });
+  const location = useLocation();
+  const flow = useSandboxFlow({ DEFAULT_CHOICES, initialQuestion: location.state?.initialQuestion || '' });
   const {
     phase, userInput, inputValue, setInputValue, inference, showInput,
     showQuestion, activeAgentIdx, selectedChoice, agentDialogues,
     showHistoryPanel, setShowHistoryPanel, awaitingUser, currentResponse, isPaused,
-    setCurrentResponse, currentCommit, setCurrentCommit, oracleThrowing,
+    setCurrentResponse, currentCommit, setCurrentCommit,
     oracleResult, floatTip, selectedAgentIds, setSelectedAgentIds,
     agentCallResults, setAgentCallResults, toolCallState, debateRound,
     debateConvergence, showAgentErrorModal, setShowAgentErrorModal,
-    agentErrors, fateContent, activeAgents, choices, phaseLabel,
+    agentErrors, fateContent, activeAgents, candidateAgents, choices, phaseLabel,
     historyCount, mentionMessages, setFloatTip, setInference,
     backendError, streamError, handleRejectRetry,
     commitPending, answerPending,
+    councilCatalog, councilCatalogLoading, councilCatalogError, recommendedAgentIds,
     arenaProjection,
-    caseFile, yanQuestionRounds, awaitingAnswers, progress, memoryLayers, mirrorReview,
+    caseFile, yanQuestionRounds, awaitingAnswers,
     handleRestart, handleStart, handleUserAdvance, handleSubmitAnswers, handleSkipClarify, handleConfirmAgents,
+    handleAcceptRecommendedAgents,
     handleInterject,
     handleResume,
     handleChoiceClick, handleRevealFate,
@@ -248,7 +250,7 @@ export default function Game() {
             paused={isPaused}
             onResume={handleResume}
             answerPending={answerPending}
-            assignments={inference?.plan?.agents || activeAgents}
+            assignments={activeAgents.length > 0 ? activeAgents : (inference?.plan?.agents || [])}
             orchestration={inference?.plan?.orchestration}
             open={companionOpen}
             onOpenChange={setCompanionOpen}
@@ -259,7 +261,7 @@ export default function Game() {
              彻底解决"投铜钱/抉择阶段画面错乱，没按键"的问题。
              桌面端：底部半透明磨砂横条，左侧阶段信息，右侧下一步/当前动作按钮
              移动端(<768px)：顶部横条样式 */}
-        {['summary', 'oracle_prompt', 'oracle', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase) && <div className="fixed z-[55]"
+        {['oracle_prompt', 'oracle'].includes(phase) && <div className="fixed z-[55]"
           style={{
             left: '50%',
             transform: 'translateX(-50%)',
@@ -374,16 +376,40 @@ export default function Game() {
           )}
         </AnimatePresence>
 
+        {phase === 'agent_select' && (
+          <CouncilWorkbench
+            catalog={councilCatalog}
+            recommendedIds={recommendedAgentIds}
+            selectedAgentIds={selectedAgentIds}
+            loading={councilCatalogLoading}
+            error={councilCatalogError}
+            sessionId={flow.deliberationSessionId}
+            minimumAdvisorCount={inference?.plan?.depth === 'quick' ? 1 : 2}
+            onToggle={(id) => setSelectedAgentIds((previous) => {
+              const next = new Set(previous);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            })}
+            onAcceptRecommendation={handleAcceptRecommendedAgents}
+            onConfirm={handleConfirmAgents}
+            onSaveGameState={saveGameState}
+          />
+        )}
 
-
-        {!['casting', 'yan_analyze', 'clarify_loop', 'agent_debate', 'case_file_confirm'].includes(phase) && <AgentDialogueOverlay
+        {!['casting', 'yan_analyze', 'clarify_loop', 'agent_select', 'agent_debate', 'case_file_confirm', 'summary', 'branch_select'].includes(phase) && <AgentDialogueOverlay
           phase={phase}
           question={userInput}
           activeAgentIdx={activeAgentIdx}
           activeAgents={activeAgents}
+          candidateAgents={candidateAgents}
+          inference={inference}
+          sessionId={flow.deliberationSessionId}
           agentDialogues={agentDialogues}
           selectedAgentIds={selectedAgentIds}
-          onAgentToggle={(id) => setSelectedAgentIds(prev => {
+          onAgentToggle={(id, clearAll = false) => setSelectedAgentIds(prev => {
+            if (clearAll) return new Set();
+            if (!id) return prev;
             const next = new Set(prev);
             if (next.has(id)) next.delete(id);
             else next.add(id);
@@ -406,12 +432,25 @@ export default function Game() {
         />}
 
 
-        <ChoiceHud
-          phase={phase}
-          choices={choices}
-          onClick={handleChoiceClick}
-          selectedChoice={selectedChoice}
-        />
+        {['summary', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase) && (
+          <DecisionArtifact
+            phase={phase}
+            inference={inference}
+            choices={choices}
+            selectedChoice={selectedChoice}
+            fateContent={fateContent}
+            fateRevealed={fateRevealed}
+            currentCommit={currentCommit}
+            setCurrentCommit={setCurrentCommit}
+            commitPending={commitPending}
+            onChoose={handleChoiceClick}
+            onReveal={handleRevealFate}
+            onCommit={handleCommit}
+            onRestart={handleRestart}
+            onSave={handleSaveToCollection}
+            onOpenHistory={() => setShowHistoryPanel(true)}
+          />
+        )}
 
         {historyCount > 0 && !showHistoryPanel && (
           <motion.div
@@ -569,22 +608,6 @@ export default function Game() {
                 </div>
               </div>
             </motion.div>
-          )}
-        </AnimatePresence>
-
-
-        <AnimatePresence>
-          {(phase === 'path_reveal' || (phase === 'final' && fateContent)) && selectedChoice && (
-            <FateCardPanel
-              choice={selectedChoice}
-              inference={inference}
-              userInput={userInput}
-              agentDialogues={agentDialogues}
-              activeAgents={activeAgents}
-              currentCommit={currentCommit}
-              fateContent={fateContent}
-              fateRevealed={fateRevealed}
-            />
           )}
         </AnimatePresence>
 
@@ -758,145 +781,6 @@ export default function Game() {
                   </motion.div>
                 )}
               </AnimatePresence>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <AnimatePresence>
-          {phase === 'committing' && (
-            <motion.div
-              className="absolute left-1/2 -translate-x-1/2 z-20 flex flex-col items-center"
-              style={{ bottom: '24px', width: 'min(640px, 90vw)' }}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 16 }}
-              transition={{ duration: 0.7, ease: 'easeOut' }}
-            >
-              <input
-                type="text"
-                value={currentCommit}
-                onChange={(e) => setCurrentCommit(e.target.value.slice(0, 60))}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    if (e.nativeEvent.isComposing) return;
-                    e.preventDefault();
-                    handleCommit();
-                  }
-                }}
-                placeholder="落笔一句你的本心所向 (可不填,Enter 跳过)"
-                maxLength={60}
-                disabled={commitPending}
-                style={{
-                  width: '100%',
-                  padding: '10px 16px',
-                  marginBottom: '10px',
-                  background: 'rgba(8,8,12,0.75)',
-                  backdropFilter: 'blur(8px)',
-                  color: '#F0EBDD',
-                  fontSize: '13px',
-                  fontFamily: '"Ma Shan Zheng", serif',
-                  border: `1px solid ${BORDER_COLOR}50`,
-                  borderRadius: 2,
-                  outline: 'none',
-                  letterSpacing: '0.15em',
-                  textAlign: 'center',
-                  boxShadow: `0 0 16px ${GLOW_COLOR}30`,
-                }}
-              />
-              <button
-                onClick={commitPending ? undefined : handleCommit}
-                disabled={commitPending}
-                style={{
-                  padding: '12px 36px',
-                  background: `linear-gradient(135deg, ${BORDER_COLOR} 0%, ${GLOW_COLOR} 100%)`,
-                  color: '#0E0A06',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  fontFamily: '"Ma Shan Zheng", serif',
-                  letterSpacing: '0.3em',
-                  border: 'none',
-                  cursor: commitPending ? 'wait' : 'pointer',
-                  opacity: commitPending ? 0.65 : 1,
-                  boxShadow: `0 0 24px ${GLOW_COLOR}50`,
-                  transition: 'all 0.3s ease',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.boxShadow = `0 0 36px ${GLOW_COLOR}`;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.boxShadow = `0 0 24px ${GLOW_COLOR}50`;
-                }}
-              >
-                {commitPending ? '落 印 中…' : '落 笔 · 收 此 命'}
-                <span style={{ marginLeft: '12px', opacity: 0.6, fontSize: '11px' }}>·  ENTER</span>
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {phase === 'final' && (
-            <motion.div
-              className="absolute bottom-8 z-40"
-              style={{
-                left: showHistoryPanel ? 'calc(50% - 140px)' : '50%',
-                transform: 'translateX(-50%)',
-                display: 'flex', gap: '12px',
-                transition: 'left 0.5s ease',
-              }}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-            >
-              <button
-                onClick={handleRestart}
-                style={{
-                  padding: '10px 24px',
-                  background: 'rgba(8,8,12,0.8)',
-                  backdropFilter: 'blur(8px)',
-                  color: GLOW_COLOR,
-                  fontSize: '12px',
-                  fontFamily: '"Ma Shan Zheng", serif',
-                  letterSpacing: '0.2em',
-                  border: `1px solid ${BORDER_COLOR}`,
-                  cursor: 'pointer',
-                  boxShadow: `0 0 16px ${GLOW_COLOR}30`,
-                }}
-              >
-                重新推演
-              </button>
-              <button
-                onClick={handleSaveToCollection}
-                style={{
-                  padding: '10px 24px',
-                  background: `linear-gradient(135deg, ${BORDER_COLOR} 0%, ${GLOW_COLOR} 100%)`,
-                  color: '#0E0A06',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  fontFamily: '"Ma Shan Zheng", serif',
-                  letterSpacing: '0.2em',
-                  border: 'none',
-                  cursor: 'pointer',
-                  boxShadow: `0 0 24px ${GLOW_COLOR}60`,
-                }}
-              >
-                收藏此命签
-              </button>
-              <button
-                onClick={() => setShowHistoryPanel(true)}
-                style={{
-                  padding: '10px 24px',
-                  background: 'rgba(8,8,12,0.8)',
-                  backdropFilter: 'blur(8px)',
-                  color: '#E0DDD5',
-                  fontSize: '12px',
-                  fontFamily: '"Ma Shan Zheng", serif',
-                  letterSpacing: '0.2em',
-                  border: `1px solid ${BORDER_COLOR}50`,
-                  cursor: 'pointer',
-                }}
-              >
-                查看完整记录
-              </button>
             </motion.div>
           )}
         </AnimatePresence>

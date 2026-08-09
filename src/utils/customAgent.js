@@ -117,24 +117,8 @@ export function publishAgent(agent) {
 export function getMarketAgents() {
   try {
     const raw = localStorage.getItem(MARKET_KEY);
-    let market = raw ? JSON.parse(raw) : [];
-    // 补全示例, 让市集不为空 (如果本地没有这些sample则补上)
-    const samples = [
-      { id: 'mkt_sample_1', name: '职场老兵', desc: '从HR与管理者双重视角看职场博弈', stance: '职场博弈视角', icon: '☴', color: '#489090', glow: '#78C0C0', tags: ['职场', '管理'], subs: 12, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_1' },
-      { id: 'mkt_sample_2', name: '理性投资人', desc: '只看概率与赔率,不被情绪裹挟', stance: '概率赔率视角', icon: '☵', color: '#406088', glow: '#7098C8', tags: ['投资', '理财'], subs: 23, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_2' },
-      { id: 'mkt_sample_3', name: '老母亲', desc: '用最朴素的道理问住你的借口', stance: '朴素常识视角', icon: '☷', color: '#887050', glow: '#B8A080', tags: ['家庭', '情感'], subs: 8, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_3' },
-      { id: 'mkt_sample_4', name: '背包客', desc: '万里路走出来的实地经验', stance: '实地体验视角', icon: '☶', color: '#588868', glow: '#88B898', tags: ['旅行', '户外'], subs: 5, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_4' },
-      { id: 'mkt_sample_5', name: '老中医', desc: '望闻问切，先看身体扛不扛得住', stance: '养生健康视角', icon: '☷', color: '#689060', glow: '#98C088', tags: ['健康', '养生'], subs: 7, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_5' },
-      { id: 'mkt_sample_6', name: '讼师', desc: '先划清边界，再谈选择', stance: '规则法律视角', icon: '☵', color: '#585878', glow: '#8888A8', tags: ['法律', '规则'], subs: 4, publishedAt: new Date().toISOString(), marketId: 'mkt_sample_6' },
-    ];
-    // 补齐缺失的sample（本地有旧market时也能获得新增sample）
-    const existingIds = new Set(market.map(a => a.marketId || a.id));
-    for (const s of samples) {
-      if (!existingIds.has(s.marketId)) {
-        market.push(s);
-      }
-    }
-    return market;
+    const market = raw ? JSON.parse(raw) : [];
+    return Array.isArray(market) ? market : [];
   } catch (e) {
     return [];
   }

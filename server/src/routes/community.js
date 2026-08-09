@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query } from '../services/db.js';
-import { generateUUID, generateAnonymousId } from '../utils/id.js';
+import { generateUUID } from '../utils/id.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requireUser } from '../middleware/auth.js';
 
@@ -59,17 +59,6 @@ router.get(
       })
     );
 
-    // 数据库为空时返回预设精华帖子（符合演策风格）
-    if (result.rowCount === 0 && !tag) {
-      return res.json({
-        posts: SEED_POSTS,
-        total: SEED_POSTS.length,
-        sort,
-        tag: null,
-        seeded: true,
-      });
-    }
-
     res.json({
       posts: postsWithCounts,
       total: result.rowCount,
@@ -78,58 +67,6 @@ router.get(
     });
   })
 );
-
-/* 预设精华帖子 - 演策社区初始内容 */
-const SEED_POSTS = [
-  {
-    id: 'seed-1',
-    title: '演策初体验：用乾卦决了辞职创业的心',
-    content: '困在原点三个月，演策给我召了钱谷、风眼、镜渊三位顾问。风眼一句"风从虎，云从龙，你怕的不是风浪是码头"直接点醒。乾卦九五飞龙在天，下了。三周后回来看，不悔。',
-    tag: '真实推演',
-    trigram: '☰',
-    user_id: 'seed-user-1',
-    user_name: '已飞龙',
-    likes: 47,
-    replies: 8,
-    created_at: new Date(Date.now() - 86400000 * 3).toISOString(),
-  },
-  {
-    id: 'seed-2',
-    title: '坎卦投资记：止损比抄底更需要勇气',
-    content: '问"该不该补仓"，得坎卦习坎。镜渊说"入险再入险，不是勇敢是执念"。果断止损，两周后回头看，避开了20%的下跌。演策不是算命，是帮你看见自己不愿意看见的那一面。',
-    tag: '投资决策',
-    trigram: '☵',
-    user_id: 'seed-user-2',
-    user_name: '坎中行人',
-    likes: 35,
-    replies: 5,
-    created_at: new Date(Date.now() - 86400000 * 2).toISOString(),
-  },
-  {
-    id: 'seed-3',
-    title: '问感情的都得兑卦？三次了',
-    content: '连续三次问感情都是兑卦。兑为泽，为悦，为口舌。心禾顾问说"兑卦不是让你分，是让你开口说——你憋着的那句话才是病根"。当晚摊牌，居然没吵。留个帖记录。',
-    tag: '感情',
-    trigram: '☱',
-    user_id: 'seed-user-3',
-    user_name: '泽畔',
-    likes: 28,
-    replies: 12,
-    created_at: new Date(Date.now() - 86400000).toISOString(),
-  },
-  {
-    id: 'seed-4',
-    title: '【解卦日记】艮卦止的不是行，是心',
-    content: '问"该不该接受调岗"，得艮卦。艮其背，不获其身。法度顾问的解读很妙：艮卦止的不是你的行动，是你心里那股"非如此不可"的劲。调岗不是退，是换个山头。已接受。',
-    tag: '职场',
-    trigram: '☶',
-    user_id: 'seed-user-4',
-    user_name: '艮山',
-    likes: 22,
-    replies: 4,
-    created_at: new Date(Date.now() - 3600000 * 8).toISOString(),
-  },
-];
 
 /**
  * POST /api/community/posts

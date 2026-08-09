@@ -25,6 +25,10 @@ import * as reflector from './reflector.js';
 import * as agentEngine from './agentEngine.js';
 import { AGENT_POOL } from '../data/agentPool.js';
 import * as customAdvisorService from './customAdvisorService.js';
+import {
+  listExecutableMarketAdvisors,
+  listExecutablePublicAdvisors,
+} from './advisorCatalogService.js';
 import logger from './logger.js';
 import eventBus from './eventBus.js';
 import { evaluateSession } from './evalPipeline.js';
@@ -39,6 +43,7 @@ import { executeLensReviewTasks } from './cognitivePerturbationService.js';
 import { normalizeExecuteResponse } from '../../../shared/deliberationContract.js';
 import { acceptedCaseContext, buildDecisionCase, confirmDecisionCase } from './decisionCaseService.js';
 import { routeDeliberationDepth } from './deliberationDepthRouter.js';
+import { validateDeliberationContribution } from './deliberationContribution.js';
 // 系统级 Agent（生产级 4 Agent）
 import AuditAgentSingleton from '../agents/system/AuditAgent.js';
 const _auditAttached = (() => { try { AuditAgentSingleton.ensureAttached(); } catch (e) { logger.warn('[DeliberationEngine] audit attach fail', e.message); } return true; })();
@@ -55,10 +60,12 @@ export const STATES = {
   COMMIT: 'COMMIT',
   COMPLETE: 'COMPLETE',
   PAUSED: 'PAUSED',
+  ROUND_REVIEW: 'ROUND_REVIEW',
+  DELIBERATION_BLOCKED: 'DELIBERATION_BLOCKED',
   FAILED: 'FAILED',
 };
 
-const MAX_ROUND = 2;
+const MAX_ROUND = 8;
 const PAUSE_TIMEOUT_MS = 30 * 60 * 1000; // 30 分钟内可 resume
 const commitFlights = new Map();
 const executeFlights = new Map();
@@ -81,7 +88,7 @@ function buildResponse(plannedSession, plan, askUser, openingLine, round, memory
     sessionId: plannedSession.id,
     state: plannedSession.state,
     askUser: Array.isArray(askUser) ? askUser : [],
-    plan: plan || { dimensions: [], toolProbes: [], askUser: [], minFindings: 3 },
+    plan: plan || { dimensions: [], toolProbes: [], askUser: [], minFindings: 2 },
     round: round || 1,
     maxRound: MAX_ROUND,
     openingLine: openingLine || '',
@@ -89,6 +96,9 @@ function buildResponse(plannedSession, plan, askUser, openingLine, round, memory
     questionType: plannedSession.questionType || '',
     analysis: plan?.analysis || '',
     caseFile: plan?.caseFile || null,
+    nextQuestion: plan?.nextQuestion || (Array.isArray(askUser) ? askUser[0] : null) || null,
+    informationFields: plan?.informationStates || plan?.informationFields || [],
+    readiness: plan?.readiness || plan?.caseFile?.readiness || null,
   };
 }
 
@@ -99,7 +109,7 @@ function buildResponse(plannedSession, plan, askUser, openingLine, round, memory
  * @returns {object} 数据契约响应
  */
 export function buildResponseFromSession(session) {
-  const plan = session && session.plan ? session.plan : { dimensions: [], toolProbes: [], askUser: [], minFindings: 3 };
+  const plan = session && session.plan ? session.plan : { dimensions: [], toolProbes: [], askUser: [], minFindings: 2 };
   const memoryUsed = Array.isArray(session && session.memory_used) ? session.memory_used : [];
   const askUser = Array.isArray(plan.askUser) && plan.askUser.length > 0
     ? plan.askUser
@@ -129,6 +139,9 @@ export function buildResponseFromSession(session) {
     lensReview: session?.lens_review ?? session?.lensReview ?? session?.cognitive_plan?.review ?? null,
     commitResult: session?.commit_result || null,
     caseFile: plan?.caseFile || null,
+    nextQuestion: plan?.nextQuestion || askUser[0] || null,
+    informationFields: plan?.informationStates || plan?.informationFields || [],
+    readiness: plan?.readiness || plan?.caseFile?.readiness || null,
   };
 }
 
@@ -593,7 +606,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
   const round = Math.max(1, Number(session.round) || 1);
   const shouldClarify = round < MAX_ROUND;
 
-  // 启发式追问（仅首轮；回答后的兜底必须继续进入执行，不能再次卡在 WAIT）
+  // 启发式追问只暴露一个下一最佳问题；轮次数不再等价于信息充分度。
   const askUser = [];
   if (shouldClarify && /(租房|买房|换城市|城市|房租|房源)/.test(q)) {
     askUser.push({ question: '能接受的月预算大概是多少？', reason: '预算决定筛选范围', source: 'P0-FB' });
@@ -612,6 +625,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     askUser.push({ question: '这件事的时间限制是什么？多久之内必须决定？', reason: '时间决定信息获取深度', source: 'P0-FB' });
     askUser.push({ question: '最坏情况是什么？你能接受吗？', reason: '先判底线再谈收益', source: 'P0-FB' });
   }
+  if (askUser.length > 1) askUser.splice(1);
 
   session.state = shouldClarify ? STATES.WAIT : STATES.READY;
   session.round = round;
@@ -625,7 +639,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     agents: fallbackAgents,
     toolProbes: [],
     askUser,
-    minFindings: 3,
+    minFindings: 2,
     round,
     openingLine: `关于「${(session.question || '').slice(0, 30)}」，演已按现有信息重新安排推演视角。`,
     analysis: `（LLM 暂不可用：${String(errorMsg || '').slice(0, 40)}，演已按规则生成维度与追问）`,
@@ -648,7 +662,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
 
 /**
  * 用户回答追问：加载 session → 合并 answers 到 questionContext → round+1 → 重新 plan → 返回
- * round 硬限制 2 轮：round 达到 3 时 planner 内 autonomyGate 返回 STOP 降级 EXECUTE
+ * 每轮重新计算信息充分度；轮次数只保留为安全预算，不再自动代表案卷完成。
  *
  * @param {string} sessionId
  * @param {Array} answers 用户回答数组
@@ -783,6 +797,8 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
   //    ReAct 循环里演自主决定调哪些智囊，这里只提供候选池
   // P0-2 修复：custom(市集) 的 agentId 不在 AGENT_POOL 中，需要从 customAdvisorService 合并查询
   let userCustomAdvisors = [];
+  let subscribedMarketAdvisors = [];
+  let selectedPublicAdvisors = [];
   if (session.user_id) {
     try {
       userCustomAdvisors = (await customAdvisorService.listAdvisors(session.user_id))
@@ -793,8 +809,21 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
     } catch (e) {
       logger.warn('[Deliberation] 加载用户custom智囊失败，忽略', { error: e.message });
     }
+    try {
+      subscribedMarketAdvisors = await listExecutableMarketAdvisors(session.user_id);
+    } catch (e) {
+      logger.warn('[Deliberation] 加载已订阅市集智囊失败，忽略', { error: e.message });
+    }
   }
-  const AGENT_POOL_WITH_CUSTOM = [...AGENT_POOL, ...userCustomAdvisors];
+  if (Array.isArray(agentIds) && agentIds.length > 0) {
+    selectedPublicAdvisors = await listExecutablePublicAdvisors(agentIds);
+  }
+  const AGENT_POOL_WITH_CUSTOM = [
+    ...AGENT_POOL,
+    ...userCustomAdvisors,
+    ...selectedPublicAdvisors,
+    ...subscribedMarketAdvisors,
+  ];
   const AGENT_MAP_WITH_CUSTOM = new Map(AGENT_POOL_WITH_CUSTOM.map(a => [a.id, a]));
 
   let advisorPool = [];
@@ -832,6 +861,23 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
     }
   }
 
+  session.plan = {
+    ...(session.plan || {}),
+    councilStatus: 'confirmed',
+    selectedAgentIds: advisorPool.map((advisor) => advisor.id),
+  };
+  await persistClaimedExecuteSession(sessionId, session, executionCtx);
+  await emit(sessionId, {
+    type: 'COUNCIL_CONFIRMED',
+    data: {
+      advisorIds: session.plan.selectedAgentIds,
+      advisorCount: session.plan.selectedAgentIds.length,
+    },
+    actor: 'user',
+    correlationId: actionId,
+    visibility: 'public',
+  });
+
   // 2. 构建 ReAct state（演的推演上下文，可变对象，runReActLoop 会追加 findings/toolResults/dialogue）
   const reactState = {
     sessionId,
@@ -845,6 +891,7 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
     dialogue: [],
     llmCallCount: 0,
     actionId,
+    roundReviewConfirmed: session.state === STATES.ROUND_REVIEW,
   };
 
   // 3. emit 进入 DELIBERATE（Event Sourcing：事件追加为真相）
@@ -856,6 +903,16 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
   // 5. 把 ReAct 产生的 findings/toolResults 写回 session
   session.findings = reactState.findings || [];
   session.tool_results = reactState.toolResults || [];
+
+  const contributionGate = validateDeliberationContribution({
+    ...session,
+    findings: session.findings,
+    advisorPool,
+  });
+  if (!['CLARIFY', 'PAUSED', 'READY'].includes(reactResult.state) && !contributionGate.allowed) {
+    reactResult.state = 'DELIBERATION_BLOCKED';
+    reactResult.contributionGate = contributionGate;
+  }
 
   // 6. 演决定追问：持久化 + 返回 CLARIFY（不预设，演基于上下文判断）
   if (reactResult.state === 'CLARIFY' && Array.isArray(reactResult.askUser) && reactResult.askUser.length > 0) {
@@ -912,6 +969,64 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
       caseConfirmationRequired: reactResult.state === 'READY',
       caseFile: plan.caseFile || null,
     };
+  }
+
+  if (reactResult.state === 'DELIBERATION_BLOCKED') {
+    session.state = 'DELIBERATION_BLOCKED';
+    session.oracle = null;
+    session.dynamicChoices = [];
+    session.masterSummary = '';
+    const blockedResult = {
+      session,
+      oracle: null,
+      conflicts: [],
+      gaps: [],
+      replanned: false,
+      reason: reactResult.contributionGate?.reason || '智囊贡献不足，推演已暂停',
+      contributionGate: reactResult.contributionGate,
+      advisorFailures: reactResult.advisorFailures || [],
+    };
+    await persistExecuteResult(sessionId, blockedResult, {
+      actionId,
+      claimToken: executionCtx.claimToken,
+    });
+    await emit(sessionId, {
+      type: 'STATE_CHANGE',
+      data: {
+        from: 'DELIBERATE',
+        to: 'DELIBERATION_BLOCKED',
+        reason: blockedResult.reason,
+        contributionGate: blockedResult.contributionGate,
+      },
+      actor: 'yan', correlationId: actionId, visibility: 'public',
+    });
+    return buildExecuteResponse(sessionId, blockedResult);
+  }
+
+  if (reactResult.state === 'ROUND_REVIEW') {
+    session.state = STATES.ROUND_REVIEW;
+    session.oracle = null;
+    session.dynamicChoices = [];
+    session.masterSummary = '';
+    const reviewResult = {
+      session,
+      oracle: null,
+      conflicts: [],
+      gaps: [],
+      replanned: false,
+      reason: '本轮智囊已完成独立判断，等待用户确认是否进入汇总',
+      contributionGate: reactResult.contributionGate,
+    };
+    await persistExecuteResult(sessionId, reviewResult, {
+      actionId,
+      claimToken: executionCtx.claimToken,
+    });
+    await emit(sessionId, {
+      type: 'STATE_CHANGE',
+      data: { from: 'DELIBERATE', to: 'ROUND_REVIEW', contributionGate: reviewResult.contributionGate },
+      actor: 'yan', correlationId: actionId, visibility: 'public',
+    });
+    return buildExecuteResponse(sessionId, reviewResult);
   }
 
   logger.info('[Deliberation] execute ReAct 完成，进入 REFLECT', {
@@ -1115,7 +1230,7 @@ export async function confirmCase(sessionId, command = {}, executionCtx = {}) {
     throw error;
   }
   const caseFile = confirmDecisionCase(session.plan.caseFile, command);
-  const plan = { ...session.plan, caseFile, askUser: [] };
+  const plan = { ...session.plan, caseFile, askUser: [], councilStatus: 'draft' };
   const acceptedMemories = (caseFile.memoryCandidates || [])
     .filter((memory) => memory.status === 'accepted')
     .map((memory) => ({ id: memory.id, content: memory.content, memory_type: memory.type }));
@@ -1211,6 +1326,8 @@ export function buildExecuteResponse(sessionId, result) {
     lensImpacts: result.lensImpacts ?? result.session.lensImpacts ?? [],
     lensReview: result.lensReview ?? result.session.lensReview ?? null,
     fallback: result.fallback === true,
+    contributionGate: result.contributionGate || null,
+    advisorFailures: result.advisorFailures || [],
   });
 }
 
