@@ -811,7 +811,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     }
   }, [deliberationSessionId, debateRound, selectedAgentIds, showFloatTip, plannedAgents, LOG]);
 
-  const handleInterject = useCallback(async (commandType = 'SUPPLEMENT') => {
+  const handleInterject = useCallback(async (commandType = 'SUPPLEMENT', targetAgentId = null) => {
     if (!deliberationSessionId) return;
     const content = String(currentResponse || '').trim();
     if (commandType !== 'PAUSE' && !content) {
@@ -819,7 +819,7 @@ export function useDeliberationFlow(initialQuestion = "") {
       return;
     }
     try {
-      await interjectDeliberation(deliberationSessionId, { commandType, content });
+      await interjectDeliberation(deliberationSessionId, { commandType, content, targetAgentId });
       if (commandType !== 'PAUSE') {
         setAgentDialogues((previous) => ({
           ...previous,
@@ -831,9 +831,9 @@ export function useDeliberationFlow(initialQuestion = "") {
         setCurrentResponse('');
       }
       const message = {
-        SUPPLEMENT: '补充已进入推演上下文',
-        CORRECTION: '纠正已提交，Agent 将停下并重整案卷',
-        QUESTION: '追问已交给智囊团',
+        SUPPLEMENT: '补充已交给案卷分析 Agent，确认更新后再继续',
+        CORRECTION: '纠正已交给案卷分析 Agent，当前推演已停下',
+        QUESTION: targetAgentId ? '追问已交给指定智囊' : '追问已交给全体智囊',
         PAUSE: '暂停指令已提交',
       }[commandType] || '已提交';
       showFloatTip(message);

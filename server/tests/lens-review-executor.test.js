@@ -468,15 +468,18 @@ test('real engine persists and renews a replan before publishing its events', as
 
   const result = await deliberationEngine.performExecute(
     sessionId,
-    [],
+    ['fengyan', 'jingyuan'],
     { actionId: 'replan-order-action', claimToken: claim.claimToken },
     claim.session,
     {
       reactLoopFn: async (_sessionId, reactState) => {
-        reactState.findings.push(
-          { id: 'finding-fengyan', agentId: 'fengyan', claim: '供应商切换需要先验证最坏交付风险。' },
-          { id: 'finding-jingyuan', agentId: 'jingyuan', claim: '应先用一轮可逆试运行验证稳定性。' },
-        );
+        for (const advisor of reactState.advisorPool) {
+          reactState.findings.push({
+            id: `finding-${advisor.id}-${reactState.findings.length}`,
+            agentId: advisor.id,
+            claim: `${advisor.name || advisor.id}给出本轮独立判断。`,
+          });
+        }
         return { state: 'OUTPUT' };
       },
       reflectFn: async (current) => {

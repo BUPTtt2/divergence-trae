@@ -2,6 +2,27 @@ import { motion } from 'framer-motion';
 import { createDecisionArtifact } from '../../game/decisionArtifactModel.js';
 import './decisionArtifact.css';
 
+const KNOWLEDGE_LABEL = {
+  verified: '已证',
+  unknown: '未知',
+  contested: '冲突',
+};
+
+function oracleSnapshot(oracle) {
+  const lines = Array.isArray(oracle?.lineMeta) ? oracle.lineMeta : [];
+  const counts = lines.reduce((result, line) => {
+    const state = KNOWLEDGE_LABEL[line?.knowledgeState] ? line.knowledgeState : 'unknown';
+    result[state] += 1;
+    return result;
+  }, { verified: 0, unknown: 0, contested: 0 });
+  const primary = [oracle?.primary?.lower?.name, oracle?.primary?.upper?.name].filter(Boolean).join('');
+  return {
+    lines,
+    counts,
+    name: oracle?.gua || primary || '',
+  };
+}
+
 export default function DecisionArtifact({
   phase,
   inference,
@@ -26,9 +47,10 @@ export default function DecisionArtifact({
   const isCommitPhase = ['path_reveal', 'committing'].includes(phase);
   const isFinal = phase === 'final';
   const oracle = artifact.oracle || inference?.gua || null;
+  const oracleState = oracleSnapshot(oracle);
   return (
     <motion.section
-      className="decision-artifact"
+      className={`decision-artifact${isFinal ? ' is-final' : (isCommitPhase ? ' is-commit' : ' is-decision')}`}
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: .55, ease: [0.16, 1, 0.3, 1] }}
@@ -51,13 +73,13 @@ export default function DecisionArtifact({
             <article key={finding.id}>
               <header><strong>{finding.agentName}</strong><span>{finding.perspective}</span></header>
               <p>{finding.claim}</p>
+              {finding.reasoning && <p className="decision-artifact__reasoning"><b>判断依据</b>{finding.reasoning}</p>}
               <footer>
                 <span>{finding.evidenceIds.length > 0 ? `${finding.evidenceIds.length} 条证据引用` : '基于已确认案卷'}</span>
                 {finding.confidence != null && <span>置信 {Math.round(finding.confidence * 100)}%</span>}
               </footer>
-              {(finding.reasoning || finding.assumptions.length > 0 || finding.reversalConditions.length > 0) && <details>
-                <summary>查看依据与反转条件</summary>
-                {finding.reasoning && <p><b>依据</b>{finding.reasoning}</p>}
+              {(finding.assumptions.length > 0 || finding.reversalConditions.length > 0) && <details>
+                <summary>查看假设与改路信号</summary>
                 {finding.assumptions.length > 0 && <p><b>尚有假设</b>{finding.assumptions.join('；')}</p>}
                 {finding.reversalConditions.length > 0 && <p><b>改路信号</b>{finding.reversalConditions.join('；')}</p>}
               </details>}
@@ -98,7 +120,12 @@ export default function DecisionArtifact({
             <button type="button" onClick={onReveal}>揭示认知镜面</button>
           </> : <>
             <span aria-hidden="true">{oracle?.trigram || '☯'}</span>
-            <h3>{oracle?.gua || selectedPath.gua || '本卦'} · {oracle?.element || selectedPath.element || '观照'}</h3>
+            <h3>{oracleState.name || selectedPath.gua || '本卦'} · {oracle?.element || selectedPath.element || '观照'}</h3>
+            {oracleState.lines.length > 0 && <div className="decision-artifact__knowledge-counts" aria-label="卦象对应的案卷知识状态">
+              <span>已证 {oracleState.counts.verified}</span>
+              <span>未知 {oracleState.counts.unknown}</span>
+              <span>冲突 {oracleState.counts.contested}</span>
+            </div>}
             <p>{oracle?.text || oracle?.tip || '卦象只提醒你检查遗漏、冲突与反转条件。'}</p>
             {phase === 'path_reveal' ? (
               <button type="button" onClick={onCommit}>确认此路 · 写下本心</button>
@@ -119,19 +146,29 @@ export default function DecisionArtifact({
       </section>}
 
       {isFinal && selectedPath && <section className="decision-artifact__final">
-        <div>
-          <small>已归档路径</small>
+        <div className="decision-artifact__ticket">
+          <small>命牌 · {fateContent?.ticketId || 'SESSION'}</small>
           <h3>{selectedPath.label}</h3>
-          <p>{fateContent?.summary || artifact.summary || '本局已归档。后续结果可回到案卷继续记录。'}</p>
+          <p className="decision-artifact__ticket-question">{fateContent?.question || inference?.question || '本局问题'}</p>
+          <p>{artifact.summary || fateContent?.summary || '本局已归档。后续结果可回到案卷继续记录。'}</p>
           {Array.isArray(fateContent?.keyPoints) && fateContent.keyPoints.length > 0 && <ul>
             {fateContent.keyPoints.map((point) => <li key={point}>{point}</li>)}
           </ul>}
           {currentCommit?.trim() && <blockquote>{currentCommit.trim()}</blockquote>}
+          <div className="decision-artifact__ticket-meta">
+            <span>{fateContent?.hexagram?.primary || oracleState.name || '本卦'}</span>
+            <span>{new Date(fateContent?.timestamp || Date.now()).toLocaleDateString('zh-CN')}</span>
+          </div>
         </div>
         <aside>
           <span>{oracle?.trigram || '☯'}</span>
-          <strong>{oracle?.gua || selectedPath.gua || '本卦'}</strong>
+          <strong>{oracleState.name || selectedPath.gua || '本卦'}</strong>
           <small>认知镜面，不是替你裁决的答案</small>
+          {oracleState.lines.length > 0 && <div className="decision-artifact__knowledge-counts">
+            <span>已证 {oracleState.counts.verified}</span>
+            <span>未知 {oracleState.counts.unknown}</span>
+            <span>冲突 {oracleState.counts.contested}</span>
+          </div>}
         </aside>
         <footer>
           <button type="button" onClick={onOpenHistory}>查看完整过程</button>
@@ -141,8 +178,16 @@ export default function DecisionArtifact({
       </section>}
 
       {artifact.oracle?.text && <details className="decision-artifact__lens">
-        <summary>查看易经认知镜面</summary>
+        <summary>查看易经认知镜面 · 为什么形成这一卦</summary>
         <p>{artifact.oracle.text}</p>
+        {oracleState.lines.length > 0 && <ol>
+          {oracleState.lines.map((line, index) => (
+            <li key={`${line.position || index}-${line.perspective || 'unknown'}`}>
+              <span>第 {line.position || index + 1} 爻 · {line.perspective || '未指定视角'}</span>
+              <b data-state={line.knowledgeState}>{KNOWLEDGE_LABEL[line.knowledgeState] || '未知'}{line.isDynamic ? ' · 动' : ''}</b>
+            </li>
+          ))}
+        </ol>}
         <small>卦象用于换角度审视，不替代事实和你的决定。</small>
       </details>}
     </motion.section>

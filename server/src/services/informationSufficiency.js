@@ -242,8 +242,10 @@ export function buildQuickInformationFields(question) {
   ];
 }
 
-export function buildInformationOrchestration({ question, answers, round = 1, depth = 'standard' } = {}) {
-  const informationFields = buildQuickInformationFields(question);
+export function buildInformationOrchestration({ question, answers, round = 1, depth = 'standard', informationFields: suppliedFields } = {}) {
+  const informationFields = Array.isArray(suppliedFields) && suppliedFields.length > 0
+    ? suppliedFields
+    : buildQuickInformationFields(question);
   const sufficiency = assessInformationSufficiency({ question, answers, fields: informationFields, round });
   return {
     depth,

@@ -4,9 +4,9 @@
  * - generateAgentDialogue: 调用 LLM 生成单个 Agent 的回应
  */
 
-import { AGENT_POOL, getAgentsByIds, AGENT_POOL_MAP, buildAgentSystemPrompt } from '../data/agentPool.js';
+import { AGENT_POOL, AGENT_POOL_MAP, buildAgentSystemPrompt } from '../data/agentPool.js';
 import { callLLM } from './llmRouter.js';
-import { retrieveMemories, getUserProfile, extractMemoriesFromInference } from './memoryService.js';
+import { retrieveMemories, getUserProfile } from './memoryService.js';
 import { listAdvisors, formatAdvisorForAgentPool } from './customAdvisorService.js';
 import logger from './logger.js';
 
@@ -14,6 +14,45 @@ export function uniqueValidAgentIds(agentIds, validIds) {
   const allowed = new Set(Array.isArray(validIds) ? validIds : []);
   return [...new Set(Array.isArray(agentIds) ? agentIds : [])]
     .filter((id) => allowed.has(id));
+}
+
+const DIMENSION_PERSPECTIVES = new Set([
+  'financial', 'risk', 'emotional', 'reflection', 'strategic', 'action',
+  'communication', 'macro', 'health', 'legal', 'education', 'experience',
+  'practical', 'technical', 'career',
+]);
+
+export function buildSelectionDimensions({
+  selectedAgentIds = [],
+  selectedAgents = [],
+  modelDimensions = [],
+} = {}) {
+  const selectedIds = new Set(selectedAgentIds);
+  const modelDefined = (Array.isArray(modelDimensions) ? modelDimensions : [])
+    .slice(0, 6)
+    .flatMap((dimension) => {
+      const name = String(dimension?.name || '').trim().slice(0, 40);
+      const perspective = String(dimension?.perspective || '').trim().toLowerCase();
+      if (!name || !DIMENSION_PERSPECTIVES.has(perspective)) return [];
+      return [{
+        name,
+        perspective,
+        agents: (Array.isArray(dimension?.agentIds) ? dimension.agentIds : dimension?.agents || [])
+          .filter((agentId) => selectedIds.has(agentId)),
+        toolNeeds: (Array.isArray(dimension?.toolNeeds) ? dimension.toolNeeds : [])
+          .map((tool) => String(tool || '').trim())
+          .filter(Boolean)
+          .slice(0, 4),
+      }];
+    });
+  if (modelDefined.length >= 2) return modelDefined;
+
+  return selectedAgents.slice(0, 6).map((agent) => ({
+    name: String(agent.stance || agent.name || '补充视角').replace(/视角$/, '') || '补充视角',
+    perspective: DIMENSION_PERSPECTIVES.has(agent.perspective) ? agent.perspective : 'reflection',
+    agents: [agent.id],
+    toolNeeds: [],
+  }));
 }
 
 /**
@@ -83,7 +122,8 @@ ${agentList}
 {
   "agentIds": ["id1", "id2", ...],
   "analysis": "对问题的深度分析和拆解，说明为什么需要这些视角",
-  "reasoning": "挑选每个Agent的理由，每个Agent一句话"
+  "reasoning": "挑选每个Agent的理由，每个Agent一句话",
+  "dimensions": [{"name":"本题具体判断维度","perspective":"risk","agentIds":["id1"],"toolNeeds":[]}]
 }
 
 【规则】
@@ -93,7 +133,8 @@ ${agentList}
 4. agentIds 必须是上面列出的有效 id
 5. analysis 要深入拆解问题的核心矛盾和关键维度
 6. reasoning 要说明每个被选中Agent的作用
-7. 只返回 JSON，不要其他文字`;
+7. dimensions 必须是 2-6 个贴合本题的判断维度，并绑定负责的已选 Agent；不要套固定模板
+8. 只返回 JSON，不要其他文字`;
 
   const userPrompt = `用户问题：「${question}」
 
@@ -133,6 +174,11 @@ ${agentList}
       agentIds,
       reasoning: parsed.reasoning || 'LLM 分析完成',
       analysis: parsed.analysis || '',
+      dimensions: buildSelectionDimensions({
+        selectedAgentIds: agentIds,
+        selectedAgents: agentIds.map((id) => allAgentMap[id]).filter(Boolean),
+        modelDimensions: parsed.dimensions,
+      }),
       fallback: false,
     };
   } catch (e) {
@@ -176,6 +222,10 @@ function _ruleBasedAgents(question, allAgents = [], errorReason = '') {
     agentIds: pickedAgentIds,
     reasoning: '规则兜底：核心四智囊 + 关键词扩展',
     analysis: errorReason ? `（LLM暂不可用：${errorReason.slice(0, 50)}，演已按规则选智囊）` : '（演按问题类型匹配智囊）',
+    dimensions: buildSelectionDimensions({
+      selectedAgentIds: pickedAgentIds,
+      selectedAgents: pickedAgentIds.map((id) => allAgents.find((agent) => agent.id === id)).filter(Boolean),
+    }),
     fallback: true,
   };
 }
@@ -252,27 +302,30 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
 【反转条件】用分号分隔会使主张失效或需要改路的信号
 不要输出上述四段以外的内容。` : '';
 
-  const systemPrompt = `${basePrompt}${memoryContextInjection}
+  const interactionRules = options.mode === 'finding' ? `
+【案卷判断规则】
+1. 案卷已由用户确认，不再向用户提问；缺失信息必须列为假设或反转条件。
+2. 不得编造地点、价格、收入、概率、行情或用户背景。没有可追溯来源就明确写“未知”。
+3. 主张必须有条件、可反驳；依据要完整解释为什么，不得只写一句口号。
+4. 只履行自己的角色合同，不代替其他智囊，也不替用户做最终决定。` : `
+【对话规则】
+1. 信息不足时先指出具体缺口，再问 1 个最能改变判断的问题。
+2. 复述你真正理解到的现状，不能补写用户没说过的背景。
+3. 数字必须有来源；没有来源就明确写成待验证变量。`;
 
-【核心行为约束（P0修复，必须严格遵守）】
-1. **严禁编造事实**：如果用户的问题信息不足（缺金额/时间/具体情况/现状/关键条件等），**必须明确说明"目前信息不够，我需要先问清楚XXX才能判断"**，绝对不能虚构用户有收入/有工作/有资产/有伴侣等未提及的背景
-2. **优先提问，不要单向输出结论**：你的发言应该是「提问+讨论」的效果（像真人咨询一样），先问清关键信息再给判断；不要直接甩结论
-3. **敢于追问用户**：可以连续抛出1-2个具体问题（围绕你的视角），引导用户讲清楚真实情况
-4. **展示你收集到的信息**：在发言开头可以用1句话复述你理解到的现状（比如"按你说的，现在是和女朋友在找实习但还没着落，住酒店成本高怕离公司远，对吧？"），让用户看到你没瞎编
-5. **数字必须有来源**：用户没提供成本、收入、留存率等数字时，只能追问或明确写成待验证变量，不得自行假设一个数字代替用户事实
+  const systemPrompt = `${basePrompt}${memoryContextInjection}${interactionRules}
 
 【补充约束】
-- 用中文口语，不要书面体
+- 用清楚自然的中文，不写空泛口号
 - 必须抓住用户问题里的具体词（数字、对象、场景），不要泛泛而谈
 - 不要给"祝你顺利"之类的客套结尾
 - 可以质疑用户、可以反问、可以泼冷水，但要说人话
 - 只输出用户可直接阅读的正文，禁止输出 XML/HTML 标签、user_input、mention 或系统字段
 
 【真Agent协作指令】
-- 若前面有其他智囊发言，必须主动对其至少一位做明确表态：用"我同意X说的"、"反驳X的观点"、"补充X的判断"这类自然语言引用对方名字
-- 不要各说各话，要让用户看到观点之间的碰撞
-- 若发现前一位智囊遗漏了关键维度，主动补位（如钱谷没算隐性成本，你指出）
-- 你的发言要建立在前面观点之上，而不是平行重述问题${findingInstruction}`;
+- 若前面有其他智囊发言，只在确实相关时明确同意、反驳或补充，不得为了表演协作而硬引用
+- 若发现前一位智囊遗漏了关键维度，指出遗漏及其对结论的影响
+- 不重复已有观点；新增信息必须能进入案卷${findingInstruction}`;
 
   // 构建上下文：之前的 Agent 发言（带 agentId 便于 LLM 精确引用）
   let contextText = '';
@@ -302,7 +355,16 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
         .join('\n');
   }
 
-  const userPrompt = `用户问：「${question}」${contextText}${agentContextText}
+  const evidenceContext = (Array.isArray(options.evidence) ? options.evidence : [])
+    .filter((item) => item?.evidence?.accepted === true)
+    .map((item, index) => `${index + 1}. [${item.tool || 'tool'}] ${item.evidence?.summary || item.summary || ''} 来源：${item.evidence?.sourceName || '未标注'}`)
+    .filter((item) => item.trim())
+    .join('\n');
+  const evidenceText = evidenceContext
+    ? `\n\n【本轮可引用的已接受工具证据】\n${evidenceContext}`
+    : '\n\n【本轮工具证据】没有通过证据门禁的外部资料；不得声称已查到实时行情、价格或概率。';
+
+  const userPrompt = `用户问：「${question}」${contextText}${agentContextText}${evidenceText}
 
 请以 ${agent.name}（${agent.stance}）的身份，${options.mode === 'finding' ? `完成任务“${options.task || '给出独立判断'}”，并按指定四段格式提交 finding` : '说 1-3 句话回应。不要复述用户问题'}。`;
 
@@ -313,14 +375,14 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
-    { maxTokens: 450, temperature: 0.85, timeout: 10000 }
+    { maxTokens: options.mode === 'finding' ? 800 : 450, temperature: options.mode === 'finding' ? 0.45 : 0.75, timeout: 16000 }
   );
 
   const sanitized = sanitizeAgentDialogue(text, question);
   if (!sanitized) {
     throw Object.assign(new Error(`智囊${agent.name}发言LLM返回空`), { type: 'LLM_EMPTY_OUTPUT' });
   }
-  return sanitized.slice(0, 450);
+  return sanitized.slice(0, options.mode === 'finding' ? 1200 : 500);
 }
 
 /**
@@ -472,15 +534,13 @@ export async function shouldContinueAsking(agent, originalQuestion, dialogueHist
  * @param {object} dialogueHistory 完整对话历史 { agentId: Array<string> }
  * @returns {Promise<{summary: string, options: Array<{label: string, keyPoints: Array<string>, guaRecommendation?: string}>}>}
  */
-export async function generateMasterSummary(originalQuestion, agentIds = [], dialogueHistory = {}) {
+export async function generateMasterSummary(originalQuestion, agentIds = [], dialogueHistory = {}, context = {}) {
   if (!originalQuestion) {
     return {
       summary: '问题已分析完毕。请跟随本心做出选择。',
       options: [],
     };
   }
-
-  const agentList = agentIds.map(id => AGENT_POOL_MAP[id]).filter(Boolean);
 
   let dialogueText = '';
   for (const id of agentIds) {
@@ -495,16 +555,16 @@ export async function generateMasterSummary(originalQuestion, agentIds = [], dia
       chunks = [String(history)];
     }
     if (chunks.length > 0) {
-      const name = AGENT_POOL_MAP[id]?.name || id;
+      const name = context?.advisorNames?.[id] || AGENT_POOL_MAP[id]?.name || id;
       dialogueText += `\n【${name}】\n${chunks.join('\n')}\n`;
     }
   }
 
   const systemPrompt = `你是"演"，推演核心，统领全局的太极Agent。
 
-【任务】梳理所有Agent的对话，生成：
-1. 全局总结 - 融合各Agent观点，指出关键矛盾和共识
-2. 3个选项 - 每个选项代表一种决策方向，附带3个关键点摘要
+【任务】把完整案卷与每位智囊的独立判断合成为可执行决策：
+1. 全局总结按“已确认事实 → 每位智囊主张及依据 → 共识/分歧 → 未知与反转条件”展开。
+2. 输出2至3条真正不同、可执行且可撤回的路径，不能只是推进/暂缓/维持的换皮。
 
 【输出格式】JSON:
 {
@@ -519,9 +579,11 @@ export async function generateMasterSummary(originalQuestion, agentIds = [], dia
 }
 
 【规则】
-- summary 要凝练，融合所有视角，指出矛盾和共识
+- 不遗漏任何已发言智囊；自定义智囊与系统智囊同等对待
+- summary 可以完整，但不重复，不得把假设写成事实
 - 每个选项代表一个真实可行的决策方向
-- keyPoints 要从对话中提炼，不要凭空捏造
+- keyPoints 必须包含行动、适用条件、停止或改路信号
+- 实时价格、行情、政策等只有在证据列表含可核验来源时才能引用，否则明确写“待核验”
 - guaRecommendation 要与选项的气质匹配（乾=进取，坤=守拙，离=光明，坎=险中求进等）
 - 只返回JSON，不要其他文字`;
 
@@ -529,6 +591,14 @@ export async function generateMasterSummary(originalQuestion, agentIds = [], dia
 
 【各Agent对话记录】
 ${dialogueText || '无详细对话记录'}
+
+【案卷与工具证据】
+${JSON.stringify({
+    understanding: context?.understanding || '',
+    confirmedFacts: context?.confirmedFacts || [],
+    unknowns: context?.unknowns || [],
+    evidence: context?.evidence || [],
+  }).slice(0, 10000)}
 
 请梳理全局信息，生成总结和选项。`;
 
@@ -544,7 +614,7 @@ ${dialogueText || '无详细对话记录'}
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      { maxTokens: 700, temperature: 0.7, timeout: 35000 }
+      { maxTokens: 1400, temperature: 0.45, timeout: 35000 }
     );
   } catch (e) {
     console.warn('[generateMasterSummary] LLM调用异常，返回本地兜底:', e.message);
@@ -580,7 +650,7 @@ ${dialogueText || '无详细对话记录'}
     label: opt.label || '择一而行',
     keyPoints: Array.isArray(opt.keyPoints) && opt.keyPoints.length > 0
       ? opt.keyPoints.slice(0, 3)
-      : ['顺势而为', '权衡利弊', '守正出奇'],
+      : ['先完成最小验证', '明确适用条件', '出现反转信号即改路'],
     guaRecommendation: opt.guaRecommendation || '乾',
   }));
   return { summary, options: normalizedOptions };

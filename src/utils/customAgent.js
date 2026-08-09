@@ -632,18 +632,13 @@ export async function generateNextInterviewQuestion(info, conversationId) {
   const qaHistory = previousQA.map((qa, i) => `问${i + 1}：${qa.q}\n答：${qa.a}`).join('\n\n');
   const round = previousQA.length;
 
-  // 如果已经问了3轮，结束
-  if (round >= 3) {
+  // 最多六轮，避免模型在信息不足时无限追问。
+  if (round >= 6) {
     return { question: null, isLast: true, conversationId, source: 'done' };
   }
 
   try {
     const { streamYanChat } = await import('../services/apiClient.js');
-    const roundInstructions = [
-      '第一问：问TA最擅长的具体场景（不要泛泛而谈，要具体到一个决策时刻）',
-      '第二问：追问TA说话的风格和方式（基于上一个回答追问，要具体）',
-      '第三问：问TA的边界和盲点（什么情况下TA不可靠，需要让位给其他智囊）',
-    ];
     const prompt = `你正在为智囊「${name}」做入营审问，帮助塑造TA的人设。
 
 关系：${relationLabel}
@@ -653,23 +648,26 @@ export async function generateNextInterviewQuestion(info, conversationId) {
 已审问：
 ${qaHistory || '（刚开始，还没问）'}
 
-${roundInstructions[round]}
-
 规则：
-- 问题要简短（25字内），针对"${name}是${relationLabel}"这个具体关系
-- 要基于已有的回答追问，不要重复已经问过的
-- 像一位智者在审问，有温度但不啰嗦
-- 直接输出问题文本，不要编号、不要前缀、不要解释`;
+- 先判断现有回答是否足以定义具体擅长场景、判断方法、说话方式、证据要求、边界与让位条件
+- 至少完成2轮；信息足够就停止，仍有关键缺口才继续，最多6轮
+- 下一问必须依赖上一答，优先追最影响真实表现的缺口，不按固定模板轮询
+- nextQuestion 25字内，不重复已问内容
+- 只输出JSON：{"complete":false,"nextQuestion":"...","reason":"还缺什么"}`;
 
     const result = await streamYanChat({ message: prompt, conversationId });
     if (result && result.text && result.text.length > 3) {
-      let q = result.text.trim().replace(/^(问[：:]|第[一二三]问[：:])\s*/, '').trim();
-      // 去掉可能的引号
-      q = q.replace(/^["""']|["""']$/g, '');
+      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+      if (parsed?.complete === true && round >= 2) {
+        return { question: null, isLast: true, conversationId: result.conversationId || conversationId, source: 'llm' };
+      }
+      let q = String(parsed?.nextQuestion || '').trim().replace(/^(问[：:]|第[一二三四五六]问[：:])\s*/, '').trim();
+      q = q.replace(/^["“”']|["“”']$/g, '');
       if (q.length > 2) {
         return {
           question: q,
-          isLast: round === 2,
+          isLast: false,
           conversationId: result.conversationId || conversationId,
           source: 'llm',
         };
@@ -681,9 +679,12 @@ ${roundInstructions[round]}
 
   // 本地降级
   const fallbackQuestions = localGenerateInterview(name, relationLabel, perspLabel);
+  if (round >= fallbackQuestions.length) {
+    return { question: null, isLast: true, conversationId, source: 'local' };
+  }
   return {
-    question: fallbackQuestions[round] || fallbackQuestions[0],
-    isLast: round === 2,
+    question: fallbackQuestions[round],
+    isLast: false,
     conversationId,
     source: 'local',
   };

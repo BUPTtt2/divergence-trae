@@ -60,59 +60,50 @@ async function fetchTool(url, opts = {}, ms = DEFAULT_TIMEOUT) {
 // ===== 工具实现 =====
 
 /**
- * web_search — 百度搜索建议（国内首选）+ DuckDuckGo（国际备选）
+ * web_search — DuckDuckGo 真实结果；百度搜索建议仅作为不可采信的发现线索。
  */
 async function webSearch({ query, maxResults = 3 }) {
-  // 1. 优先用百度搜索建议 API（国内网络稳定）
+  // 搜索建议不是网页事实，不能在真实结果之前短路证据链。
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   try {
-    const baiduUrl = `https://www.baidu.com/sugrec?prod=pc&wd=${encodeURIComponent(query)}`;
-    const baiduResp = await fetchTool(baiduUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+    const resp = await fetchTool(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      },
     });
-    if (baiduResp.ok) {
-      const baiduData = await baiduResp.json();
-      const sugList = Array.isArray(baiduData.g) ? baiduData.g : [];
-      const results = sugList.slice(0, maxResults).map(item => ({
-        title: item.q || '',
-        snippet: '百度搜索建议',
-        url: `https://www.baidu.com/s?wd=${encodeURIComponent(item.q || '')}`,
-      }));
-      if (results.length > 0) {
-        return { query, totalResults: results.length, results, fallback: false, source: '百度搜索建议' };
-      }
+    if (!resp.ok) throw new Error(`搜索 HTTP ${resp.status}`);
+    const html = await resp.text();
+    const results = [];
+    const re = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+    let m;
+    while ((m = re.exec(html)) && results.length < maxResults) {
+      let href = m[1];
+      const u = href.match(/uddg=([^&]+)/);
+      if (u) href = decodeURIComponent(u[1]);
+      const title = m[2].replace(/<[^>]+>/g, '').trim();
+      const snippet = m[3].replace(/<[^>]+>/g, '').trim().slice(0, 200);
+      if (title && snippet && /^https?:\/\//.test(href)) results.push({ title, snippet, url: href });
     }
-  } catch (e) {
-    // 百度失败，继续尝试 DuckDuckGo
+    if (results.length > 0) {
+      return { query, totalResults: results.length, results, fallback: false, source: 'DuckDuckGo' };
+    }
+  } catch {
+    // 继续生成发现线索，但证据网关会明确拒绝它，不会让 Agent 当成事实。
   }
 
-  // 2. 备选：DuckDuckGo HTML 解析
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const resp = await fetchTool(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    },
+  const baiduUrl = `https://www.baidu.com/sugrec?prod=pc&wd=${encodeURIComponent(query)}`;
+  const baiduResp = await fetchTool(baiduUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
   });
-  if (!resp.ok) throw new Error(`搜索 HTTP ${resp.status}`);
-  const html = await resp.text();
-  const results = [];
-  // DuckDuckGo HTML 结构：result__a (标题链接) + result__snippet
-  const re = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-  let m;
-  while ((m = re.exec(html)) && results.length < maxResults) {
-    let href = m[1];
-    // DuckDuckGo 重定向：//duckduckgo.com/l/?uddg=<encoded>
-    const u = href.match(/uddg=([^&]+)/);
-    if (u) href = decodeURIComponent(u[1]);
-    const title = m[2].replace(/<[^>]+>/g, '').trim();
-    const snippet = m[3].replace(/<[^>]+>/g, '').trim().slice(0, 200);
-    if (title) results.push({ title, snippet, url: href });
-  }
-  return {
-    query, totalResults: results.length, results,
-    fallback: results.length === 0,
-    source: 'DuckDuckGo',
-  };
+  if (!baiduResp.ok) throw new Error(`搜索 HTTP ${baiduResp.status}`);
+  const baiduData = await baiduResp.json();
+  const results = (Array.isArray(baiduData.g) ? baiduData.g : []).slice(0, maxResults).map((item) => ({
+    title: item.q || '',
+    snippet: '仅为搜索词线索，未读取网页内容',
+    url: `https://www.baidu.com/s?wd=${encodeURIComponent(item.q || '')}`,
+  }));
+  return { query, totalResults: results.length, results, fallback: true, source: '百度搜索建议（非证据）' };
 }
 
 /**

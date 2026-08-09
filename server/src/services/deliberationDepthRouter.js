@@ -43,7 +43,7 @@ export function buildQuickPlan(session, orchestrated = null) {
   const plan = {
     depth: effectiveDepth,
     depthReason: sufficiency.escalation.changed ? sufficiency.escalation.reason : depthRoute.reason,
-    maxQuestions: depthRoute.maxQuestions,
+    maxQuestions: Math.max(depthRoute.maxQuestions, informationFields.length),
     dimensions: orchestration.dimensions,
     agents: orchestration.advisors,
     toolProbes: [],
@@ -58,6 +58,7 @@ export function buildQuickPlan(session, orchestrated = null) {
       : '快推演：收集身体状态、进食情境与当前目标，不预设用户饥饿。',
     informationFields,
     informationStates: sufficiency.fieldStates,
+    caseAnalysis: orchestration.caseAnalysis || null,
     readiness: sufficiency.readiness,
     nextQuestion: askUser[0] || null,
     orchestration: {
@@ -115,7 +116,7 @@ export function buildIntakePlan(session, orchestration, depthRoute = routeDelibe
   const plan = {
     depth: depthRoute.depth,
     depthReason: depthRoute.reason,
-    maxQuestions: depthRoute.maxQuestions,
+    maxQuestions: Math.max(depthRoute.maxQuestions, informationFields.length),
     dimensions: orchestration.dimensions,
     agents: [],
     toolProbes: [],
@@ -126,6 +127,7 @@ export function buildIntakePlan(session, orchestration, depthRoute = routeDelibe
     analysis: '信息收集尚未完成，系统不会提前选择智囊或生成结论。',
     informationFields,
     informationStates: sufficiency.fieldStates,
+    caseAnalysis: orchestration.caseAnalysis || null,
     readiness: sufficiency.readiness,
     nextQuestion: askUser[0] || null,
     orchestration: {
@@ -155,7 +157,7 @@ export function buildIntakePlan(session, orchestration, depthRoute = routeDelibe
     informationFields: sufficiency.fieldStates,
     openingLine: plan.openingLine,
     round: plan.round,
-    maxRound: depthRoute.maxQuestions,
+    maxRound: Math.max(depthRoute.maxQuestions, informationFields.length),
     memory: [],
   };
 }

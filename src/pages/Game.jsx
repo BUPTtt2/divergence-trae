@@ -14,6 +14,7 @@ import { generateDialoguesForAgents } from '../services/inferenceEngine';
 import { saveAgentFeedback } from '../services/memoryStore';
 import { sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
+import { sandboxLayoutClass } from '../game/layoutState';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -197,8 +198,10 @@ export default function Game() {
     feedbackToastTimerRef.current = setTimeout(() => setFeedbackToast(null), 1600);
   }, []);
 
+  const layoutClass = sandboxLayoutClass(phase, companionOpen);
+
   return (
-    <div className={`game-root ${companionOpen ? 'companion-is-open' : ''} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)' }}>
+    <div className={`game-root ${layoutClass} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)' }}>
       <div className="crt-overlay" />
       {(backendError || streamError) && (
         <div role="alert" style={{

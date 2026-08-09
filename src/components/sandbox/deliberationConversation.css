@@ -78,6 +78,8 @@
 .deliberation-conversation textarea:focus { border-color: #d5b158; }
 .deliberation-conversation__field-input { min-height: 58px !important; margin-top: 10px; resize: vertical; }
 .deliberation-conversation__mode-help { margin: 7px 0 0; color: #8f8676; font: 10px/1.55 "Noto Serif SC", serif; }
+.deliberation-conversation__target { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; margin: 0 0 8px; color: #9f947f; font: 10px/1.5 "Noto Serif SC", serif; }
+.deliberation-conversation__target select { min-height: 38px; width: 100%; border: 1px solid rgb(213 177 88 / 28%); background: #080706; color: #e9dfc8; padding: 0 10px; font: 11px/1.5 "Noto Serif SC", serif; }
 .deliberation-conversation__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 9px; }
 .deliberation-conversation__actions .is-primary { border-color: #d5b158; background: #d5b158; color: #171009; }
 .deliberation-conversation__actions button:disabled { opacity: .35; cursor: not-allowed; }

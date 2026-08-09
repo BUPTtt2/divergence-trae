@@ -8,6 +8,17 @@ import { generateUUID } from '../utils/id.js';
 const PUBLISHED_TABLE = 'published_advisors';
 const SUBSCRIPTION_TABLE = 'advisor_subscriptions';
 
+const STARTER_MARKET_ADVISORS = [
+  { id: 'starter_city', name: '城居参谋', perspective: '居住与通勤', trigram: '巽', objective: '把预算、通勤、租期和共同居住者的约束转成可查证的选址条件', methodology: ['先校准预算口径', '再形成通勤锚点', '最后比较过渡与长期方案'], toolPolicy: { allow: ['web_search'], deny: ['business_write'] } },
+  { id: 'starter_career', name: '职途教练', perspective: '职业路径', trigram: '震', objective: '区分短期机会、能力积累和长期职业选择', methodology: ['识别当前阶段', '比较机会成本', '设计可逆试验'] },
+  { id: 'starter_cashflow', name: '钱包守门人', perspective: '现金流', trigram: '兑', objective: '检查预算口径、现金缓冲和最坏情况下的承受能力', methodology: ['核对收入稳定性', '计算固定支出比例', '设置止损线'] },
+  { id: 'starter_relation', name: '关系调解者', perspective: '共同决策', trigram: '离', objective: '识别共同决策中的诉求差异、责任分配和沟通风险', methodology: ['分别陈述诉求', '标记不可妥协项', '形成共同确认点'] },
+  { id: 'starter_learning', name: '学习规划师', perspective: '学习成长', trigram: '艮', objective: '把学习目标拆成路径、节奏、反馈和退出条件', methodology: ['定义可验证目标', '估算时间成本', '设置复盘节点'] },
+  { id: 'starter_product', name: '产品验证官', perspective: '用户价值', trigram: '乾', objective: '用真实用户路径、证据和最小试验检验产品判断', methodology: ['界定目标用户', '定位关键场景', '设计最小验证'] },
+  { id: 'starter_risk', name: '风险审计员', perspective: '风险与反证', trigram: '坎', objective: '主动寻找假设、失败模式和会推翻当前结论的证据', methodology: ['列出关键假设', '构造反例', '定义反转条件'] },
+  { id: 'starter_action', name: '行动设计师', perspective: '执行落地', trigram: '坤', objective: '把结论转成有负责人、时间点和反馈信号的下一步', methodology: ['确定第一步', '压缩行动成本', '设置反馈回路'] },
+];
+
 function clean(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -134,6 +145,44 @@ function marketAsset(publication, subscribed = false, userId = null) {
   };
 }
 
+function starterMarketAsset(advisor) {
+  return {
+    id: advisor.id,
+    assetId: `starter:${advisor.id}`,
+    advisorId: advisor.id,
+    sourceId: advisor.id,
+    source: 'market',
+    version: 1,
+    name: advisor.name,
+    stance: advisor.perspective,
+    perspective: advisor.perspective,
+    description: advisor.objective,
+    persona: `你是${advisor.name}，专注${advisor.perspective}，所有判断都要标明依据、假设与反转条件。`,
+    style: '市集精选',
+    trigram: advisor.trigram,
+    subscribed: false,
+    curated: true,
+    owned: false,
+    publishable: false,
+    subscriptionCount: 0,
+    evalStatus: 'curated',
+    contract: {
+      objective: advisor.objective,
+      methodology: advisor.methodology,
+      deliverable: '给出完整判断、证据状态、关键假设、反转条件和下一步',
+      toolPolicy: advisor.toolPolicy || { allow: [], deny: ['business_write'] },
+      evidencePolicy: { minimumLevel: 'E0', discloseUnknowns: true },
+      completionCriteria: ['回应本轮任务', '列出至少一个反转条件'],
+      safetyBoundaries: ['不编造用户事实', '没有可用来源时明确标为未知', '不替用户作最终决定'],
+      budget: { maxTurns: 2, maxToolCalls: advisor.toolPolicy?.allow?.length ? 2 : 0, timeoutMs: 35000 },
+    },
+  };
+}
+
+function executableStarterAsset(asset) {
+  return executableMarketAsset(starterMarketAsset(asset), true);
+}
+
 function executableMarketAsset(asset, subscribed) {
   const contract = asset.contract || contractSummary(asset);
   return {
@@ -215,7 +264,10 @@ export async function listCatalog({ userId, source = 'all', query: queryText = '
   } else if (source === 'owned') {
     assets = (await listAdvisors(userId)).map((advisor) => ownedAsset(advisor, ownLatest));
   } else if (source === 'market') {
-    assets = latestPublished.map((item) => marketAsset(item, subscribedIds.has(item.id), userId));
+    assets = [
+      ...STARTER_MARKET_ADVISORS.map(starterMarketAsset),
+      ...latestPublished.map((item) => marketAsset(item, subscribedIds.has(item.id), userId)),
+    ];
   } else if (source === 'mine') {
     const owned = (await listAdvisors(userId)).map((advisor) => ownedAsset(advisor, ownLatest));
     const subscribed = latestPublished
@@ -224,7 +276,10 @@ export async function listCatalog({ userId, source = 'all', query: queryText = '
     assets = [...owned, ...subscribed];
   } else {
     const owned = (await listAdvisors(userId)).map((advisor) => ownedAsset(advisor, ownLatest));
-    const market = latestPublished.map((item) => marketAsset(item, subscribedIds.has(item.id), userId));
+    const market = [
+      ...STARTER_MARKET_ADVISORS.map(starterMarketAsset),
+      ...latestPublished.map((item) => marketAsset(item, subscribedIds.has(item.id), userId)),
+    ];
     assets = [...AGENT_POOL.map(officialAsset), ...owned, ...market];
   }
 
@@ -349,17 +404,24 @@ export async function listExecutableMarketAdvisors(userId) {
 }
 
 export async function listExecutablePublicAdvisors(advisorIds = []) {
+  const starterIds = new Set(advisorIds.map((id) => String(id || '')).filter((id) => id.startsWith('starter_')));
   const wanted = new Set(
     advisorIds
       .map((id) => String(id || ''))
       .filter((id) => id.startsWith('published_'))
       .map((id) => id.slice('published_'.length)),
   );
-  if (wanted.size === 0) return [];
+  const starterAssets = STARTER_MARKET_ADVISORS
+    .filter((advisor) => starterIds.has(advisor.id))
+    .map(executableStarterAsset);
+  if (wanted.size === 0) return starterAssets;
   const rows = await publications();
-  return rows
+  return [
+    ...starterAssets,
+    ...rows
     .filter((row) => wanted.has(row.id))
-    .map((row) => executableMarketAsset(marketAsset(row, false), false));
+    .map((row) => executableMarketAsset(marketAsset(row, false), false)),
+  ];
 }
 
 export default {

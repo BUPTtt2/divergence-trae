@@ -72,15 +72,56 @@ test('confirmed round review is the only path from findings to reflection', asyn
     roundReviewConfirmed: true,
   };
   const events = [];
+  let orchestratorCalls = 0;
 
   const result = await runReActLoop('sess_review_confirmed', state, {
-    callLLMFn: async () => JSON.stringify({ action: 'output', args: {}, reason: '贡献已齐' }),
+    callLLMFn: async () => {
+      orchestratorCalls += 1;
+      throw new Error('确认本轮后不应重新运行编排模型');
+    },
     emitFn: async (_sessionId, event) => events.push(event),
     consumePendingCommandsFn: async () => [],
   });
 
   assert.equal(result.state, 'REFLECT');
+  assert.equal(orchestratorCalls, 0);
   assert.equal(events.at(-1).type, 'CONCLUSION_READY');
+});
+
+test('a completed confirmed council stops immediately without calling an advisor twice', async () => {
+  const state = {
+    question: '要不要北京租房',
+    questionContext: '要不要北京租房',
+    plan: { depth: 'standard', selectedAgentIds: ['qiangu', 'jiankang'] },
+    advisorPool: pool.slice(0, 2),
+    findings: [],
+    toolResults: [],
+    dialogue: [],
+  };
+  let orchestratorCalls = 0;
+  const advisorCalls = [];
+
+  const result = await runReActLoop('sess_single_contribution_per_advisor', state, {
+    callLLMFn: async () => {
+      orchestratorCalls += 1;
+      return JSON.stringify({
+        action: 'advisor_call',
+        args: { agentIds: ['qiangu', 'jiankang'] },
+        reason: '收集两位智囊的独立判断',
+      });
+    },
+    generateAgentDialogueFn: async (agent) => {
+      advisorCalls.push(agent.id);
+      return `${agent.name}给出独立判断`;
+    },
+    emitFn: async () => {},
+    consumePendingCommandsFn: async () => [],
+  });
+
+  assert.equal(result.state, 'ROUND_REVIEW');
+  assert.equal(orchestratorCalls, 1);
+  assert.deepEqual(advisorCalls, ['qiangu', 'jiankang']);
+  assert.deepEqual(state.findings.map((finding) => finding.agentId), ['qiangu', 'jiankang']);
 });
 
 test('a user question opens a new advisor round instead of reflecting stale findings', async () => {
@@ -116,3 +157,73 @@ test('a user question opens a new advisor round instead of reflecting stale find
   assert.ok(state.findings.every((finding) => finding.content.includes('如果晚上还要运动呢')));
   assert.ok(state.previousFindings.every((finding) => finding.content.startsWith('旧判断')));
 });
+
+test('a targeted user question calls only the named advisor and preserves the prior council record', async () => {
+  const state = {
+    question: '要不要北京租房',
+    questionContext: '要不要北京租房',
+    plan: { depth: 'standard', selectedAgentIds: ['qiangu', 'jiankang'], deliberationRound: 1 },
+    advisorPool: pool.slice(0, 2),
+    findings: [
+      { agentId: 'qiangu', content: '旧判断一', claim: '旧判断一' },
+      { agentId: 'jiankang', content: '旧判断二', claim: '旧判断二' },
+    ],
+    toolResults: [],
+    dialogue: [],
+    roundReviewConfirmed: true,
+  };
+  const called = [];
+
+  const result = await runReActLoop('sess_targeted_question', state, {
+    callLLMFn: async () => '',
+    generateAgentDialogueFn: async (agent, context) => {
+      called.push(agent.id);
+      return `${agent.name}单独回应：${context}`;
+    },
+    emitFn: async () => {},
+    consumePendingCommandsFn: async () => [{
+      id: 'cmd_targeted',
+      command_type: 'QUESTION',
+      content: '你对通勤时间怎么看？',
+      target_agent_id: 'jiankang',
+    }],
+  });
+
+  assert.equal(result.state, 'ROUND_REVIEW');
+  assert.deepEqual(called, ['jiankang']);
+  assert.equal(state.findings.length, 1);
+  assert.equal(state.findings[0].agentId, 'jiankang');
+  assert.equal(state.previousFindings.length, 2);
+});
+
+for (const commandType of ['SUPPLEMENT', 'CORRECTION']) {
+  test(`${commandType} stops the council and sends the changed fact back to case analysis`, async () => {
+    const state = {
+      question: '要不要北京租房',
+      questionContext: '要不要北京租房',
+      plan: { depth: 'standard', selectedAgentIds: ['qiangu'] },
+      advisorPool: pool.slice(0, 1),
+      findings: [{ agentId: 'qiangu', content: '旧判断', claim: '旧判断' }],
+      toolResults: [],
+      dialogue: [],
+      roundReviewConfirmed: true,
+    };
+    const called = [];
+
+    const result = await runReActLoop(`sess_${commandType.toLowerCase()}`, state, {
+      callLLMFn: async () => JSON.stringify({ action: 'output', args: {}, reason: '不应继续' }),
+      generateAgentDialogueFn: async () => { called.push('advisor'); return '不应调用'; },
+      emitFn: async () => {},
+      consumePendingCommandsFn: async () => [{
+        id: `cmd_${commandType.toLowerCase()}`,
+        command_type: commandType,
+        content: commandType === 'CORRECTION' ? '预算不是2000，是每人2000' : '女友工作地点尚未确定',
+        target_agent_id: null,
+      }],
+    });
+
+    assert.equal(result.state, 'READY');
+    assert.deepEqual(called, []);
+    assert.match(state.questionContext, commandType === 'CORRECTION' ? /预算不是2000/ : /工作地点尚未确定/);
+  });
+}

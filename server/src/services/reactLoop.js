@@ -312,11 +312,26 @@ async function applyUserCommands(sessionId, state, dependencies = {}) {
   for (const command of commands) {
     const type = command.command_type;
     if (type === 'PAUSE') return { state: 'PAUSED', command };
-    if (type === 'CORRECTION') return { state: 'READY', command };
+    if (type === 'CORRECTION' || type === 'SUPPLEMENT') {
+      const label = type === 'CORRECTION' ? '用户纠正案卷' : '用户补充事实';
+      state.questionContext = `${state.questionContext}\n${label}：${command.content}`.trim();
+      state.dialogue.push({ role: 'user', content: `${label}：${command.content}`, round: 0 });
+      await emit(sessionId, {
+        type: 'USER_CONTEXT_APPLIED',
+        data: {
+          commandId: command.id,
+          commandType: type,
+          content: command.content,
+          next: 'case-reanalysis',
+        },
+        actor: state.userId,
+        correlationId: state.actionId,
+        visibility: 'public',
+      });
+      return { state: 'READY', command, caseReanalysisRequired: true };
+    }
 
-    const prefix = type === 'QUESTION'
-      ? `用户向${command.target_agent_id || '智囊团'}追问`
-      : '用户补充事实';
+    const prefix = `用户向${command.target_agent_id || '智囊团'}追问`;
     if (!openedNewRound) {
       state.previousFindings = [...(state.findings || [])];
       state.findings = [];
@@ -326,6 +341,17 @@ async function applyUserCommands(sessionId, state, dependencies = {}) {
         deliberationRound: Number(state.plan?.deliberationRound || 1) + 1,
       };
       openedNewRound = true;
+    }
+    if (type === 'QUESTION' && command.target_agent_id) {
+      state.roundAdvisorIds = [command.target_agent_id];
+      state.targetedQuestion = {
+        commandId: command.id,
+        targetAgentId: command.target_agent_id,
+        content: command.content,
+      };
+    } else if (type === 'QUESTION') {
+      state.roundAdvisorIds = [...(state.plan?.selectedAgentIds || [])];
+      state.targetedQuestion = null;
     }
     state.questionContext = `${state.questionContext}\n${prefix}：${command.content}`.trim();
     state.dialogue.push({ role: 'user', content: `${prefix}：${command.content}`, round: 0 });
@@ -343,7 +369,9 @@ async function applyUserCommands(sessionId, state, dependencies = {}) {
 async function runConfirmedCouncil(sessionId, state, round, dependencies = {}) {
   const emit = dependencies.emitFn || eventBus.emit.bind(eventBus);
   const generateDialogue = dependencies.generateAgentDialogueFn || generateAgentDialogue;
-  const selectedIds = state.plan?.selectedAgentIds || [];
+  const selectedIds = state.roundAdvisorIds?.length > 0
+    ? state.roundAdvisorIds
+    : (state.plan?.selectedAgentIds || []);
   const selectedSet = new Set(selectedIds);
   const pool = (state.advisorPool || []).filter((agent) => selectedSet.size === 0 || selectedSet.has(agent.id));
   const completedIds = new Set((state.findings || []).map((finding) => finding.agentId));
@@ -371,14 +399,14 @@ async function runConfirmedCouncil(sessionId, state, round, dependencies = {}) {
             state.findings || [],
             [],
             state.userId,
-            { mode: 'finding', task: state.plan?.assignments?.find((assignment) => assignment.agentId === agent.id)?.task },
+            { mode: 'finding', task: state.plan?.assignments?.find((assignment) => assignment.agentId === agent.id)?.task, evidence: state.toolResults || [] },
           ),
           ADVISOR_TIMEOUT_MS,
           `智囊${agent.name}发言`,
         ),
         { retries: 1, delayMs: 1000, name: `agent_${agent.id}` },
       );
-      const content = String(text || '').trim().slice(0, 600);
+      const content = String(text || '').trim().slice(0, 1400);
       if (!content) throw new Error('智囊没有返回可用结论');
       state.llmCallCount++;
       const finding = createAdvisorFinding(agent, content, state, round, index);
@@ -436,6 +464,46 @@ export async function runReActLoop(sessionId, state, dependencies = {}) {
 
   logger.info('[ReAct] 循环开始', { sessionId, round: 1 });
 
+  const initialInterruption = await applyUserCommands(sessionId, state, dependencies);
+  if (initialInterruption) return initialInterruption;
+
+  if (state.roundReviewConfirmed === true) {
+    const contributionGate = validateDeliberationContribution(state);
+    if (contributionGate.allowed) {
+      await emit(sessionId, {
+        type: 'CONCLUSION_READY',
+        data: {
+          contributionGate,
+          findingIds: (state.findings || []).map((finding) => finding.findingId).filter(Boolean),
+        },
+        actor: 'yan', correlationId: state.actionId, visibility: 'public',
+      });
+      return { state: 'REFLECT', contributionGate };
+    }
+  }
+
+  if (state.targetedQuestion?.targetAgentId) {
+    const advisorFailures = await runConfirmedCouncil(sessionId, state, state.plan?.deliberationRound || 1, dependencies);
+    const contributionGate = validateDeliberationContribution({
+      ...state,
+      plan: { ...(state.plan || {}), selectedAgentIds: state.roundAdvisorIds },
+    });
+    await emit(sessionId, {
+      type: 'ROUND_AWAITING_USER',
+      data: {
+        round: state.plan?.deliberationRound || 1,
+        mode: 'targeted-question',
+        targetAgentId: state.targetedQuestion.targetAgentId,
+        contributionGate,
+        advisorFailures,
+      },
+      actor: 'yan', correlationId: state.actionId, visibility: 'public',
+    });
+    return contributionGate.allowed
+      ? { state: 'ROUND_REVIEW', contributionGate, advisorFailures }
+      : { state: 'DELIBERATION_BLOCKED', contributionGate, advisorFailures };
+  }
+
   // ===== 避免日志反复：连续相同工具调用/空观察结果 → 强制终止搜索（避免 web_search 无限循环）
   let lastToolSig = '';
   let consecutiveSameTool = 0;
@@ -457,7 +525,7 @@ export async function runReActLoop(sessionId, state, dependencies = {}) {
   };
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
-    const interruption = await applyUserCommands(sessionId, state, dependencies);
+    const interruption = round === 1 ? null : await applyUserCommands(sessionId, state, dependencies);
     if (interruption) return interruption;
     // 超时检查
     if (Date.now() - startTime > DELIBERATE_TIMEOUT_MS) {
@@ -605,9 +673,11 @@ export async function runReActLoop(sessionId, state, dependencies = {}) {
         case 'advisor_call': {
           const agentIds = action.args.agentIds || [];
           const pool = state.advisorPool || AGENT_POOL;
-          const agents = resolveAdvisorAgents(agentIds, pool);
+          const completedAgentIds = new Set((state.findings || []).map((finding) => finding.agentId));
+          const agents = resolveAdvisorAgents(agentIds, pool)
+            .filter((agent) => !completedAgentIds.has(agent.id));
           if (agents.length === 0) {
-            observation = '未指定有效智囊';
+            observation = '本轮所选智囊均已完成独立判断';
             break;
           }
 
@@ -633,7 +703,7 @@ export async function runReActLoop(sessionId, state, dependencies = {}) {
                       state.findings || [],
                       [],
                       state.userId,
-                      { mode: 'finding', task: state.plan?.assignments?.find((assignment) => assignment.agentId === agent.id)?.task }
+                      { mode: 'finding', task: state.plan?.assignments?.find((assignment) => assignment.agentId === agent.id)?.task, evidence: state.toolResults || [] }
                     ),
                     ADVISOR_TIMEOUT_MS,
                     `智囊${agent.name}发言`
@@ -642,7 +712,7 @@ export async function runReActLoop(sessionId, state, dependencies = {}) {
                 );
                 state.llmCallCount++;
 
-                const content = String(text || '').trim().slice(0, 600);
+                const content = String(text || '').trim().slice(0, 1400);
                 if (!content) throw new Error('智囊没有返回可用结论');
                 const finding = createAdvisorFinding(agent, content, state, round, i);
 
@@ -684,6 +754,22 @@ export async function runReActLoop(sessionId, state, dependencies = {}) {
             if (interruption) return interruption;
           }
           observation = `${agents.length}位智囊已发言`;
+
+          const contributionGate = validateDeliberationContribution(state);
+          if (contributionGate.allowed && state.roundReviewConfirmed !== true) {
+            await emit(sessionId, {
+              type: 'ROUND_AWAITING_USER',
+              data: {
+                round: state.plan?.deliberationRound || 1,
+                contributionGate,
+                findingIds: (state.findings || []).map((finding) => finding.findingId).filter(Boolean),
+                prompt: '本轮智囊已完成独立判断。你可以追问、纠正、补充，或确认进入汇总。',
+                actions: ['question_advisor', 'correct_case', 'supplement_fact', 'continue_to_summary'],
+              },
+              actor: 'yan', correlationId: state.actionId, visibility: 'public',
+            });
+            return { state: 'ROUND_REVIEW', contributionGate };
+          }
           break;
         }
 
@@ -755,7 +841,10 @@ export async function runReActLoop(sessionId, state, dependencies = {}) {
     elapsed: Date.now() - startTime,
   });
 
-  let contributionGate = validateDeliberationContribution(state);
+  const contributionScope = () => (state.roundAdvisorIds?.length > 0
+    ? { ...state, plan: { ...(state.plan || {}), selectedAgentIds: state.roundAdvisorIds } }
+    : state);
+  let contributionGate = validateDeliberationContribution(contributionScope());
   let advisorFailures = [];
   if (!contributionGate.allowed) {
     advisorFailures = await runConfirmedCouncil(
@@ -764,7 +853,7 @@ export async function runReActLoop(sessionId, state, dependencies = {}) {
       Math.min(MAX_ROUNDS + 1, 5),
       dependencies,
     );
-    contributionGate = validateDeliberationContribution(state);
+    contributionGate = validateDeliberationContribution(contributionScope());
   }
 
   if (!contributionGate.allowed) {

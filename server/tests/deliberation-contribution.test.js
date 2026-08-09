@@ -36,6 +36,38 @@ test('standard deliberation cannot pass with only one advisor contribution', () 
   assert.deepEqual(result.missingAgentIds, ['reflection']);
 });
 
+test('standard deliberation requires every advisor the user confirmed', () => {
+  const result = validateDeliberationContribution({
+    plan: { depth: 'standard', selectedAgentIds: ['health', 'reflection', 'finance'] },
+    findings: [
+      { agentId: 'health', content: '检查身体信号' },
+      { agentId: 'reflection', content: '检查目标冲突' },
+    ],
+  });
+
+  assert.equal(result.allowed, false);
+  assert.equal(result.requiredCount, 3);
+  assert.deepEqual(result.missingAgentIds, ['finance']);
+});
+
+test('an explicitly waived failed advisor does not block the council', () => {
+  const result = validateDeliberationContribution({
+    plan: {
+      depth: 'standard',
+      selectedAgentIds: ['health', 'reflection', 'custom_baby'],
+      waivedAgentIds: ['custom_baby'],
+    },
+    findings: [
+      { agentId: 'health', content: '检查身体信号' },
+      { agentId: 'reflection', content: '检查目标冲突' },
+    ],
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.requiredCount, 2);
+  assert.deepEqual(result.waivedAgentIds, ['custom_baby']);
+});
+
 test('unselected advisor output cannot satisfy the confirmed council gate', () => {
   const result = validateDeliberationContribution({
     plan: { depth: 'standard', selectedAgentIds: ['health', 'reflection'] },

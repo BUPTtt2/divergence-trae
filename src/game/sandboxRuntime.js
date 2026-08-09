@@ -79,6 +79,11 @@ export function adaptFateTicket(ticket) {
   const keyFindings = Array.isArray(ticket.keyFindings) ? ticket.keyFindings : [];
   return {
     ticketId: ticket.ticketId,
+    question: String(ticket.question || ''),
+    choice: String(ticket.choice || ''),
+    feedback: String(ticket.feedback || ''),
+    hexagram: ticket.hexagram || null,
+    timestamp: Number(ticket.timestamp) || Date.now(),
     verse: String(ticket.oracleText || ''),
     explanation: String(ticket.oracleText || ''),
     summary: keyFindings.map((finding) => finding.excerpt).filter(Boolean).join('；'),

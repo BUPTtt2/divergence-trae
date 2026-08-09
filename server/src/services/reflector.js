@@ -550,6 +550,7 @@ function preLensDialogue(findings) {
   const dialogueHistory = {};
   const agentIds = [];
   const sourceFindings = [];
+  const advisorNames = {};
   for (const finding of Array.isArray(findings) ? findings : []) {
     if (!finding || finding.lensTaskId || finding.source === 'lens-review') continue;
     const agentId = String(finding.agentId || '').trim();
@@ -560,13 +561,14 @@ function preLensDialogue(findings) {
       dialogueHistory[agentId] = [];
       agentIds.push(agentId);
     }
+    advisorNames[agentId] = finding.agentName || finding.name || advisorNames[agentId] || agentId;
     dialogueHistory[agentId].push(content);
   }
-  return { agentIds, dialogueHistory, sourceFindings };
+  return { agentIds, dialogueHistory, sourceFindings, advisorNames };
 }
 
 function normalizeEvidenceDerivedSummary(generated, sourceRefs = {}) {
-  const summary = normalizeBusinessText(generated?.summary, 360);
+  const summary = normalizeBusinessText(generated?.summary, 900);
   const findingIds = [...new Set((sourceRefs.findingIds || []).filter(Boolean))];
   const evidenceIds = [...new Set((sourceRefs.evidenceIds || []).filter(Boolean))];
   if (!summary || findingIds.length === 0 || !Array.isArray(generated?.options) || generated.options.length === 0) return null;
@@ -597,9 +599,18 @@ function normalizeEvidenceDerivedSummary(generated, sourceRefs = {}) {
 
 async function buildBusinessDecisionProjection(session, findings, generateMasterSummaryFn) {
   const question = session?.questionContext || session?.question_context || session?.question || '';
-  const { agentIds, dialogueHistory, sourceFindings } = preLensDialogue(findings);
+  const { agentIds, dialogueHistory, sourceFindings, advisorNames } = preLensDialogue(findings);
   try {
-    const generated = await generateMasterSummaryFn(question, agentIds, dialogueHistory);
+    const caseFile = session?.plan?.caseFile || session?.decision_case || session?.decisionCase || session?.case_file || session?.caseFile || {};
+    const generated = await generateMasterSummaryFn(question, agentIds, dialogueHistory, {
+      advisorNames,
+      understanding: caseFile?.understanding || session?.case_understanding || '',
+      confirmedFacts: caseFile?.facts || [],
+      unknowns: caseFile?.unknowns || session?.plan?.caseAnalysis?.unknownLabels || session?.case_unknown_labels || [],
+      evidence: (session?.tool_results || session?.toolResults || [])
+        .filter((item) => item?.ok && item?.evidence?.accepted)
+        .map((item) => ({ tool: item.tool, summary: item.evidence?.summary, urls: item.evidence?.sourceUrls || [] })),
+    });
     const sourceRefs = {
       findingIds: sourceFindings.map((finding) => finding?.findingId || finding?.id).filter(Boolean),
       evidenceIds: sourceFindings.flatMap((finding) => [

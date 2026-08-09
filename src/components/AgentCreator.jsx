@@ -180,13 +180,7 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
     setInterviewQA(newQA);
     setCurrentAnswer('');
 
-    if (newQA.length >= 3) {
-      // 3轮完成，进入封印
-      await proceedToSeal(newQA);
-    } else {
-      // 继续下一问
-      await askNextQuestion(newQA);
-    }
+    await askNextQuestion(newQA);
   };
 
   // 换个问法（让LLM重新生成当前问题）
@@ -219,11 +213,7 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
     setCurrentAnswer('');
     const newQA = [...interviewQA, { q: currentQuestion, a: '（跳过）' }];
     setInterviewQA(newQA);
-    if (newQA.length >= 3) {
-      await proceedToSeal(newQA);
-    } else {
-      await askNextQuestion(newQA);
-    }
+    await askNextQuestion(newQA);
   };
 
   // ===== 步骤3 → 步骤4：封印 =====
@@ -232,7 +222,6 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
     setLoading(true);
     try {
       const perspLabel = getPerspectiveLabel();
-      const answersForRefine = finalQA.map(qa => qa.a === '（跳过）' ? '' : qa.a);
       const personaResult = await refinePersonaWithInterview(
         name, relation, perspective, contextSummary,
         finalQA, // 传对话式 QA 数组
@@ -293,7 +282,7 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
         budget: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 35000 },
       });
       // 合并 DB id 与铸造时的展示字段，供前端卡片显示
-      const displayAgent = { ...forgedAgent, id: saved.id };
+      const displayAgent = { ...forgedAgent, id: `custom_${saved.id}`, sourceId: saved.id };
       setForgedAgent(displayAgent);
       setStep(4);
       onSaved?.(displayAgent);
@@ -494,7 +483,7 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
           {/* 步骤3: 演审问 - 对话式 */}
           {step === 2 && (
             <motion.div key="step3" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.3 }}>
-              <StepHeader title="演之审问" subtitle="三问递进，塑TA之魂" />
+              <StepHeader title="演之审问" subtitle="按回答递进，关键设定清楚即止" />
 
               {/* 已回答的 QA 历史 */}
               {interviewQA.length > 0 && (
@@ -516,7 +505,7 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
                 <>
                   <div style={{ marginBottom: '10px' }}>
                     <div style={{ fontSize: '10px', color: '#C8A850', marginBottom: '4px', letterSpacing: '0.1em' }}>
-                      第{interviewQA.length + 1}问 {interviewQA.length >= 2 && '（最后一问）'}
+                      第{interviewQA.length + 1}问 · 由上一答决定下一问
                     </div>
                     <motion.div
                       key={currentQuestion}
@@ -555,7 +544,7 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
                         fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.15em',
                       }}
                     >
-                      答 ({interviewQA.length + 1}/3)
+                      回答并让演判断是否继续
                     </button>
                     <button
                       onClick={handleRephraseQuestion}

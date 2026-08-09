@@ -48,6 +48,7 @@ function isEmptyResult(toolName, result) {
   if (!result || typeof result !== 'object') return true;
   if (result.error || result.mock) return true;
   if ((toolName === 'web_search' || toolName === 'company_info') && (!Array.isArray(result.results) || result.results.length === 0)) return true;
+  if (toolName === 'web_search' && /搜索建议/.test(String(result.source || ''))) return true;
   return false;
 }
 

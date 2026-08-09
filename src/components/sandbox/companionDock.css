@@ -75,6 +75,7 @@
 .companion-launcher:focus-visible { outline: 2px solid #efd47d; outline-offset: 3px; }
 
 .game-root.companion-is-open .sandbox-stage { width: calc(100% - 404px) !important; transition: width 320ms cubic-bezier(.22,.8,.24,1); }
+.game-root.decision-artifact-is-open .sandbox-stage { width: calc(100% - min(500px, 44vw) - 36px) !important; transition: width 320ms cubic-bezier(.22,.8,.24,1); }
 
 @media (min-width: 900px) and (max-width: 1119px) {
   .companion-dock { --companion-width: 31vw; }
@@ -92,9 +93,10 @@
     box-shadow: 0 -24px 70px rgb(0 0 0 / 38%);
   }
   .game-root.companion-is-open .sandbox-stage { width: 100% !important; height: calc(100% - min(42dvh, 430px)) !important; }
+  .game-root.decision-artifact-is-open .sandbox-stage { width: 100% !important; height: 42dvh !important; }
   .companion-dock__header { min-height: 56px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .companion-launcher,.game-root.companion-is-open .sandbox-stage { transition: none; }
+  .companion-launcher,.game-root.companion-is-open .sandbox-stage,.game-root.decision-artifact-is-open .sandbox-stage { transition: none; }
 }

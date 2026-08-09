@@ -139,3 +139,32 @@ test('explicitly skipped fields stay visible as authorized unknowns without bloc
   assert.equal(decisionCase.readiness.status, 'review');
   assert.equal(decisionCase.readiness.openUnknownCount, 0);
 });
+
+test('a search result count is not promoted into the confirmed fact column', () => {
+  const decisionCase = buildDecisionCase({
+    session: {
+      question: '要不要北京租房',
+      answers: [],
+      tool_results: [{ ok: true, tool: 'web_search', summary: '找到 5 条结果' }],
+    },
+    plan: { askUser: [] },
+    depthRoute: { depth: 'standard', reason: '租房决策', maxQuestions: 5 },
+  });
+
+  assert.equal(decisionCase.facts.length, 0);
+});
+
+test('decision case question budget expands to the actual adaptive field set', () => {
+  const informationFields = Array.from({ length: 6 }, (_, index) => ({
+    id: `field_${index + 1}`,
+    prompt: `关键问题 ${index + 1}`,
+    required: true,
+  }));
+  const decisionCase = buildDecisionCase({
+    session: { question: '要不要北京租房', answers: [] },
+    plan: { maxQuestions: 6, informationFields, askUser: [] },
+    depthRoute: { depth: 'standard', reason: '租房决策', maxQuestions: 3 },
+  });
+
+  assert.equal(decisionCase.readiness.maxQuestions, 6);
+});

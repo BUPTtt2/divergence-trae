@@ -17,6 +17,15 @@ function memoryId(memory, index) {
   return cleanText(memory?.id || memory?.memory_id || `memory_${index + 1}`, 96);
 }
 
+function isSubstantiveToolEvidence(result, value) {
+  if (!value || result?.evidence?.accepted === false) return false;
+  if (/^(找到|检索到|返回)\s*\d+\s*(条|个)(结果|记录)?[。.!！]?$/.test(value)) return false;
+  const citations = result?.evidence?.citations || result?.citations || result?.sources;
+  const hasTraceableSource = Array.isArray(citations) && citations.length > 0;
+  const hasStructuredPayload = Boolean(result?.data && typeof result.data === 'object' && Object.keys(result.data).length > 0);
+  return hasTraceableSource || hasStructuredPayload || value.length >= 40;
+}
+
 export function buildDecisionCase({ session = {}, plan = {}, memories = [], depthRoute = {} } = {}) {
   const answers = Array.isArray(session.answers) ? session.answers : [];
   const informationFieldList = Array.isArray(plan.informationFields) ? plan.informationFields : [];
@@ -55,7 +64,7 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
   for (const [index, result] of (Array.isArray(session.tool_results) ? session.tool_results : []).entries()) {
     if (!result?.ok || result?.evidence?.accepted === false) continue;
     const value = cleanText(result.evidence?.summary || result.summary);
-    if (!value) continue;
+    if (!isSubstantiveToolEvidence(result, value)) continue;
     facts.push({
       id: cleanText(result.evidence?.id || `tool_${index + 1}`, 96),
       question: cleanText(result.tool || '工具查证', 120),
@@ -83,6 +92,13 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
     }];
   });
   const unknownIds = new Set(unknowns.map((unknown) => unknown.id));
+  for (const [index, label] of (Array.isArray(session.case_unknown_labels) ? session.case_unknown_labels : []).entries()) {
+    const question = cleanText(label, 300);
+    if (!question) continue;
+    const id = `analyst_unknown_${index + 1}`;
+    unknowns.push({ id, question, reason: '案卷分析 Agent 标记的延伸未知；不会在未经确认时冒充事实。', status: 'noted' });
+    unknownIds.add(id);
+  }
   for (const [index, unknown] of (Array.isArray(plan.askUser) ? plan.askUser : []).entries()) {
     const item = typeof unknown === 'string' ? { question: unknown } : unknown;
     const question = cleanText(item?.question || item?.field, 300);
@@ -122,7 +138,12 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
     }];
   });
 
-  const maxQuestions = Number(depthRoute.maxQuestions || plan.maxQuestions || 3);
+  const maxQuestions = Math.max(
+    Number(depthRoute.maxQuestions || 0),
+    Number(plan.maxQuestions || 0),
+    informationFields.size,
+    3,
+  );
   const inferences = (Array.isArray(session.information_inferences) ? session.information_inferences : [])
     .flatMap((inference, index) => {
       const value = cleanText(inference?.value, 500);
@@ -151,6 +172,7 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
   return {
     version: 1,
     objective: cleanText(session.question || session.question_context || session.questionContext, 500),
+    understanding: cleanText(session.case_understanding, 800),
     depth: ['quick', 'standard', 'deep'].includes(depthRoute.depth) ? depthRoute.depth : 'standard',
     depthReason: cleanText(depthRoute.reason || plan.depthReason || '需要拆解取舍并核对信息', 300),
     facts,

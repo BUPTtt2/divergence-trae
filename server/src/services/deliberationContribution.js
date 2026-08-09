@@ -23,14 +23,16 @@ function successfulFindingAgentIds(findings = [], selectedIds = []) {
 
 export function requiredContributionCount(depth, selectedCount) {
   const normalizedDepth = String(depth || 'standard').toLowerCase();
+  if (selectedCount <= 0) return 1;
   if (normalizedDepth === 'quick') return 1;
-  if (selectedCount === 0) return 1;
-  if (selectedCount === 1) return 2;
-  return 2;
+  return selectedCount;
 }
 
 export function validateDeliberationContribution(session = {}) {
-  const selectedAgentIds = selectedAdvisorIds(session);
+  const waivedAgentIds = [...new Set((session?.plan?.waivedAgentIds || session?.plan?.waived_agent_ids || [])
+    .map(normalizeId)
+    .filter(Boolean))];
+  const selectedAgentIds = selectedAdvisorIds(session).filter((agentId) => !waivedAgentIds.includes(agentId));
   const successfulAgentIds = successfulFindingAgentIds(session?.findings, selectedAgentIds);
   const requiredCount = requiredContributionCount(session?.plan?.depth, selectedAgentIds.length);
   const missingAgentIds = selectedAgentIds.filter((agentId) => !successfulAgentIds.includes(agentId));
@@ -41,6 +43,7 @@ export function validateDeliberationContribution(session = {}) {
     requiredCount,
     actualCount: successfulAgentIds.length,
     selectedAgentIds,
+    waivedAgentIds,
     successfulAgentIds,
     missingAgentIds,
     reason: allowed

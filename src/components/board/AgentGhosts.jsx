@@ -4,7 +4,6 @@ import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { COLORS, getAgentPosition } from './layoutConfig';
 import { createGlowTexture } from '../../utils/trigramTextures';
-import { motion } from 'framer-motion';
 
 /* ============================================================
    简化 Agent 符号
@@ -13,7 +12,7 @@ import { motion } from 'framer-motion';
    - 活动时整体上浮 + 字符放大
    - 始终朝向相机 (Billboard)
 ============================================================ */
-function AgentGhost({ agent, index, total, active, spoken, retreating, onClick }) {
+function AgentGhost({ agent, index, total, active, spoken, retreating, dialogue, onClick }) {
   const groupRef = useRef();
   const symbolGroupRef = useRef();
   const glowRef = useRef();
@@ -131,6 +130,23 @@ function AgentGhost({ agent, index, total, active, spoken, retreating, onClick }
           )}
         </div>
       </Html>
+
+      {active && dialogue && !retreating && (
+        <Html position={[0, 1.05, 0]} center distanceFactor={9} style={{ pointerEvents: 'none' }}>
+          <div style={{
+            width: 'min(240px, 38vw)',
+            padding: '9px 11px',
+            border: `1px solid ${agentColor.glow}70`,
+            background: 'rgba(9,7,6,.94)',
+            color: '#e8dfcd',
+            font: '10px/1.65 "Noto Serif SC",serif',
+            boxShadow: `0 8px 28px rgba(0,0,0,.45), 0 0 18px ${agentColor.glow}20`,
+          }}>
+            <strong style={{ display: 'block', marginBottom: 4, color: agentColor.glow, fontWeight: 500 }}>{agent.name} · 正在形成判断</strong>
+            {String(dialogue).replace(/【[^】]+】/g, '').slice(0, 120)}{String(dialogue).length > 120 ? '…' : ''}
+          </div>
+        </Html>
+      )}
     </group>
   );
 }
@@ -162,6 +178,7 @@ export default function AgentGhosts({
           total={agents.length}
           active={phase === 'agent_debate' && activeAgentIdx === index}
           spoken={phase === 'agent_debate' && activeAgentIdx > index}
+          dialogue={agentDialogues?.[agent.id] || ''}
           retreating={retreating}
           onClick={onAgentClick}
         />

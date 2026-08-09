@@ -1,20 +1,6 @@
 /**
- * 真 Agent 架构 Step 2/4: 规划器（Plan 阶段）v3.0
- *
- * 策略：LLM 驱动为主，零预设降级
- *  1. memoryService.recall 读 L3 命格（Cache-Aside，失败返回空）
- *  2. memoryService.recentSummaries 读 L2 摘要（失败返回空）
- *  3. detectQuestionType：正则快速检测 + LLM 兜底分类（失败抛错）
- *  4. LLM 驱动维度生成（失败抛错，不降级规则映射）
- *  5. 生成 DeliberationPlan（按文档 4.3.2 节）
- *  6. 自主性（Step 4）：autonomyGate.evaluate → ASK 转 WAIT / CONTINUE·STOP 进 EXECUTE
- *  7. memoryService.saveSession 持久化（askUser/round/openingLine 随 plan 字段持久化）
- *
- * v3.0 零预设：所有 LLM 失败路径要么重试要么报错，不再降级到规则映射/模板文案
- *
- * 依据: docs/REAL_AGENT_ARCHITECTURE.md 3.1 / 3.2 / 4.3 / 6.3 / 7 节
- *       docs/AUTONOMY_GATE_DESIGN.md 第 5 节
- *       docs/specs/2026-08-01-industrial-v3-design.md 第7节（零预设降级）
+ * Plan 阶段先建立可追溯案卷，再由一次编排调用同时产生判断维度与推荐智囊。
+ * 信息未达到门槛时只追问一项；模型不可用时保留完整案卷并进入受控降级。
  */
 
 import { callLLM } from './llmRouter.js';
@@ -27,6 +13,7 @@ import { evidenceDomainEvent, planDomainEvents } from './agentEventSemantics.js'
 import { withRetry } from './retryHelper.js';
 import { buildIntakePlan, buildQuickPlan, routeDeliberationDepth } from './deliberationDepthRouter.js';
 import { buildInformationOrchestration } from './informationSufficiency.js';
+import { analyzeCaseIntake } from './caseAnalystService.js';
 import { buildDecisionCase } from './decisionCaseService.js';
 import OrchestratorAgent from '../agents/system/OrchestratorAgent.js';
 import { run as runAgent } from '../agents/AgentRunner.js';
@@ -200,301 +187,25 @@ export async function ensurePlannerAnalysis(existingAnalysis, generateAnalysis) 
   return generateAnalysis();
 }
 
-// v3.0 已删除 ruleBasedDimensions 函数（零预设：维度由 LLM 自主生成，失败抛错不降级规则映射）
-
-/**
- * LLM 驱动的维度生成（替代硬编码 QUESTION_TYPE_TO_DIMENSIONS）
- * 演自主分析问题，生成维度，不依赖预设类型映射
- */
-async function llmGenerateDimensions(question, memories, toolResults) {
-  const memoryText = Array.isArray(memories) && memories.length > 0
-    ? memories.map(m => `[${m.memory_type || '记忆'}] ${m.content}`).join('\n')
-    : '（无历史命格记录）';
-
-  const toolText = Array.isArray(toolResults) && toolResults.length > 0
-    ? toolResults.map(r => `- [${r.tool}] ${r.summary}`).join('\n')
-    : '（未窥得天机）';
-
-  const prompt = `你是"演"，赛博推演师。分析用户问题，识别核心矛盾，生成推演维度。
-
-【用户问题】${question}
-
-【演所记命格】
-${memoryText}
-
-【演所窥天机】
-${toolText}
-
-【输出要求】只返回 JSON 数组，维度数量由问题复杂度决定（简单问题2-3个，复杂问题可以4-6个），每个元素形如：
-{"name":"维度中文名","perspective":"英文标签","agents":["推荐agentId占位，可空"],"toolNeeds":["工具名，可空"]}
-
-perspective 可选: financial/risk/emotional/reflection/strategic/action/communication/macro/health/legal/education/experience/practical/technical/career
-
-规则：
-1. 维度必须覆盖问题核心矛盾
-2. 不要机械套用模板，基于问题实际内容生成
-3. 维度数量由问题本身的复杂度决定，不要固定数量
-4. 只返回 JSON 数组，不要任何解释`;
-
-  try {
-    const text = await callPlannerLLM(
-      [{ role: 'user', content: prompt }],
-      { maxTokens: 400, temperature: 0.3 },
-      { retries: 2, delayMs: 1000, name: 'llmGenerateDimensions' },
-    );
-
-    const parsed = parseDimensionsJSON(text);
-    if (parsed && parsed.length > 0) {
-      return parsed.map(d => ({
-        name: d.name || '未知维度',
-        perspective: (d.perspective || 'reflection').toLowerCase(),
-        agents: Array.isArray(d.agents) ? d.agents.filter(Boolean) : [],
-        toolNeeds: Array.isArray(d.toolNeeds) ? d.toolNeeds.filter(Boolean) : [],
-      }));
-    }
-    logger.warn('[Planner] llmGenerateDimensions LLM解析失败，启用规则兜底');
-  } catch (e) {
-    logger.warn('[Planner] llmGenerateDimensions LLM调用失败，启用规则兜底:', e.message);
-  }
-
-  // v3.1 兜底：按 QUESTION_TYPE_RULES 的问题类型生成启发式维度（不再 throw）
-  return _heuristicDimensions(question);
-}
-
-/**
- * 规则维度生成（LLM 失败时兜底）
- * 根据问题关键词生成 4 个固定维度：财务+风险+长期+反思
- */
-function _heuristicDimensions(question) {
-  const q = (question || '').toLowerCase();
-  const dims = [];
-  const addIfNot = (name, perspective) => {
-    if (!dims.find(d => d.name === name)) {
-      dims.push({ name, perspective, agents: [], toolNeeds: [] });
-    }
-  };
-  if (/(租房|买房|搬家|换城市|城市|房租|房租|房租|房源)/.test(q)) {
-    addIfNot('预算与可负担性', 'financial');
-    addIfNot('通勤与区位', 'practical');
-    addIfNot('风险与隐患', 'risk');
-    addIfNot('长期发展匹配度', 'strategic');
-  } else if (/(offer|工作|职业|跳槽|辞职|创业|转行|升职|加班|入职|离职)/.test(q)) {
-    addIfNot('收入与福利', 'financial');
-    addIfNot('赛道与成长', 'career');
-    addIfNot('风险与代价', 'risk');
-    addIfNot('长期职业路径', 'strategic');
-  } else if (/(投资|股票|基金|理财|借钱|还钱|贷款|汇率|股市)/.test(q)) {
-    addIfNot('收益率测算', 'financial');
-    addIfNot('风险敞口', 'risk');
-    addIfNot('流动性与周期', 'strategic');
-    addIfNot('决策心态', 'emotional');
-  } else if (/(感情|恋爱|结婚|分手|婚姻|对象|男朋友|女朋友|老公|老婆|父母|家人)/.test(q)) {
-    addIfNot('情感需求匹配', 'emotional');
-    addIfNot('现实可行性', 'practical');
-    addIfNot('风险与底线', 'risk');
-    addIfNot('长期价值观', 'reflection');
-  } else if (/(健康|生病|看病|运动|减肥|熬夜|失眠|焦虑|抑郁)/.test(q)) {
-    addIfNot('身体状况评估', 'health');
-    addIfNot('风险与代价', 'risk');
-    addIfNot('执行可行性', 'practical');
-    addIfNot('长期收益', 'strategic');
-  } else if (/(旅行|旅游|游玩|出差|出国|自驾|攻略|景点)/.test(q)) {
-    addIfNot('预算与开销', 'financial');
-    addIfNot('行程可行性', 'practical');
-    addIfNot('风险与意外', 'risk');
-    addIfNot('体验与收益', 'reflection');
-  } else {
-    // 默认四维度
-    addIfNot('投入与成本', 'financial');
-    addIfNot('风险与隐患', 'risk');
-    addIfNot('长期影响', 'strategic');
-    addIfNot('内心诉求', 'emotional');
-  }
-  return dims;
-}
-
-/**
- * 解析 LLM 返回的维度 JSON 数组（容错）
- */
-function parseDimensionsJSON(text) {
-  if (!text) return null;
-  const tryArr = (s) => {
-    try {
-      const arr = JSON.parse(s);
-      if (Array.isArray(arr)) return arr;
-    } catch {
-      /* ignore */
-    }
-    return null;
-  };
-  const direct = tryArr(text);
-  if (direct) return direct;
-  const m = text.match(/\[[\s\S]*\]/);
-  if (m) {
-    const extracted = tryArr(m[0]);
-    if (extracted) return extracted;
-  }
-  return null;
-}
-
-/**
- * LLM 增强规划：基于自评建议优化维度
- * v3.0 零预设：失败抛错，不返回 null 让调用方降级
- *
- * @param {string} question
- * @param {Array} currentDims 当前维度（供 LLM 参考）
- * @param {Array} memories L3 命格
- * @param {Array} toolResults 演窥探的天机（Step 3 注入）
- * @returns {Promise<Array>} 增强后的维度数组
- * @throws LLM 调用或解析失败时抛错
- */
-async function llmEnhanceDimensions(question, currentDims, memories, toolResults) {
-  const memoryText = Array.isArray(memories) && memories.length > 0
-    ? memories.map((m) => `[${m.memory_type || '记忆'}] ${m.content}`).join('\n')
-    : '（无历史命格记录）';
-
-  const currentDimsText = currentDims
-    .map((d) => `- ${d.name}(perspective=${d.perspective})`)
-    .join('\n');
-
-  // Step 3: 注入演窥探的天机摘要（让 LLM 基于实时数据优化维度）
-  const toolResultsText = Array.isArray(toolResults) && toolResults.length > 0
-    ? toolResults.map((r) => `- [${r.tool}] ${r.summary}`).join('\n')
-    : '（未窥得天机）';
-
-  const prompt = `你是"演"，赛博推演师。请基于用户问题、已知命格与所窥天机，优化推演维度。
-
-【用户问题】${question}
-
-【演所记命格】
-${memoryText}
-
-【演所窥天机（实时数据，可据此调整维度侧重）】
-${toolResultsText}
-
-【当前维度（可调整）】
-${currentDimsText}
-
-【输出要求】只返回 JSON 数组，2-4 个维度，每个元素形如：
-{"name":"维度中文名","perspective":"英文标签","agents":["推荐agentId占位，可空"],"toolNeeds":["工具名，可空"]}
-perspective 可选: financial/risk/emotional/reflection/strategic/action/communication/macro/health/legal/education/experience/practical
-
-规则：
-1. 维度必须覆盖问题核心矛盾
-2. 若命格与问题相关，应增加反思维度引用命格
-3. 若天机显示特定风险（如恶劣天气、股市大跌），应强化对应维度
-4. 只返回 JSON 数组，不要任何解释`;
-
-  try {
-    const text = await callPlannerLLM(
-      [{ role: 'user', content: prompt }],
-      { maxTokens: 400, temperature: 0.3 },
-      { retries: 2, delayMs: 1000, name: 'llmEnhanceDimensions' },
-    );
-
-    if (text) {
-      const parsed = parseDimensionsJSON(text);
-      if (parsed && parsed.length > 0) {
-        const dims = parsed.map((d) => ({
-          name: d.name || '未知维度',
-          perspective: (d.perspective || 'reflection').toLowerCase(),
-          agents: Array.isArray(d.agents) ? d.agents.filter(Boolean) : [],
-          toolNeeds: Array.isArray(d.toolNeeds) ? d.toolNeeds.filter(Boolean) : [],
-        }));
-        logger.info('[Planner] LLM 增强成功', { count: dims.length, dims: dims.map((d) => d.name) });
-        return dims;
-      }
-    }
-    logger.warn('[Planner] llmEnhanceDimensions LLM失败，返回原始维度');
-  } catch (e) {
-    logger.warn('[Planner] llmEnhanceDimensions LLM异常，返回原始维度:', e.message);
-  }
-  // v3.1 兜底：直接返回原维度，不抛错
-  return currentDims;
-}
-
-/**
- * 演·自评（Self-Critique）— ReAct 循环的 Critique 步骤
- *
- * 评估当前维度规划是否合理，不合理则返回调整建议触发一次 replan
- * 对应 docs/重设.md 3.1 节 YanAgent.run 第 5 步 Self-Critique
- *
- * v3.0 零预设：失败抛错，不降级为"合理"
- *
- * @param {string} question 用户问题
- * @param {Array} dimensions 当前维度数组
- * @param {Array} toolResults 工具探测结果
- * @param {Array} memories L3 命格
- * @returns {Promise<{ok: boolean, reason?: string, suggestions?: Array}>}
- *   ok=true 维度合理；ok=false 需 replan，suggestions 为调整建议
- * @throws LLM 调用或解析失败时抛错
- */
-async function selfCritiquePlan(question, dimensions, toolResults, memories) {
-  const dimNames = dimensions.map(d => d.name).filter(Boolean);
-  const toolSummaries = (toolResults || []).filter(t => t.ok).map(t => t.summary).filter(Boolean);
-  const memoryHints = (memories || []).slice(0, 3).map(m => m.content).filter(Boolean);
-
-  try {
-    const result = await callPlannerLLM(
-          [
-            {
-              role: 'system',
-              content: `你是"演"，赛博推演师。请自评当前维度规划是否合理。
-评估标准：
-1. 维度是否覆盖问题核心矛盾？
-2. 是否有冗余维度？
-3. 是否遗漏关键视角（如风险/反思）？
-4. 工具结果是否揭示了需要补充的维度？
-
-只返回 JSON（不要 markdown 代码块）：
-- 合理：{"ok":true,"reason":"维度覆盖完整"}
-- 不合理：{"ok":false,"reason":"遗漏XX视角","suggestions":["增加XX维度"]}`,
-            },
-            {
-              role: 'user',
-              content: `问题：「${question}」
-当前维度：${dimNames.join('、') || '无'}
-天机提示：${toolSummaries.join('；') || '暂无'}
-相关命格：${memoryHints.join('；') || '无'}
-
-请自评。`,
-            },
-          ],
-          { maxTokens: 200, temperature: 0.2 },
-          { retries: 1, delayMs: 800, name: 'selfCritiquePlan' },
-    );
-
-    if (result) {
-      let cleaned = String(result).trim();
-      const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (fenceMatch) cleaned = fenceMatch[1].trim();
-      if (!cleaned.startsWith('{')) {
-        const objMatch = cleaned.match(/\{[\s\S]*\}/);
-        if (objMatch) cleaned = objMatch[0];
-      }
-      const parsed = JSON.parse(cleaned);
-      if (parsed && typeof parsed.ok === 'boolean') {
-        logger.info('[Planner] selfCritique 完成(LLM)', { ok: parsed.ok, reason: parsed.reason?.slice(0, 60) });
-        return parsed;
-      }
-    }
-    logger.warn('[Planner] selfCritique LLM失败，降级规则自评合理');
-  } catch (e) {
-    logger.warn('[Planner] selfCritique LLM异常，降级规则自评合理:', e.message);
-  }
-
-  // v3.1 兜底：简单规则评估（维度>=3且含risk视角=合理）
-  const hasRisk = dimensions.some(d => (d.perspective || '').includes('risk'));
-  const ok = dimensions.length >= 3 && hasRisk;
-  return {
-    ok: true, // 默认不再触发 replan，避免无限重试
-    reason: ok
-      ? (hasRisk ? '规则自评：覆盖风险视角，维度充足' : '规则自评：维度充足')
-      : '规则自评：缺少风险视角，但暂不触发重推',
-  };
-}
-
 // ============ 主入口 ============
+
+function reuseCaseAnalysis(previousAnalysis, previousFields, answers = []) {
+  const originUnderstanding = String(
+    previousAnalysis?.originUnderstanding || previousAnalysis?.understanding || '',
+  ).trim();
+  const confirmedContext = answers
+    .map((answer) => String(answer?.answer || answer?.text || answer?.content || '').trim())
+    .filter((answer) => answer && !/^(暂不回答|不知道|不清楚|跳过)$/.test(answer))
+    .slice(-6);
+  return {
+    ...previousAnalysis,
+    originUnderstanding,
+    understanding: confirmedContext.length > 0
+      ? `${originUnderstanding} 已确认补充：${confirmedContext.join('；')}。`
+      : originUnderstanding,
+    informationFields: previousFields,
+  };
+}
 
 /**
  * Plan 阶段主入口
@@ -511,12 +222,29 @@ export async function plan(session, dependencies = {}) {
   logger.info('[Planner] Plan 阶段开始', { sessionId: session.id, userId, question: question.slice(0, 60) });
 
   const depthRoute = routeDeliberationDepth(session.question || question);
+  const analyzeCase = dependencies.analyzeCaseIntakeFn || analyzeCaseIntake;
+  const previousFields = session.plan?.informationFields || [];
+  const previousAnalysis = session.plan?.caseAnalysis || null;
+  const caseAnalysis = previousAnalysis && previousFields.length >= 2
+    ? reuseCaseAnalysis(previousAnalysis, previousFields, session.answers || [])
+    : await analyzeCase({
+      question: session.question || question,
+      answers: session.answers || [],
+      previousFields,
+      previousAnalysis,
+      depth: depthRoute.depth,
+    });
+  session.information_inferences = caseAnalysis.inferences;
+  session.case_understanding = caseAnalysis.understanding;
+  session.case_unknown_labels = caseAnalysis.unknownLabels;
   const adaptiveIntake = buildInformationOrchestration({
     question,
     answers: session.answers || [],
     round: session.round,
     depth: depthRoute.depth,
+    informationFields: caseAnalysis.informationFields,
   });
+  adaptiveIntake.caseAnalysis = caseAnalysis;
   if (depthRoute.depth !== 'quick' && !adaptiveIntake.sufficiency.complete) {
     const result = buildIntakePlan(session, adaptiveIntake, depthRoute);
     const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
@@ -636,40 +364,9 @@ export async function plan(session, dependencies = {}) {
   session.toolResults = toolResults;
   session.tool_results = toolResults;
 
-  // 4. LLM 驱动维度生成（v3.0 零预设：失败抛错，不降级规则映射）
   // 召回只形成候选项；用户确认前不得把历史记忆当作本次事实。
   const confirmedMemories = [];
-  let dimensions = await llmGenerateDimensions(question, confirmedMemories, toolResults);
-  logger.info('[Planner] LLM维度生成成功', { count: dimensions.length });
-
-  // 4.5 演·自评（Self-Critique）— ReAct 循环第 5 步
-  //     评估维度是否合理，不合理则带建议触发一次 replan（硬约束最多 1 次）
-  //     v3.0 零预设：selfCritique 失败抛错，不降级为"合理"
-  //     依据: docs/重设.md 3.1 节 YanAgent.run 第 5 步
-  const currentReplanCount = Number(session.replan_count) || 0;
-  if (currentReplanCount < 1) {
-    const critique = await selfCritiquePlan(question, dimensions, toolResults, confirmedMemories);
-    if (!critique.ok && Array.isArray(critique.suggestions) && critique.suggestions.length > 0) {
-      logger.info('[Planner] selfCritique 触发 replan', { reason: critique.reason, suggestions: critique.suggestions });
-      eventBus.emit(session.id, {
-        type: 'THOUGHT',
-        data: { step: 'self_critique', thought: `演·自评：${critique.reason}，变卦重推` },
-      });
-      // 带 suggestions 重新增强（拼接到 question 上下文）
-      const critiqueContext = `【演自评建议】${critique.suggestions.join('；')}`;
-      const reEnhanced = await llmEnhanceDimensions(
-        `${question} ${critiqueContext}`,
-        dimensions,
-        confirmedMemories,
-        toolResults,
-      );
-      dimensions = reEnhanced;
-      session.replan_count = currentReplanCount + 1;
-      logger.info('[Planner] replan 完成', { newDimCount: dimensions.length, replanCount: session.replan_count });
-    }
-  }
-
-  // 4.7 LLM 驱动选择 Agent（1-6个），失败抛错不降级
+  // 编排总管在一次模型调用中同时完成问题拆解、维度规划与智囊推荐。
   const agentResult = await agentEngine.analyzeQuestion(question, userId, { useCustomAdvisors: true });
   const selectedAgentIds = Array.isArray(agentResult.agentIds) ? agentResult.agentIds : [];
   const selectedAgents = selectedAgentIds
@@ -687,13 +384,26 @@ export async function plan(session, dependencies = {}) {
   const agentsForPlan = (Array.isArray(agentResult.agents) && agentResult.agents.length > 0)
     ? agentResult.agents
     : selectedAgents;
+  const dimensions = Array.isArray(agentResult.dimensions) && agentResult.dimensions.length > 0
+    ? agentResult.dimensions
+    : agentsForPlan.map((agent) => ({
+      name: agent.stance || agent.name,
+      perspective: agent.perspective || 'reflection',
+      agents: [agent.id],
+      toolNeeds: [],
+    }));
+  logger.info('[Planner] 编排总管完成', {
+    advisorCount: agentsForPlan.length,
+    dimensionCount: dimensions.length,
+    source: agentResult.fallback ? 'controlled-fallback' : 'model',
+  });
 
   // 5. 生成 DeliberationPlan（按文档 4.3.2 节）
   //    toolProbes 填入探测摘要；askUser/round/openingLine 由 Step 4 autonomyGate 决定后回填
   const deliberationPlan = {
     depth: depthRoute.depth,
     depthReason: depthRoute.reason,
-    maxQuestions: depthRoute.maxQuestions,
+    maxQuestions: Math.max(depthRoute.maxQuestions, adaptiveIntake.informationFields.length),
     dimensions,
     agents: agentsForPlan,
     toolProbes: toolResults.map((r) => ({
@@ -736,6 +446,7 @@ export async function plan(session, dependencies = {}) {
   deliberationPlan.askUser = askUser;
   deliberationPlan.round = session.round;
   deliberationPlan.openingLine = openingLine;
+  deliberationPlan.caseAnalysis = caseAnalysis;
   deliberationPlan.caseFile = buildDecisionCase({ session, plan: deliberationPlan, memories, depthRoute });
 
   // 7. 持久化（saveSession 会自动生成 id 若缺失）
@@ -819,7 +530,7 @@ export async function plan(session, dependencies = {}) {
     askUser,
     openingLine,
     round: session.round,
-    maxRound: depthRoute.maxQuestions,
+    maxRound: Math.max(depthRoute.maxQuestions, adaptiveIntake.informationFields.length),
     memory: memoryForClient,
   };
 }

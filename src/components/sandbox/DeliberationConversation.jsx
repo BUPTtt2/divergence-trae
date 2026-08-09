@@ -9,8 +9,8 @@ import {
 import './deliberationConversation.css';
 
 const MODE_COPY = {
-  SUPPLEMENT: ['补充事实', '这条信息会进入下一轮判断'],
-  CORRECTION: ['纠正案卷', '停止当前推演并重新确认事实'],
+  SUPPLEMENT: ['补充事实', '案卷分析 Agent 会重整事实，再由你确认'],
+  CORRECTION: ['纠正案卷', '停止当前推演，回到案卷确认'],
   QUESTION: ['追问智囊', '让智囊围绕你的问题继续回应'],
 };
 
@@ -90,6 +90,7 @@ export default function DeliberationConversation({
   onOpenChange,
 }) {
   const [mode, setMode] = useState('SUPPLEMENT');
+  const [targetAgentId, setTargetAgentId] = useState('all');
   const [clarificationDraft, setClarificationDraft] = useState({});
   const pendingQuestions = useMemo(
     () => normalizePendingClarifications(awaitingAnswers),
@@ -108,7 +109,9 @@ export default function DeliberationConversation({
     onSubmitAnswers?.(serializeClarificationAnswers(clarificationDraft, pendingQuestions));
   };
   const submit = () => {
-    if (isDebate) return currentResponse.trim() ? onInterject(mode) : onAdvance();
+    if (isDebate) return currentResponse.trim()
+      ? onInterject(mode, mode === 'QUESTION' && targetAgentId !== 'all' ? targetAgentId : null)
+      : onAdvance();
     return onAdvance();
   };
 
@@ -183,6 +186,17 @@ export default function DeliberationConversation({
               ))}
             </div>
           )}
+          {isDebate && mode === 'QUESTION' && (
+            <label className="deliberation-conversation__target">
+              <span>由谁回答</span>
+              <select value={targetAgentId} onChange={(event) => setTargetAgentId(event.target.value)}>
+                <option value="all">全体智囊分别回答</option>
+                {assignedAdvisors.map((agent) => (
+                  <option key={agent.id} value={agent.id}>{agent.name || agent.agentName || agent.id} · 单独回答</option>
+                ))}
+              </select>
+            </label>
+          )}
           {isDebate && <textarea
             value={currentResponse}
             disabled={answerPending}
@@ -200,7 +214,7 @@ export default function DeliberationConversation({
             {isClarify && <button type="button" className="is-secondary" onClick={onSkipClarify} disabled={answerPending}>按现有信息继续</button>}
             {isDebate && (paused
               ? <button type="button" className="is-secondary" onClick={onResume}>恢复推演</button>
-              : <button type="button" className="is-secondary" onClick={() => onInterject('PAUSE')}>暂停推演</button>)}
+              : <button type="button" className="is-secondary" onClick={() => onInterject('PAUSE', null)}>暂停推演</button>)}
             <button type="button" className="is-primary" onClick={isClarify ? submitClarifications : submit} disabled={answerPending || (isClarify && !clarificationComplete)}>
               {isClarify ? clarifyInteraction.submitLabel : currentResponse.trim() ? `发送${MODE_COPY[mode][0]}` : roundAwaitingReview ? '确认本轮 · 进入汇总' : '开始 / 继续推演'}
             </button>

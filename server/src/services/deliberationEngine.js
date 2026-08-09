@@ -903,6 +903,8 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
   // 5. 把 ReAct 产生的 findings/toolResults 写回 session
   session.findings = reactState.findings || [];
   session.tool_results = reactState.toolResults || [];
+  session.question_context = reactState.questionContext;
+  session.questionContext = reactState.questionContext;
 
   const contributionGate = validateDeliberationContribution({
     ...session,
@@ -933,9 +935,7 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
 
   if (reactResult.state === 'PAUSED' || reactResult.state === 'READY') {
     const command = reactResult.command || {};
-    const correctedContext = reactResult.state === 'READY'
-      ? `${reactState.questionContext}\n用户纠正：${command.content || ''}`.trim()
-      : reactState.questionContext;
+    const correctedContext = reactState.questionContext;
     const plan = {
       ...(session.plan || {}),
       ...(reactResult.state === 'READY' && session.plan?.caseFile
@@ -967,6 +967,7 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
       findings: session.findings,
       interruption: { commandType: command.command_type, content: command.content },
       caseConfirmationRequired: reactResult.state === 'READY',
+      caseReanalysisRequired: reactResult.state === 'READY',
       caseFile: plan.caseFile || null,
     };
   }

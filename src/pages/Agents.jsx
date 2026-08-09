@@ -443,6 +443,7 @@ export default function Agents() {
 /* ============== 市集智囊卡片 ============== */
 function MarketAgentCard({ agent, index, onSubscription, pending }) {
   const subscribed = Boolean(agent.subscribed);
+  const curated = agent.evalStatus === 'curated' || agent.curated === true;
   const color = { main: agent.color || '#C8A850', glow: agent.glow || '#F0D890' };
   return (
     <motion.div
@@ -481,14 +482,14 @@ function MarketAgentCard({ agent, index, onSubscription, pending }) {
         <span style={{ fontSize: '10px', color: COLORS.gold }}>v{agent.version || 1} · {agent.evalStatus === 'verified' ? '已评估' : '未评估'} · {agent.subs || 0} 人订阅</span>
         <button
           onClick={() => onSubscription(agent)}
-          disabled={pending || agent.publishedByMe}
+          disabled={pending || agent.publishedByMe || curated}
           style={{
-            minHeight: 44, padding: '6px 14px', fontSize: '11px', borderRadius: '4px', cursor: pending || agent.publishedByMe ? 'default' : 'pointer',
+            minHeight: 44, padding: '6px 14px', fontSize: '11px', borderRadius: '4px', cursor: pending || agent.publishedByMe || curated ? 'default' : 'pointer',
             background: subscribed ? `${COLORS.muted}20` : COLORS.primary,
             color: subscribed ? COLORS.muted : '#fff', border: 'none',
           }}
         >
-          {pending ? '处理中…' : agent.publishedByMe ? '我的发布' : subscribed ? '取消订阅' : '订阅并可参演'}
+          {pending ? '处理中…' : curated ? '本轮可直接调用' : agent.publishedByMe ? '我的发布' : subscribed ? '取消订阅' : '订阅并可参演'}
         </button>
       </div>
     </motion.div>

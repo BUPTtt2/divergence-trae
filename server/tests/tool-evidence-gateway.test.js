@@ -93,6 +93,24 @@ test('untrusted web text is sanitized before entering evidence', async () => {
   assert.equal(JSON.stringify(result.evidence.data).includes('正常事实'), true);
 });
 
+test('search suggestions are rejected because they are not retrieved market evidence', async () => {
+  const result = await executeEvidenceTool('web_search', { query: '北京租房行情' }, {}, {
+    execute: async () => ({
+      source: '百度搜索建议（非证据）',
+      results: [{
+        title: '北京租房价格',
+        snippet: '仅为搜索词线索，未读取网页内容',
+        url: 'https://www.baidu.com/s?wd=x',
+      }],
+    }),
+    now: () => FIXED_NOW,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.error.code, 'TOOL_RESULT_INVALID');
+});
+
 test('tool probe only reports gateway-accepted evidence as successful', async () => {
   const calls = [];
   const results = await probe('贵州茅台今天行情', 'finance', {
