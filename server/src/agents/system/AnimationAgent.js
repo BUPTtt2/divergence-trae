@@ -78,7 +78,7 @@ export class AnimationAgent extends BaseAgent {
   timelineFor(phase, agents = []) {
     const phaseStr = String(phase || 'idle').trim();
     const def = PHASE_DEFS[phaseStr] || PHASE_DEFS.idle;
-    const steps = def.map(s => ({ ...s, params: { ...(s.params || {}) }));
+    const steps = def.map(s => ({ ...s, params: { ...(s.params || {}) } }));
     const injectAgent = phaseStr === 'agent_debate';
     if (injectAgent) {
       for (let i = 0; i < steps.length; i++) {

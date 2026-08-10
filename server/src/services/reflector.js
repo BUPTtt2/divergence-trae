@@ -5,7 +5,7 @@
  *   1. aggregateFindings: 聚合智囊发现 → 按 perspective 分组，提炼立场/强度
  *   2. detectConflicts: 矛盾检测 → 同维度立场对立 / 跨维度对立
  *   3. checkCoverage: 维度覆盖检查 → 找出 plan.dimensions 中无 finding 的维度
- *   4. mapToHexagram: 立卦 → 维度强弱映射八卦阴阳爻 → 主卦/变卦/互卦
+ *   4. mapToHexagram: 立卦 → 已验证/未知/冲突映射六爻 → 主卦/变卦/互卦
  *   5. reflect: 总入口 → 决定 重规划/补维度/立卦
  *
  * 状态流转:
@@ -25,10 +25,25 @@
 import logger from './logger.js';
 import { callLLM } from './llmRouter.js';
 import * as agentEngine from './agentEngine.js';
+import {
+  createCognitivePerturbationPlan,
+} from './cognitivePerturbationService.js';
 
 // ============ 常量 ============
 
 const MAX_REPLAN = 1;
+const REVIEW_LENS_CLAUSE_IDS = Object.freeze([
+  'knowledge_state',
+  'counterfactual',
+  'verification',
+  'boundary_guard',
+]);
+const LOCKED_INVARIANTS = Object.freeze({
+  evidenceLocked: true,
+  riskLocked: true,
+  approvalLocked: true,
+  userDecisionLocked: true,
+});
 
 // 八卦维度映射（对齐 REAL_AGENT_ARCHITECTURE.md 5.2 节）
 const PERSPECTIVE_TO_TRIGRAM = {
@@ -194,27 +209,29 @@ export function checkCoverage(dimensions, findings) {
 // ============ 4. 立卦 ============
 
 /**
- * 根据各维度强弱生成主卦/变卦/互卦
+ * 根据各维度的知识状态生成主卦/变卦/互卦
  *
- * 算法（简化版，确定性映射，非随机起卦）:
+ * 算法（确定性映射，非随机起卦）:
  *   - 从 plan.dimensions 取最多6个维度，按顺序对应6爻（初爻→上爻）
- *   - 每维度 avgIntensity:
- *       > 0.6  → 阳爻 (1)
- *       < 0.4  → 阴爻 (0)
- *       0.4-0.6 → 动爻（阳变阴或阴变阳，记为动）
+ *   - 已验证且稳定的事实 → 阳爻 (1)
+ *   - 未验证、缺失或两可的信息 → 阴爻 (0)
+ *   - 同一维度的冲突 → 动爻（只表示反转变量）
  *   - 主卦: 6 爻组合
  *   - 变卦: 动爻阴阳互换后的 6 爻
  *   - 互卦: 取主卦 2,3,4 爻为下卦，3,4,5 爻为上卦
  *
  * @param {Object} aggregated aggregateFindings 的结果
  * @param {Array} dimensions plan.dimensions
+ * @param {Object} knowledgeContext conflicts/gaps
  * @returns {Object} { primary: {lines, trigrams}, changed: {...}, mutual: {...}, dynamics: [动爻位] }
  */
-export function mapToHexagram(aggregated, dimensions) {
+export function mapToHexagram(aggregated, dimensions, knowledgeContext = {}) {
   const safeDims = Array.isArray(dimensions) ? dimensions.slice(0, 6) : [];
-  const { byPerspective } = aggregated;
+  const byPerspective = aggregated?.byPerspective || {};
+  const conflicts = Array.isArray(knowledgeContext.conflicts) ? knowledgeContext.conflicts : [];
+  const gaps = Array.isArray(knowledgeContext.gaps) ? knowledgeContext.gaps : [];
 
-  // 生成6爻（不足6个维度时用默认值0.5）
+  // 生成6爻：已验证事实=阳，未知/缺失=阴，冲突=动爻。
   const lines = []; // 0=阴 1=阳
   const dynamics = []; // 动爻位置（0-5）
   const lineMeta = []; // 每爻的维度信息
@@ -223,20 +240,20 @@ export function mapToHexagram(aggregated, dimensions) {
     const dim = safeDims[i];
     const perspective = dim?.perspective || `pos_${i}`;
     const data = byPerspective[perspective];
-    const intensity = data ? data.avgIntensity : 0.5;
-
-    let isYang;
-    if (intensity > 0.6) {
-      isYang = true;
-    } else if (intensity < 0.4) {
-      isYang = false;
-    } else {
-      // 中间区 → 动爻：强度偏高取阳动，偏低取阴动
-      isYang = intensity >= 0.5;
-      dynamics.push(i);
-    }
+    const knowledgeState = resolveKnowledgeState(perspective, data, conflicts, gaps);
+    const isDynamic = knowledgeState === 'contested';
+    // 冲突只表示可能反转，以爻位奇偶稳定选择当前爻，不使用立场或强度裁决。
+    const isYang = knowledgeState === 'verified' || (isDynamic && i % 2 === 0);
+    if (isDynamic) dynamics.push(i);
     lines.push(isYang ? 1 : 0);
-    lineMeta.push({ position: i, perspective, intensity, isYang, isDynamic: dynamics.includes(i) });
+    lineMeta.push({
+      position: i,
+      perspective,
+      knowledgeState,
+      isYang,
+      isDynamic,
+      findingCount: Array.isArray(data?.findings) ? data.findings.length : 0,
+    });
   }
 
   // 主卦：下卦（初二三）+ 上卦（四五上）
@@ -255,7 +272,7 @@ export function mapToHexagram(aggregated, dimensions) {
     changed: changed.lines.join(''),
     mutual: mutual.lines.join(''),
     dynamics,
-    lineMeta: lineMeta.map((m) => `${m.perspective}:${m.intensity.toFixed(2)}(${m.isYang ? '阳' : '阴'}${m.isDynamic ? '动' : ''})`),
+    lineMeta: lineMeta.map((m) => `${m.perspective}:${m.knowledgeState}(${m.isYang ? '阳' : '阴'}${m.isDynamic ? '动' : ''})`),
   });
 
   return {
@@ -265,6 +282,31 @@ export function mapToHexagram(aggregated, dimensions) {
     dynamics,
     lineMeta,
   };
+}
+
+function conflictCoversPerspective(conflict, perspective) {
+  if (!conflict || !perspective) return false;
+  if (Array.isArray(conflict.perspectives) && conflict.perspectives.includes(perspective)) return true;
+  const value = String(conflict.perspective || '');
+  return value === perspective || value.split(/\s+vs\s+|[,/]/).map((part) => part.trim()).includes(perspective);
+}
+
+function isVerifiedFinding(finding) {
+  return finding?.evidenceStatus === 'accepted'
+    || finding?.evidenceStatus === 'verified'
+    || finding?.status === 'accepted'
+    || finding?.verified === true
+    || finding?.evidence?.accepted === true;
+}
+
+function resolveKnowledgeState(perspective, data, conflicts, gaps) {
+  if (conflicts.some((conflict) => conflictCoversPerspective(conflict, perspective))) return 'contested';
+  if (gaps.some((gap) => gap?.perspective === perspective)) return 'unknown';
+
+  const findings = Array.isArray(data?.findings) ? data.findings.filter(Boolean) : [];
+  if (findings.length === 0) return 'unknown';
+  if (findings.some((finding) => finding.evidenceStatus === 'contested')) return 'contested';
+  return findings.every(isVerifiedFinding) ? 'verified' : 'unknown';
 }
 
 /**
@@ -297,88 +339,280 @@ function matchTrigram(lines3) {
   return { name: '?', symbol: '?', perspective: 'unknown' };
 }
 
-// ============ 5. LLM 卦辞生成（可选增强） ============
+// ============ 5. 确定性审查镜头说明 ============
 
 /**
- * 调 LLM 生成卦辞与建议（失败降级为聚合摘要）
+ * 只根据受控结构字段生成中性说明，不接收任何模型文本。
  * @param {Object} oracle mapToHexagram 结果
- * @param {Object} aggregated
- * @param {string} question
- * @returns {Promise<string>} 卦辞文本
+ * @returns {string} 审查镜头文本
  */
-async function generateOracleText(oracle, aggregated, question) {
-  const dimSummary = Object.entries(aggregated.byPerspective)
-    .map(([p, d]) => `${p}(${d.overallStance},${d.avgIntensity.toFixed(2)})`)
-    .join(' ');
-
+function buildReviewLensText(oracle) {
   const primaryName = `${oracle.primary.lower.name}${oracle.primary.upper.name}`;
   const changedName = `${oracle.changed.lower.name}${oracle.changed.upper.name}`;
   const dynamicStr = oracle.dynamics.length > 0
     ? `${oracle.dynamics.map((i) => i + 1).join('、')}爻动`
     : '无动爻';
+  const stateCounts = oracle.lineMeta.reduce((counts, line) => {
+    counts[line.knowledgeState] += 1;
+    return counts;
+  }, { verified: 0, unknown: 0, contested: 0 });
+  return `【${primaryName}】本轮审查镜头由${stateCounts.verified}项已验证、${stateCounts.unknown}项未知和${stateCounts.contested}项冲突构成。${dynamicStr}，备选镜头为${changedName}。请逐项补证并检查反转变量；事实、风险与审批边界保持不变。`;
+}
 
-  const stances = Object.entries(aggregated.byPerspective);
-  const posCount = stances.filter(([, d]) => d.overallStance === 'positive').length;
-  const negCount = stances.filter(([, d]) => d.overallStance === 'negative').length;
-  const allFindings = stances.map(([p, d]) => {
-    const findingTexts = d.findings.map(f => f.content || f.text || '').filter(Boolean).slice(0, 2);
-    return `${p}(${d.overallStance === 'positive' ? '吉' : d.overallStance === 'negative' ? '凶' : '平'}): ${findingTexts.join('；')}`;
-  }).join(' | ');
+function reviewLensContext(oracle) {
+  const stateCounts = oracle.lineMeta.reduce((counts, line) => {
+    counts[line.knowledgeState] += 1;
+    return counts;
+  }, { verified: 0, unknown: 0, contested: 0 });
+  return {
+    primaryName: `${oracle.primary.lower.name}${oracle.primary.upper.name}`,
+    changedName: `${oracle.changed.lower.name}${oracle.changed.upper.name}`,
+    dynamicStr: oracle.dynamics.length > 0
+      ? `${oracle.dynamics.map((i) => i + 1).join('、')}爻动`
+      : '无动爻',
+    ...stateCounts,
+  };
+}
+
+const REVIEW_LENS_TEMPLATES = Object.freeze({
+  'standard-v1': Object.freeze({
+    knowledge_state: (ctx) => `【${ctx.primaryName}】本轮审查镜头由${ctx.verified}项已验证、${ctx.unknown}项未知和${ctx.contested}项冲突构成。`,
+    counterfactual: (ctx) => `${ctx.dynamicStr}，备选镜头为${ctx.changedName}。`,
+    verification: () => '请逐项补证并检查反转变量；',
+    boundary_guard: () => '事实、风险与审批边界保持不变。',
+  }),
+  'concise-v1': Object.freeze({
+    knowledge_state: (ctx) => `【${ctx.primaryName}】审查概览：已验证${ctx.verified}项，未知${ctx.unknown}项，冲突${ctx.contested}项。`,
+    counterfactual: (ctx) => `反转观察：${ctx.dynamicStr}，对照${ctx.changedName}镜头。`,
+    verification: () => '下一步仅补证未知、核验冲突与反转条件。',
+    boundary_guard: () => '边界先行：事实、风险与审批要求保持不变。',
+  }),
+});
+
+function parseReviewLensSelection(raw) {
+  if (typeof raw !== 'string' || raw.length > 300) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return null;
+  const keys = Object.keys(parsed);
+  if (keys.length !== 2 || !keys.includes('templateId') || !keys.includes('clauseIds')) return null;
+  if (!Object.hasOwn(REVIEW_LENS_TEMPLATES, parsed.templateId)) return null;
+  if (!Array.isArray(parsed.clauseIds) || parsed.clauseIds.length !== REVIEW_LENS_CLAUSE_IDS.length) return null;
+  if (new Set(parsed.clauseIds).size !== REVIEW_LENS_CLAUSE_IDS.length) return null;
+  if (!REVIEW_LENS_CLAUSE_IDS.every((id) => parsed.clauseIds.includes(id))) return null;
+  return parsed;
+}
+
+function renderReviewLensSelection(oracle, selection) {
+  const context = reviewLensContext(oracle);
+  const template = REVIEW_LENS_TEMPLATES[selection.templateId];
+  return selection.clauseIds.map((clauseId) => template[clauseId](context)).join('');
+}
+
+async function generateReviewLensText(oracle, callLLMFn, timeoutMs = 4000) {
+  const fallback = buildReviewLensText(oracle);
+  const context = reviewLensContext(oracle);
+  const safeTimeoutMs = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : 4000;
+  let timer;
 
   try {
-    const result = await Promise.race([
-      callLLM(
-        [
-          {
-            role: 'system',
-            content: `你是「演」的卦象解读。用文言八卦风格解读卦象，赛博算命感。
-格式要求：
-1. 开头用"【${primaryName}卦】"
-2. 简述各维度吉凶（2-3句）
-3. 核心判断（1-2句，如"此卦利动不利守"或"时机未到"）
-4. 一句卦辞总结（仿周易风格，7-14字）
-5. 结尾用"⚠️"标注注意事项
-字数控制在80-120字。`,
-          },
-          {
-            role: 'user',
-            content: `问题：${question}
-主卦：${primaryName}（${dynamicStr}）
-变卦：${changedName}
-维度分析：${dimSummary}
-吉凶统计：吉${posCount}/凶${negCount}
-智囊发现：${allFindings}
-
-请解读此卦。`,
-          },
-        ],
-        { maxTokens: 200, temperature: 0.8 }
-      ),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000)),
+    const raw = await Promise.race([
+      Promise.resolve().then(() => callLLMFn([
+        {
+          role: 'system',
+          content: '你只能选择受控审查模板和句段顺序。仅返回严格 JSON，格式为 {"templateId":"standard-v1|concise-v1","clauseIds":["knowledge_state","counterfactual","verification","boundary_guard"]}。四个 clause ID 必须各出现一次；禁止输出任何自由文本或额外字段。',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            primaryName: context.primaryName,
+            changedName: context.changedName,
+            knowledgeCounts: {
+              verified: context.verified,
+              unknown: context.unknown,
+              contested: context.contested,
+            },
+            dynamicLines: oracle.dynamics.map((index) => index + 1),
+          }),
+        },
+      ], { maxTokens: 120, temperature: 0, timeout: safeTimeoutMs })),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), safeTimeoutMs);
+      }),
     ]);
-
-    if (result && result.trim()) {
-      logger.info(`[OracleText] LLM生成成功`);
-      return result.trim();
+    const selection = parseReviewLensSelection(raw);
+    if (!selection) {
+      logger.warn('[OracleText] LLM 返回非受控结构，改用规则说明');
+      return fallback;
     }
-  } catch (e) {
-    logger.info(`[OracleText] LLM超时/失败, 降级模板: ${e.message}`);
+    return renderReviewLensSelection(oracle, selection);
+  } catch (error) {
+    logger.info(`[OracleText] LLM 超时/失败，改用规则说明: ${error.message}`);
+    return fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
+}
 
-  // 降级：规则生成
-  let interpretation;
-  if (posCount > negCount) {
-    interpretation = '诸象偏吉，机不可失，然需防盛极而衰。';
-  } else if (negCount > posCount) {
-    interpretation = '诸象偏凶，宜守不宜进，静待时机。';
-  } else {
-    interpretation = '吉凶参半，需权衡利弊，顺势而为。';
+const BUSINESS_TOPIC_CATALOG = Object.freeze([
+  { key: 'supplier', label: '供应商', pattern: /供应商|供货|采购|供方/ },
+  { key: 'contract', label: '合同签约', pattern: /签约|合同|续约|协议/ },
+  { key: 'project', label: '项目方案', pattern: /项目|方案|计划/ },
+  { key: 'career', label: '职业选择', pattern: /工作|离职|跳槽|岗位|职业/ },
+  { key: 'investment', label: '投资方案', pattern: /投资|理财|股票|基金|资产/ },
+  { key: 'housing', label: '居住方案', pattern: /买房|卖房|租房|搬家|居住/ },
+  { key: 'education', label: '学习方案', pattern: /学习|课程|专业|升学|留学/ },
+  { key: 'relationship', label: '关系方案', pattern: /关系|婚姻|伴侣|家人|朋友/ },
+  { key: 'travel', label: '出行方案', pattern: /旅行|旅游|出行/ },
+]);
+
+function deriveBusinessTopic(question) {
+  const normalized = String(question || '').normalize('NFKC');
+  const matched = BUSINESS_TOPIC_CATALOG.find(({ pattern }) => pattern.test(normalized));
+  return matched
+    ? { key: matched.key, label: matched.label, provenance: 'derived-from-user-question' }
+    : { key: 'general', label: '当前方案', provenance: 'derived-from-user-question' };
+}
+
+/**
+ * 从用户原问题提取受控主题并生成业务选择；Lens 任务不会进入提交白名单。
+ */
+function buildControlledBusinessChoices(question) {
+  const topic = deriveBusinessTopic(question);
+
+  return [
+    {
+      id: 'business_advance',
+      label: `推进${topic.label}`,
+      color: '#E8B880',
+      glowColor: '#E8B880',
+      icon: '☰',
+      gua: '乾',
+      keyPoints: ['以已验证事实为基础', '先满足原有审批要求', '保留可撤回检查点'],
+      topic: { ...topic },
+      provenance: 'controlled-business-template',
+      generatedAdvice: null,
+      isDynamic: true,
+    },
+    {
+      id: 'business_pause',
+      label: `暂缓${topic.label}`,
+      color: '#A8C0E8',
+      glowColor: '#A8C0E8',
+      icon: '☵',
+      gua: '坎',
+      keyPoints: ['等待关键信息补齐', '继续监测原有风险', '达到复核条件后重评'],
+      topic: { ...topic },
+      provenance: 'controlled-business-template',
+      generatedAdvice: null,
+      isDynamic: true,
+    },
+    {
+      id: 'business_hold',
+      label: `维持${topic.label}现状`,
+      color: '#80C8A8',
+      glowColor: '#80C8A8',
+      icon: '☶',
+      gua: '艮',
+      keyPoints: ['延续当前业务安排', '记录事实与约束快照', '由用户决定后续变更'],
+      topic: { ...topic },
+      provenance: 'controlled-business-template',
+      generatedAdvice: null,
+      isDynamic: true,
+    },
+  ];
+}
+
+const EVIDENCE_CHOICE_PALETTE = Object.freeze([
+  { color: '#E8B880', icon: '◇' },
+  { color: '#A8C0E8', icon: '□' },
+  { color: '#80C8A8', icon: '△' },
+]);
+const UNSAFE_CHOICE_TEXT = /(?:\b(?:lens|lens-task|prompt)\b|卦象|卦辞|乾卦|坤卦|吉|凶|可进|宜止|命运|马上签约|立即执行|建议推进|建议停止)/i;
+
+function normalizeBusinessText(value, maxLength) {
+  const normalized = String(value || '')
+    .normalize('NFC')
+    .replace(/\p{Cc}|[<>]/gu, ' ')
+    .replace(/[^\p{L}\p{N}\s，。！？、；：,.!?·（）()《》“”'"—\-/%]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+  return normalized && !UNSAFE_CHOICE_TEXT.test(normalized) ? normalized : '';
+}
+
+function preLensDialogue(findings) {
+  const dialogueHistory = {};
+  const agentIds = [];
+  for (const finding of Array.isArray(findings) ? findings : []) {
+    if (!finding || finding.lensTaskId || finding.source === 'lens-review') continue;
+    const agentId = String(finding.agentId || '').trim();
+    const content = String(finding.content || '').trim();
+    if (!agentId || !content) continue;
+    if (!dialogueHistory[agentId]) {
+      dialogueHistory[agentId] = [];
+      agentIds.push(agentId);
+    }
+    dialogueHistory[agentId].push(content);
   }
-  const advice = oracle.dynamics.length > 0
-    ? `动爻在${oracle.dynamics.map((i) => i + 1).join('、')}位，变机已现，${posCount >= negCount ? '可进' : '宜止'}。`
-    : '无动爻，局势稳定，从长计议。';
+  return { agentIds, dialogueHistory };
+}
 
-  return `${primaryName}·${dynamicStr}。${interpretation}${advice}`;
+function normalizeEvidenceDerivedSummary(generated) {
+  const summary = normalizeBusinessText(generated?.summary, 360);
+  if (!summary || !Array.isArray(generated?.options) || generated.options.length === 0) return null;
+  const choices = [];
+  for (const [index, option] of generated.options.slice(0, 3).entries()) {
+    const label = normalizeBusinessText(option?.label, 24);
+    const rawKeyPoints = (Array.isArray(option?.keyPoints) ? option.keyPoints : []).slice(0, 3);
+    const keyPoints = rawKeyPoints.map((point) => normalizeBusinessText(point, 90));
+    if (!label || keyPoints.length === 0 || keyPoints.some((point) => !point)) return null;
+    const palette = EVIDENCE_CHOICE_PALETTE[index];
+    choices.push({
+      id: `business_evidence_${index + 1}`,
+      label,
+      color: palette.color,
+      glowColor: palette.color,
+      icon: palette.icon,
+      gua: '',
+      keyPoints,
+      provenance: 'evidence-derived',
+      generatedAdvice: null,
+      isDynamic: true,
+    });
+  }
+  return choices.length > 0 ? { summary, choices } : null;
+}
+
+async function buildBusinessDecisionProjection(session, findings, generateMasterSummaryFn) {
+  const question = session?.questionContext || session?.question_context || session?.question || '';
+  const { agentIds, dialogueHistory } = preLensDialogue(findings);
+  try {
+    const generated = await generateMasterSummaryFn(question, agentIds, dialogueHistory);
+    const normalized = normalizeEvidenceDerivedSummary(generated);
+    if (normalized) return normalized;
+  } catch (error) {
+    logger.warn('[Reflector] Agent 总结失败，使用受控业务回退', { sessionId: session?.id, error: error.message });
+  }
+  const topic = deriveBusinessTopic(session?.question || '');
+  return {
+    choices: buildControlledBusinessChoices(session?.question || ''),
+    summary: `围绕“${topic.label}”形成三条可提交业务路径；审查镜头不构成裁决，最终路径由你确认。`,
+  };
+}
+
+function disabledCognitivePlan() {
+  return {
+    status: 'disabled',
+    reason: 'lens-unavailable',
+    message: '本轮未进行认知扰动',
+    reviewTasks: [],
+    invariants: { ...LOCKED_INVARIANTS },
+  };
 }
 
 // ============ 6. 总入口 ============
@@ -389,13 +623,13 @@ async function generateOracleText(oracle, aggregated, question) {
  * 流程:
  *   1. 聚合 findings
  *   2. 矛盾检测 → 有矛盾且可重规划 → state=PLAN
- *   3. 覆盖检查 → 有缺口且可重规划 → 补维度, state=EXECUTE
- *   4. 立卦 + 生成卦辞 → state=ORACLE
+ *   3. 覆盖检查 → 将缺口保留为 unknown，不用重复推演伪造确定性
+ *   4. 立卦 + 生成认知扰动计划 + 中性说明 → state=ORACLE
  *
  * @param {object} session 推演会话（需含 plan.dimensions, findings, replan_count）
  * @returns {Promise<{session, oracle, conflicts, gaps, aggregated, replanned}>}
  */
-export async function reflect(session) {
+export async function reflect(session, dependencies = {}) {
   logger.info('[Reflector] reflect 开始', {
     sessionId: session?.id,
     findingsCount: (session?.findings || []).length,
@@ -433,81 +667,59 @@ export async function reflect(session) {
 
   // 3. 覆盖检查
   const gaps = checkCoverage(dimensions, findings);
-  if (gaps.length > 0 && replanCount < MAX_REPLAN) {
-    // 补维度，回到 EXECUTE 重跑智囊
-    session.replan_count = replanCount + 1;
-    session.plan.dimensions = [...dimensions, ...gaps.map((g) => ({ name: g.name, perspective: g.perspective, agents: [], toolNeeds: [] }))];
-    session.state = 'EXECUTE';
-    logger.info('[Reflector] 补维度重跑（覆盖不足）', {
-      replanCount: session.replan_count,
+  if (gaps.length > 0) {
+    logger.info('[Reflector] 覆盖缺口保留为未知', {
       gapCount: gaps.length,
-      addedPerspectives: gaps.map((g) => g.perspective),
+      unknownPerspectives: gaps.map((g) => g.perspective),
     });
-    return {
-      session,
-      oracle: null,
-      conflicts,
-      gaps,
-      aggregated,
-      replanned: true,
-      reason: '维度缺口补全',
-    };
   }
 
   // 4. 立卦
-  const oracle = mapToHexagram(aggregated, dimensions);
-  oracle.text = await generateOracleText(oracle, aggregated, session?.question || '');
+  const oracle = mapToHexagram(aggregated, dimensions, { conflicts, gaps });
   oracle.conflicts = conflicts;
   oracle.gaps = gaps;
 
-  // P1-1：基于智囊发现，LLM动态生成抉择选项（不再固定4个）
-  let dynamicChoices = [];
-  let masterSummaryText = '';
-  try {
-    const agentIds = Array.from(new Set(findings.map(f => f.agentId).filter(Boolean)));
-    const dialogueHistory = {};
-    findings.forEach(f => {
-      if (!f.agentId) return;
-      if (!dialogueHistory[f.agentId]) dialogueHistory[f.agentId] = [];
-      if (f.content) dialogueHistory[f.agentId].push(f.content);
-    });
-    const ms = await agentEngine.generateMasterSummary(
-      session?.questionContext || session?.question || '',
-      agentIds,
-      dialogueHistory
-    );
-    if (ms && Array.isArray(ms.options) && ms.options.length > 0) {
-      // 映射成前端Game.jsx需要的 {id,label,color,icon,gua,keyPoints} 格式
-      const palette = [
-        { color: '#E8B880', icon: '☰', gua: '大有' },
-        { color: '#E88080', icon: '☵', gua: '坎' },
-        { color: '#80C8A8', icon: '☶', gua: '艮' },
-        { color: '#D8A8C8', icon: '☴', gua: '巽' },
-        { color: '#A8C0E8', icon: '☳', gua: '解' },
-        { color: '#E8D080', icon: '☲', gua: '离' },
-      ];
-      dynamicChoices = ms.options.map((opt, idx) => {
-        const pick = palette[idx % palette.length];
-        return {
-          id: `dyn_${idx}_${Date.now().toString(36)}`,
-          label: String(opt.label || `选项${idx + 1}`).slice(0, 10),
-          color: pick.color,
-          glowColor: pick.color,
-          icon: opt.guaRecommendation ? (opt.guaRecommendation.slice(0, 1) || pick.icon) : pick.icon,
-          gua: opt.guaRecommendation || pick.gua,
-          keyPoints: Array.isArray(opt.keyPoints) ? opt.keyPoints.slice(0, 3) : [],
-          isDynamic: true,
-        };
+  const createPlan = dependencies.createCognitivePerturbationPlanFn || createCognitivePerturbationPlan;
+  const persistedPlan = session?.cognitive_plan ?? session?.cognitivePlan ?? null;
+  const persistedReview = session?.lens_review ?? session?.lensReview ?? persistedPlan?.review ?? null;
+  let cognitivePlan = persistedReview?.started === true ? persistedPlan : null;
+  let lensImpacts = persistedReview?.started === true
+    ? (session?.lens_impacts ?? session?.lensImpacts ?? [])
+    : [];
+  if (!cognitivePlan) {
+    try {
+      cognitivePlan = createPlan({
+        oracle,
+        findings,
+        conflicts,
+        gaps,
+        dimensions,
+        sessionSeed: session?.sessionSeed ?? session?.seed ?? session?.id,
       });
-      masterSummaryText = ms.summary || '';
-      logger.info('[Reflector] 动态抉择选项生成', { sessionId: session?.id, count: dynamicChoices.length });
+    } catch (error) {
+      logger.warn('[Reflector] Lens 失败，不阻断基础推演', { sessionId: session?.id, error: error.message });
+      cognitivePlan = disabledCognitivePlan();
     }
-  } catch (e) {
-    logger.warn('[Reflector] 动态选项生成失败（不阻塞立卦）', { sessionId: session?.id, error: e.message });
-    dynamicChoices = [];
   }
 
+  oracle.text = await generateReviewLensText(
+    oracle,
+    dependencies.callLLMFn || callLLM,
+    dependencies.reviewLensTimeoutMs,
+  );
+
+  const businessDecision = await buildBusinessDecisionProjection(
+    session,
+    findings,
+    dependencies.generateMasterSummaryFn || agentEngine.generateMasterSummary,
+  );
+  const dynamicChoices = businessDecision.choices;
+  const masterSummaryText = businessDecision.summary;
+
   session.oracle = oracle;
+  session.cognitivePlan = cognitivePlan;
+  session.lensImpacts = lensImpacts;
+  session.lensReview = persistedReview?.started === true ? persistedReview : null;
   session.dynamicChoices = dynamicChoices;
   session.masterSummary = masterSummaryText;
   session.state = 'ORACLE';
@@ -526,6 +738,8 @@ export async function reflect(session) {
     conflicts,
     gaps,
     aggregated,
+    cognitivePlan,
+    lensImpacts,
     replanned: false,
     reason: '立卦完成',
   };

@@ -51,10 +51,14 @@ export async function withRetry(fn, opts = {}) {
  * @throws {Error} 超时抛出 { message: '${name}超时', type: 'LLM_TIMEOUT' }
  */
 export function withTimeout(fn, timeoutMs, name = 'operation') {
-  return Promise.race([
-    fn(),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(Object.assign(new Error(`${name}超时`), { type: 'LLM_TIMEOUT' })), timeoutMs)
-    ),
-  ]);
+  let timeoutHandle;
+  const timeout = new Promise((_, reject) => {
+    timeoutHandle = setTimeout(
+      () => reject(Object.assign(new Error(`${name}超时`), { type: 'LLM_TIMEOUT' })),
+      timeoutMs,
+    );
+  });
+
+  return Promise.race([Promise.resolve().then(fn), timeout])
+    .finally(() => clearTimeout(timeoutHandle));
 }

@@ -1,9 +1,3 @@
-/**
- * Migration: 创建 shared_agents 和 agent_usage_log 表
- * 演的动态Agent共享池
- */
-
-export const up = `
 CREATE TABLE IF NOT EXISTS shared_agents (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -11,16 +5,13 @@ CREATE TABLE IF NOT EXISTS shared_agents (
   color TEXT,
   glow TEXT,
   symbol TEXT,
-
   identity TEXT NOT NULL,
   methodology TEXT NOT NULL,
   deliverable TEXT NOT NULL,
   persona TEXT,
-
   questionTypes JSON DEFAULT '[]',
   perspectives JSON DEFAULT '[]',
   tags JSON DEFAULT '[]',
-
   source TEXT NOT NULL DEFAULT 'dynamic',
   fingerprint TEXT,
   quality_score REAL DEFAULT 1.0,
@@ -28,7 +19,6 @@ CREATE TABLE IF NOT EXISTS shared_agents (
   positive_feedback INTEGER DEFAULT 0,
   creator_id TEXT,
   is_public INTEGER DEFAULT 1,
-
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW(),
   archived INTEGER DEFAULT 0
@@ -49,9 +39,3 @@ CREATE TABLE IF NOT EXISTS agent_usage_log (
 
 CREATE INDEX IF NOT EXISTS idx_usage_log_agent ON agent_usage_log(agent_id);
 CREATE INDEX IF NOT EXISTS idx_usage_log_time ON agent_usage_log(used_at DESC);
-`;
-
-export const down = `
-DROP TABLE IF EXISTS agent_usage_log;
-DROP TABLE IF EXISTS shared_agents;
-`;

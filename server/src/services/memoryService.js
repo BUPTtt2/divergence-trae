@@ -100,23 +100,13 @@ function dropUndefined(data) {
 
 /**
  * 保存/更新推演会话（L1 工作记忆载体）
- * @param {object} session { id?, user_id, question, plan, state, tool_results, findings, oracle, memory_used, replan_count }
+ * @param {object} session { id?, user_id, question, plan, state, tool_results, findings, oracle, cognitivePlan, lensImpacts, memory_used, replan_count }
  * @returns {Promise<object>} 带 id 的 session
  */
 export async function saveSession(session) {
   const id = session.id || `sess_${generateUUID()}`;
   const existing = await getSession(id);
-  const data = dropUndefined({
-    user_id: session.user_id,
-    question: session.question,
-    plan: session.plan,
-    state: session.state || 'PLAN',
-    tool_results: session.tool_results,
-    findings: session.findings,
-    oracle: session.oracle,
-    memory_used: session.memory_used,
-    replan_count: session.replan_count ?? 0,
-  });
+  const data = toSessionPersistenceData(session);
 
   if (existing) {
     await query({ table: SESSIONS_TABLE, action: 'update', id, data });
@@ -127,6 +117,42 @@ export async function saveSession(session) {
     logger.info('会话已创建', { sessionId: id, state: data.state, userId: data.user_id });
   }
   return { ...session, id };
+}
+
+export function toSessionPersistenceData(session = {}) {
+  return dropUndefined({
+    user_id: session.user_id,
+    question: session.question,
+    question_context: session.question_context ?? session.questionContext,
+    answers: session.answers,
+    plan: session.plan,
+    state: session.state || 'PLAN',
+    tool_results: session.tool_results,
+    findings: session.findings,
+    conflicts: session.conflicts,
+    gaps: session.gaps,
+    oracle: session.oracle,
+    dynamic_choices: session.dynamic_choices ?? session.dynamicChoices,
+    master_summary: session.master_summary ?? session.masterSummary,
+    cognitive_plan: session.cognitive_plan ?? session.cognitivePlan,
+    lens_impacts: session.lens_impacts ?? session.lensImpacts,
+    lens_review: session.lens_review ?? session.lensReview,
+    execute_action_id: session.execute_action_id !== undefined
+      ? session.execute_action_id
+      : session.executeActionId,
+    execute_status: session.execute_status !== undefined
+      ? session.execute_status
+      : session.executeStatus,
+    execute_claim_token: session.execute_claim_token !== undefined
+      ? session.execute_claim_token
+      : session.executeClaimToken,
+    execute_lease_expires_at: session.execute_lease_expires_at !== undefined
+      ? session.execute_lease_expires_at
+      : session.executeLeaseExpiresAt,
+    memory_used: session.memory_used,
+    commit_result: session.commit_result,
+    replan_count: session.replan_count ?? 0,
+  });
 }
 
 /**
@@ -152,6 +178,295 @@ export async function updateSessionState(sessionId, state, patch = {}) {
   await query({ table: SESSIONS_TABLE, action: 'update', id: sessionId, data });
   logger.info('会话状态变更', { sessionId, state, patchKeys: Object.keys(patch) });
   return getSession(sessionId);
+}
+
+const DEFAULT_EXECUTE_LEASE_MS = 15 * 60 * 1000;
+
+function executeClaimData(actionId, claimToken, leaseExpiresAt) {
+  return {
+    execute_action_id: actionId,
+    execute_status: 'running',
+    execute_claim_token: claimToken,
+    execute_lease_expires_at: leaseExpiresAt,
+    cognitive_plan: null,
+    lens_impacts: [],
+    lens_review: null,
+  };
+}
+
+/**
+ * 在任何 execute 副作用前抢占带租约的会话执行权；过期租约可被原子替换。
+ */
+export async function claimExecute(sessionId, {
+  actionId,
+  now = Date.now(),
+  leaseMs = DEFAULT_EXECUTE_LEASE_MS,
+  claimToken = generateUUID(),
+} = {}) {
+  const normalizedActionId = String(actionId || '').trim();
+  if (!normalizedActionId) throw new Error('EXECUTE_ACTION_REQUIRED');
+  const normalizedNow = Number(now);
+  const normalizedLeaseMs = Number(leaseMs);
+  if (!Number.isFinite(normalizedNow) || !Number.isFinite(normalizedLeaseMs) || normalizedLeaseMs <= 0) {
+    throw new Error('EXECUTE_LEASE_INVALID');
+  }
+  const leaseExpiresAt = normalizedNow + normalizedLeaseMs;
+  const data = executeClaimData(normalizedActionId, claimToken, leaseExpiresAt);
+  let result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: { execute_action_id: null },
+    data,
+  });
+  if (result.rowCount === 1) {
+    return { claimed: true, claimToken, session: result.rows[0] };
+  }
+
+  const persisted = await getSession(sessionId);
+  const expired = persisted?.execute_status === 'running'
+    && Number(persisted.execute_lease_expires_at) <= normalizedNow;
+  if (!expired) return { claimed: false, claimToken: null, session: persisted };
+
+  result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      execute_action_id: persisted.execute_action_id,
+      execute_status: 'running',
+      execute_claim_token: persisted.execute_claim_token,
+      execute_lease_expires_at: persisted.execute_lease_expires_at,
+    },
+    data,
+  });
+  if (result.rowCount === 1) {
+    return { claimed: true, claimToken, session: result.rows[0] };
+  }
+  return { claimed: false, claimToken: null, session: await getSession(sessionId) };
+}
+
+/** 使用 claim token 作为 fencing token，原子写入完整 execute 投影并结束租约。 */
+export async function completeExecute(sessionId, { actionId, claimToken, state, patch = {} } = {}) {
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      execute_action_id: String(actionId || '').trim(),
+      execute_status: 'running',
+      execute_claim_token: String(claimToken || '').trim(),
+    },
+    data: dropUndefined({
+      state,
+      ...patch,
+      execute_status: 'completed',
+      execute_lease_expires_at: null,
+    }),
+  });
+  if (result.rowCount !== 1) {
+    const error = new Error('EXECUTE_CLAIM_LOST');
+    error.code = 'EXECUTE_CLAIM_LOST';
+    throw error;
+  }
+  return { completed: true, session: result.rows[0] };
+}
+
+/** 当前 execute owner 的中间写入；CAS 成功时同时续租，旧 owner 不得覆盖新 owner。 */
+export async function updateClaimedExecute(sessionId, {
+  actionId,
+  claimToken,
+  state,
+  patch = {},
+  now = Date.now(),
+  leaseMs = DEFAULT_EXECUTE_LEASE_MS,
+} = {}) {
+  const normalizedActionId = String(actionId || '').trim();
+  const normalizedClaimToken = String(claimToken || '').trim();
+  const normalizedNow = Number(now);
+  const normalizedLeaseMs = Number(leaseMs);
+  if (!Number.isFinite(normalizedNow) || !Number.isFinite(normalizedLeaseMs) || normalizedLeaseMs <= 0) {
+    throw new Error('EXECUTE_LEASE_INVALID');
+  }
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      execute_action_id: normalizedActionId,
+      execute_status: 'running',
+      execute_claim_token: normalizedClaimToken,
+    },
+    data: dropUndefined({
+      state,
+      ...patch,
+      execute_action_id: normalizedActionId,
+      execute_status: 'running',
+      execute_claim_token: normalizedClaimToken,
+      execute_lease_expires_at: normalizedNow + normalizedLeaseMs,
+    }),
+  });
+  if (result.rowCount !== 1) {
+    const error = new Error('EXECUTE_CLAIM_LOST');
+    error.code = 'EXECUTE_CLAIM_LOST';
+    throw error;
+  }
+  return { updated: true, session: result.rows[0] };
+}
+
+/** 失败时仅由当前 fencing token 释放租约；同时清理未完成的 Lens 子状态。 */
+export async function releaseExecuteClaim(sessionId, { actionId, claimToken } = {}) {
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      execute_action_id: String(actionId || '').trim(),
+      execute_status: 'running',
+      execute_claim_token: String(claimToken || '').trim(),
+    },
+    data: {
+      execute_action_id: null,
+      execute_status: null,
+      execute_claim_token: null,
+      execute_lease_expires_at: null,
+      cognitive_plan: null,
+      lens_impacts: [],
+      lens_review: null,
+    },
+  });
+  return { released: result.rowCount === 1, session: result.rows[0] || await getSession(sessionId) };
+}
+
+const DEFAULT_ANSWER_LEASE_MS = 2 * 60 * 1000;
+
+function answerStateConflict() {
+  const error = new Error('ANSWER_STATE_CONFLICT');
+  error.code = 'ANSWER_STATE_CONFLICT';
+  error.status = 409;
+  return error;
+}
+
+/** answer 的单一持久化状态机：claim/complete/release 均由 token CAS 保护。 */
+export async function claimClarifyAnswer(sessionId, snapshot = {}, options = {}) {
+  const mode = options.mode || 'claim';
+  if (mode !== 'claim') {
+    if (!['complete', 'release'].includes(mode)) {
+      throw new Error('ANSWER_TRANSITION_INVALID');
+    }
+    const claimToken = String(options.claimToken || '').trim();
+    if (!claimToken) throw answerStateConflict();
+    const actionId = `answer:${claimToken}`;
+    const patch = dropUndefined(options.patch || {});
+    const data = {
+      ...patch,
+      state: mode === 'release' ? 'WAIT' : options.state,
+      execute_action_id: null,
+      execute_status: null,
+      execute_claim_token: null,
+      execute_lease_expires_at: null,
+    };
+    const result = await query({
+      table: SESSIONS_TABLE,
+      action: 'compare-and-set',
+      id: sessionId,
+      expected: {
+        execute_action_id: actionId,
+        execute_status: 'answering',
+        execute_claim_token: claimToken,
+      },
+      data: dropUndefined(data),
+    });
+    if (result.rowCount !== 1) {
+      if (mode === 'release') return { released: false, session: await getSession(sessionId) };
+      throw answerStateConflict();
+    }
+    return {
+      [mode === 'complete' ? 'completed' : 'released']: true,
+      claimToken,
+      session: result.rows[0],
+    };
+  }
+
+  const executeStatus = snapshot.execute_status ?? snapshot.executeStatus ?? null;
+  const leaseExpiresAt = snapshot.execute_lease_expires_at ?? snapshot.executeLeaseExpiresAt ?? null;
+  const now = Number(options.now ?? Date.now());
+  const leaseMs = Number(options.leaseMs ?? DEFAULT_ANSWER_LEASE_MS);
+  if (!Number.isFinite(now) || !Number.isFinite(leaseMs) || leaseMs <= 0) {
+    throw new Error('ANSWER_LEASE_INVALID');
+  }
+  const eligibleWait = snapshot.state === 'WAIT'
+    && (executeStatus === null || executeStatus === 'completed')
+    && leaseExpiresAt === null;
+  const expiredAnswer = executeStatus === 'answering'
+    && Number.isFinite(Number(leaseExpiresAt))
+    && Number(leaseExpiresAt) <= now;
+  if (!eligibleWait && !expiredAnswer) throw answerStateConflict();
+
+  const claimToken = String(options.claimToken || generateUUID()).trim();
+  const actionId = `answer:${claimToken}`;
+
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      state: snapshot.state,
+      execute_action_id: snapshot.execute_action_id ?? snapshot.executeActionId ?? null,
+      execute_status: executeStatus,
+      execute_claim_token: snapshot.execute_claim_token ?? snapshot.executeClaimToken ?? null,
+      execute_lease_expires_at: leaseExpiresAt,
+    },
+    data: {
+      state: 'PLAN',
+      execute_action_id: actionId,
+      execute_status: 'answering',
+      execute_claim_token: claimToken,
+      execute_lease_expires_at: now + leaseMs,
+    },
+  });
+  if (result.rowCount !== 1) throw answerStateConflict();
+  return { claimed: true, claimToken, session: result.rows[0] };
+}
+
+/**
+ * 原子抢占一次性 Lens 审查。只有 lens_review 仍为空的调用者可以成为执行者。
+ * PostgreSQL 使用条件 UPDATE；内存模式在同一同步临界区执行等价 CAS。
+ */
+export async function claimLensReview(sessionId, { cognitivePlan, actionId, executeClaimToken } = {}) {
+  const tasks = Array.isArray(cognitivePlan?.reviewTasks) ? cognitivePlan.reviewTasks.slice(0, 3) : [];
+  const lensReview = {
+    started: true,
+    status: 'running',
+    actionId: String(actionId || '').trim(),
+    totalTaskCount: tasks.length,
+    completedTaskCount: 0,
+    pendingTaskIds: tasks.map((task) => task.id).filter(Boolean),
+  };
+  const claimedPlan = {
+    ...cognitivePlan,
+    reviewTasks: Array.isArray(cognitivePlan?.reviewTasks)
+      ? cognitivePlan.reviewTasks.map((task, index) => (index < 3 ? { ...task, status: 'pending' } : task))
+      : [],
+    review: lensReview,
+  };
+  const result = await query({
+    table: SESSIONS_TABLE,
+    action: 'compare-and-set',
+    id: sessionId,
+    expected: {
+      lens_review: null,
+      execute_action_id: String(actionId || '').trim(),
+      execute_status: 'running',
+      execute_claim_token: String(executeClaimToken || '').trim(),
+    },
+    data: {
+      cognitive_plan: claimedPlan,
+      lens_review: lensReview,
+    },
+  });
+  if (result.rowCount === 1) return { claimed: true, session: result.rows[0] };
+  return { claimed: false, session: await getSession(sessionId) };
 }
 
 // ============ L2: 会话摘要 ============
@@ -684,5 +999,11 @@ export default {
   saveSession,
   getSession,
   updateSessionState,
+  updateClaimedExecute,
+  claimExecute,
+  completeExecute,
+  releaseExecuteClaim,
+  claimClarifyAnswer,
+  claimLensReview,
   selfTest,
 };

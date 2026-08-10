@@ -16,6 +16,7 @@ import BaseAgent from '../BaseAgent.js';
 import { callLLM } from '../../services/llmRouter.js';
 import agentPool from '../../data/agentPool.js';
 import dynamicGenerator from '../../services/dynamicGenerator.js';
+import { buildQuickOrchestration } from '../../services/informationSufficiency.js';
 
 export class OrchestratorAgent extends BaseAgent {
   constructor() {
@@ -31,6 +32,30 @@ export class OrchestratorAgent extends BaseAgent {
   async _execute(ctx) {
     const q = String((ctx.blackboard && ctx.blackboard.question) || '').trim();
     if (!q) throw new Error('[orchestrator] blackboard.question 为空');
+    if (ctx.blackboard?.mode === 'quick') {
+      const orchestration = buildQuickOrchestration({
+        question: q,
+        answers: ctx.blackboard.answers,
+        round: ctx.round,
+      });
+      return {
+        plan: {
+          questionType: '即时日常选择',
+          dimensions: orchestration.dimensions,
+          questions: orchestration.sufficiency.missingFields.map((field) => ({
+            id: field.id,
+            dimension: field.id,
+            text: field.prompt,
+            hint: field.reason,
+          })),
+          divergence: '身体需要与当前目标',
+        },
+        perspectivePool: orchestration.advisors,
+        autonomy: orchestration.sufficiency.complete ? 'CONTINUE' : 'ASK',
+        orchestration,
+        planSource: 'quick-structured',
+      };
+    }
     // 1) LLM 自主 plan
     let plan;
     try {

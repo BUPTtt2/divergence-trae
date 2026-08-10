@@ -1,37 +1,70 @@
 /**
- * EventBus — 事件总线（v2.0 生产级）
+ * EventBus — AgentEventV1 分发总线
  *
  * 所有后端模块通过 emit() 发布事件，EventBus 负责：
  * 1. 写后端日志文件（通过 logger）
- * 2. 持久化到 deliberation_events 表（支持 Session 重放恢复）
- * 3. 推送到前端 SSE（如果前端在监听）
+ * 2. 把规范化事件委托给 EventStore 单次持久化
+ * 3. 只把 public/summary 事件推送到前端 SSE
  *
- * 事件类型:
- *   - THOUGHT:       演·思考过程
- *   - ACTION:        演·工具调用
- *   - OBSERVATION:   演·观察结果
- *   - ADVISOR_SPEAK: 智囊发言
- *   - STATE_CHANGE:  状态流转
- *   - ERROR:         错误事件
- *
- * 设计依据: docs/重设.md 第 4 节（EventBus 替代 Blackboard，支持订阅发布+持久化事件流）
+ * 旧 THOUGHT/ACTION 等事件仅作内部兼容；浏览器业务语义使用版本化领域事件。
  */
 
 import logger from './logger.js';
-import { query } from './db.js';
 import { generateUUID } from '../utils/id.js';
-
-const EVENTS_TABLE = 'deliberation_events';
+import {
+  appendEvent,
+  deterministicEventId,
+  getEvents,
+  isBrowserVisibleEvent,
+  wasEventInserted,
+  withLegacyAliases,
+} from './eventStore.js';
 const SYSTEM_SESSION_ID = 'system';
+
+function stableSerialize(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  return `{${Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`)
+    .join(',')}}`;
+}
+
+function isLensDomainEvent(type) {
+  return type === 'LENS_SELECTED'
+    || type === 'LENS_TASK_CREATED'
+    || type === 'LENS_TASK_COMPLETED'
+    || type === 'LENS_REVIEW_COMPLETED';
+}
 
 class EventBus {
   constructor() {
-    /** @type {Map<string, import('express').Response[]>} sessionId → SSE connections */
+    /** @type {Map<string, Array<{res: import('express').Response, lastSentSequence: number, replaying: boolean, pending: object[]}>>} */
     this.listeners = new Map();
-    /** 历史事件缓存（每session最多100条，供新订阅者补看） */
+    /** 历史事件缓存（每 session 最多 100 条，仅供进程内诊断；SSE 重放始终分页读库） */
     this.history = new Map();
+    /** @type {Map<string, Set<(event: object) => void>>} event type → backend subscribers */
+    this.backendListeners = new Map();
     const MAX_HISTORY = 100;
     this.MAX_HISTORY = MAX_HISTORY;
+  }
+
+  /**
+   * 订阅某一类后端事件。返回取消订阅函数。
+   * SSE 连接仍使用 subscribe(sessionId, res)，两种监听不混用。
+   */
+  on(type, handler) {
+    if (!type || typeof handler !== 'function') {
+      throw new TypeError('EventBus.on requires an event type and handler');
+    }
+    if (!this.backendListeners.has(type)) this.backendListeners.set(type, new Set());
+    const handlers = this.backendListeners.get(type);
+    handlers.add(handler);
+    return () => {
+      handlers.delete(handler);
+      if (handlers.size === 0) this.backendListeners.delete(type);
+    };
   }
 
   /**
@@ -41,64 +74,82 @@ class EventBus {
    */
   emit(sessionId, event) {
     const sid = sessionId || SYSTEM_SESSION_ID;
-    const fullEvent = {
-      id: generateUUID(),
+    const payload = event.payload || event.data || {};
+    const correlationId = event.correlationId || payload.correlationId || `corr_${generateUUID()}`;
+    const eventId = event.eventId || (isLensDomainEvent(event.type)
+      ? deterministicEventId(sid, correlationId, event.type, stableSerialize(payload))
+      : generateUUID());
+    const draft = withLegacyAliases({
+      eventId,
       type: event.type,
       sessionId: sid,
-      data: event.data || {},
-      actor: event.actor || null,
-      timestamp: new Date().toISOString(),
-    };
+      sequence: 0,
+      actorId: event.actorId || event.actor || 'system',
+      ...(event.taskId ? { taskId: event.taskId } : {}),
+      ...(event.causationId ? { causationId: event.causationId } : {}),
+      correlationId,
+      payload,
+      visibility: event.visibility || 'public',
+      createdAt: new Date().toISOString(),
+      schemaVersion: 1,
+    });
 
     // 1. 写后端日志
-    const logMsg = `[EventBus] ${fullEvent.type}`;
-    const logMeta = { sessionId: sid, ...fullEvent.data };
-    if (fullEvent.type === 'ERROR') {
+    const logMsg = `[EventBus] ${draft.type}`;
+    const logMeta = { sessionId: sid, ...draft.payload };
+    if (draft.type === 'ERROR') {
       logger.error(logMsg, logMeta);
-    } else if (fullEvent.type === 'THOUGHT' || fullEvent.type === 'STATE_CHANGE') {
+    } else if (draft.type === 'THOUGHT' || draft.type === 'STATE_CHANGE') {
       logger.info(logMsg, logMeta);
     } else {
       logger.info(logMsg, logMeta);
     }
 
-    // 2. 缓存历史（供新订阅者补看）
-    if (!this.history.has(sid)) this.history.set(sid, []);
-    const hist = this.history.get(sid);
-    hist.push(fullEvent);
-    if (hist.length > this.MAX_HISTORY) hist.shift();
+    const persistedPromise = appendEvent(sid, draft.type, draft.payload, draft.actorId, {
+      eventId: draft.eventId,
+      createdAt: draft.createdAt,
+      taskId: draft.taskId,
+      causationId: draft.causationId,
+      correlationId: draft.correlationId,
+      visibility: event.visibility,
+    }).then((persisted) => {
+      Object.assign(draft, persisted);
+      if (!wasEventInserted(persisted)) return persisted;
 
-    // 3. 推送到前端 SSE
-    const conns = this.listeners.get(sid) || [];
-    for (const res of conns) {
-      try {
-        res.write(`data: ${JSON.stringify(fullEvent)}\n\n`);
-      } catch (e) {
-        // 连接已断开，忽略
+      const handlers = this.backendListeners.get(draft.type) || [];
+      for (const handler of handlers) {
+        try {
+          handler(draft);
+        } catch (error) {
+          logger.warn('[EventBus] 后端订阅者异常', { type: draft.type, error: error.message });
+        }
       }
-    }
-
-    // 4. 持久化到 DB（异步不阻塞，失败仅告警不抛错）
-    this.persistEvent(fullEvent).catch((err) => {
-      logger.warn('[EventBus] 事件持久化失败', { sessionId: sid, type: fullEvent.type, error: err.message });
+      if (!this.history.has(sid)) this.history.set(sid, []);
+      const history = this.history.get(sid);
+      history.push(persisted);
+      if (history.length > this.MAX_HISTORY) history.shift();
+      if (isBrowserVisibleEvent(persisted)) {
+        const conns = this.listeners.get(sid) || [];
+        for (const listener of conns) {
+          if (listener.replaying) {
+            listener.pending.push(persisted);
+            continue;
+          }
+          if (persisted.sequence <= listener.lastSentSequence) continue;
+          try {
+            listener.res.write(`id: ${persisted.sequence}\ndata: ${JSON.stringify(persisted)}\n\n`);
+            listener.lastSentSequence = persisted.sequence;
+          } catch {}
+        }
+      }
+      return persisted;
     });
-  }
-
-  /**
-   * 持久化单条事件到 deliberation_events 表
-   * @param {object} fullEvent 完整事件对象
-   */
-  async persistEvent(fullEvent) {
-    await query({
-      table: EVENTS_TABLE,
-      action: 'insert',
-      data: {
-        id: fullEvent.id,
-        session_id: fullEvent.sessionId,
-        type: fullEvent.type,
-        payload: JSON.stringify(fullEvent.data),
-        actor: fullEvent.actor,
-      },
+    // 大量领域事件允许 fire-and-forget；附加观察器避免无人 await 时形成未处理拒绝。
+    // 调用方若显式 await，仍会收到原 Promise 的失败并可决定是否中止业务。
+    persistedPromise.catch((error) => {
+      logger.warn('[EventBus] 事件持久化失败', { sessionId: sid, type: draft.type, error: error.message });
     });
+    return persistedPromise;
   }
 
   /**
@@ -110,20 +161,7 @@ class EventBus {
   async replay(sessionId) {
     if (!sessionId) return [];
     try {
-      const result = await query({
-        table: EVENTS_TABLE,
-        action: 'select',
-        filter: { session_id: sessionId },
-        queryOptions: { orderBy: 'created_at:asc', limit: 200 },
-      });
-      return (result.rows || []).map((row) => ({
-        id: row.id,
-        type: row.type,
-        sessionId: row.session_id,
-        data: typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : (row.payload || {}),
-        actor: row.actor,
-        timestamp: row.created_at,
-      }));
+      return await getEvents(sessionId);
     } catch (e) {
       logger.warn('[EventBus] replay 读取失败', { sessionId, error: e.message });
       // 降级：返回内存缓存
@@ -136,28 +174,49 @@ class EventBus {
    * @param {string} sessionId
    * @param {import('express').Response} res Express Response (SSE)
    */
-  async subscribe(sessionId, res) {
+  async subscribe(sessionId, res, options = {}) {
     if (!this.listeners.has(sessionId)) {
       this.listeners.set(sessionId, []);
     }
-    this.listeners.get(sessionId).push(res);
+    const afterSequence = Number(options.afterSequence || 0);
+    const listener = { res, lastSentSequence: afterSequence, replaying: true, pending: [] };
+    this.listeners.get(sessionId).push(listener);
 
-    // 补发历史事件（让新订阅者看到之前的日志）
-    // 优先从内存缓存读，缓存空时从 DB replay
-    let hist = this.history.get(sessionId) || [];
-    if (hist.length === 0) {
-      hist = await this.replay(sessionId);
-      if (hist.length > 0) {
-        this.history.set(sessionId, hist);
+    let cursor = afterSequence;
+    let replayCount = 0;
+    try {
+      while (true) {
+        const page = await getEvents(sessionId, { afterSequence: cursor, limit: 200 });
+        if (page.length === 0) break;
+        for (const event of page) {
+          cursor = Math.max(cursor, event.sequence);
+          if (!isBrowserVisibleEvent(event) || event.sequence <= listener.lastSentSequence) continue;
+          try {
+            res.write(`id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`);
+            listener.lastSentSequence = event.sequence;
+            replayCount += 1;
+          } catch {}
+        }
+        if (page.length < 200) break;
       }
+    } finally {
+      const pending = listener.pending.sort((left, right) => left.sequence - right.sequence);
+      for (const event of pending) {
+        cursor = Math.max(cursor, event.sequence);
+        if (!isBrowserVisibleEvent(event) || event.sequence <= listener.lastSentSequence) continue;
+        try {
+          res.write(`id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`);
+          listener.lastSentSequence = event.sequence;
+        } catch {}
+      }
+      listener.pending = [];
+      listener.replaying = false;
     }
-    for (const evt of hist) {
-      try {
-        res.write(`data: ${JSON.stringify(evt)}\n\n`);
-      } catch (e) {}
-    }
+    try {
+      res.write(`data: ${JSON.stringify({ type: 'REPLAY_COMPLETE', sessionId, lastSequence: cursor })}\n\n`);
+    } catch {}
 
-    logger.info('[EventBus] 前端订阅', { sessionId, connCount: this.listeners.get(sessionId).length, replayCount: hist.length });
+    logger.info('[EventBus] 前端订阅', { sessionId, connCount: this.listeners.get(sessionId).length, replayCount, afterSequence });
   }
 
   /**
@@ -167,7 +226,7 @@ class EventBus {
    */
   unsubscribe(sessionId, res) {
     const conns = this.listeners.get(sessionId) || [];
-    this.listeners.set(sessionId, conns.filter((r) => r !== res));
+    this.listeners.set(sessionId, conns.filter((listener) => listener.res !== res));
     logger.info('[EventBus] 前端取消订阅', { sessionId, remainingConns: this.listeners.get(sessionId).length });
   }
 

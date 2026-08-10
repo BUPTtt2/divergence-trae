@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requireUser } from '../middleware/auth.js';
-import { listTools, callTool } from '../services/mcpService.js';
+import { listTools } from '../services/mcpService.js';
+import { executeEvidenceTool } from '../services/toolEvidenceGateway.js';
 
 const router = Router();
 
@@ -25,8 +26,9 @@ router.post(
     }
 
     try {
-      const result = await callTool(tool, params || {});
-      res.json(result);
+      const result = await executeEvidenceTool(tool, params || {}, { actorId: req.userId });
+      const status = result.ok ? 200 : (result.status === 'approval_required' ? 409 : 422);
+      res.status(status).json(result);
     } catch (e) {
       res.status(400).json({ error: e.message, tool });
     }

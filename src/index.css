@@ -5,6 +5,26 @@
 @tailwind components;
 @tailwind utilities;
 
+.game-root button {
+  min-height: 44px;
+}
+
+.oracle-result-mark {
+  width: 168px;
+  aspect-ratio: 1;
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  text-align: center;
+  border: 1px solid rgb(213 177 88 / 48%);
+  border-radius: 50%;
+  color: #efd47d;
+  background: rgb(11 9 8 / 92%);
+}
+.oracle-result-mark span { font-size: 42px; line-height: 1; }
+.oracle-result-mark strong { font-size: 15px; letter-spacing: .18em; }
+.oracle-result-mark small { color: #958a76; font-size: 10px; }
+
 /* Reset & Base */
 *, *::before, *::after {
   margin: 0;

@@ -1,0 +1,100 @@
+.companion-dock {
+  --companion-width: 380px;
+  position: fixed;
+  z-index: 60;
+  top: max(18px, env(safe-area-inset-top));
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  width: var(--companion-width);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgb(213 177 88 / 34%);
+  background:
+    radial-gradient(circle at 86% 4%, rgb(213 177 88 / 9%), transparent 28%),
+    rgb(10 8 7 / 96%);
+  color: #eee5d2;
+  box-shadow: -28px 0 80px rgb(0 0 0 / 32%);
+}
+
+.companion-dock__header {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgb(213 177 88 / 18%);
+}
+
+.companion-dock__seal {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d5b158;
+  color: #efd47d;
+  font: 18px/1 "Ma Shan Zheng", serif;
+  box-shadow: inset 0 0 16px rgb(213 177 88 / 12%);
+}
+
+.companion-dock__title {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+}
+
+.companion-dock__title strong { color: #eee5d2; font: 600 13px/1.5 "Noto Serif SC", serif; letter-spacing: .08em; }
+.companion-dock__title small { overflow: hidden; color: #8f8676; font: 10px/1.5 "Noto Serif SC", serif; text-overflow: ellipsis; white-space: nowrap; }
+.companion-dock__collapse { min-width: 44px; min-height: 44px; padding: 0 8px; border: 0; background: transparent; color: #9b907d; cursor: pointer; font: 11px/1 "Noto Serif SC", serif; }
+.companion-dock__collapse:hover,.companion-dock__collapse:focus-visible { color: #efd47d; outline: 1px solid rgb(213 177 88 / 45%); outline-offset: -2px; }
+.companion-dock__body { min-height: 0; flex: 1; }
+
+.companion-launcher {
+  position: fixed;
+  z-index: 60;
+  right: max(20px, env(safe-area-inset-right));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  max-width: min(290px, calc(100vw - 40px));
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px 8px;
+  border: 1px solid rgb(213 177 88 / 45%);
+  background: rgb(10 8 7 / 94%);
+  color: #d9c98e;
+  box-shadow: 0 14px 46px rgb(0 0 0 / 40%);
+  cursor: pointer;
+}
+
+.companion-launcher > span { width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid #d5b158; color: #efd47d; font: 19px/1 "Ma Shan Zheng", serif; }
+.companion-launcher > b { overflow: hidden; font: 500 11px/1.5 "Noto Serif SC", serif; letter-spacing: .05em; text-overflow: ellipsis; white-space: nowrap; }
+.companion-launcher:hover { transform: translateY(-2px); border-color: #d5b158; }
+.companion-launcher:active { transform: translateY(0) scale(.98); }
+.companion-launcher:focus-visible { outline: 2px solid #efd47d; outline-offset: 3px; }
+
+.game-root.companion-is-open .sandbox-stage { width: calc(100% - 404px) !important; transition: width 320ms cubic-bezier(.22,.8,.24,1); }
+
+@media (min-width: 900px) and (max-width: 1119px) {
+  .companion-dock { --companion-width: 31vw; }
+  .game-root.companion-is-open .sandbox-stage { width: calc(69vw - 24px) !important; }
+}
+
+@media (max-width: 899px), (orientation: portrait) {
+  .companion-dock {
+    top: auto;
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    width: auto;
+    max-height: min(42dvh, 430px);
+    box-shadow: 0 -24px 70px rgb(0 0 0 / 38%);
+  }
+  .game-root.companion-is-open .sandbox-stage { width: 100% !important; height: calc(100% - min(42dvh, 430px)) !important; }
+  .companion-dock__header { min-height: 56px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .companion-launcher,.game-root.companion-is-open .sandbox-stage { transition: none; }
+}

@@ -36,11 +36,25 @@ export const PRIORITY = { P0: 0, P1: 1, P2: 2, P3: 3, P4: 4 };
  */
 const MAX_ROUND = 2;
 
+export function resolveClarificationRoundLimit() {
+  return MAX_ROUND;
+}
+
 // ---- P0 前提缺失检测正则 ----
 const TIME_PATTERN = /几月|下个月|下周|明天|后天|今天|本月|下月|本月底|\d{1,2}月|\d{1,2}日|\d{1,2}号|周末|假期|五一|十一|春节|国庆|元旦|清明|端午|中秋|寒假|暑假|近期|月底/;
 const BUDGET_PATTERN = /预算|多少钱|费用|万|千|块|元|财力|盘缠|经费|存款|开支|花销/;
 const PURPOSE_PATTERN = /为了|目的是|为什么|图什么|所图|朝圣|散心|旅游|出差|探亲|访友|疗养|采风|打卡|朝拜|修行/;
 const COMPANION_PATTERN = /一个人|独自|独行|和朋友|和家人|和.{0,3}一起|结伴|同行|带.{0,3}去|夫妻|情侣|全家|亲子/;
+
+export function parseMissingPrereqFields(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^["'“”]+|["'“”。.!！?？]+$/g, '')
+    .split(/[,，、；;]+/)
+    .map((field) => field.trim())
+    .filter((field) => field && !['无', '空', 'null'].includes(field.toLowerCase()))
+    .slice(0, 5);
+}
 
 // finance 前提
 const FINANCE_AMOUNT_PATTERN = /金额|多少钱|万|千|元|块|预算|数目|资金|本金/;
@@ -102,12 +116,12 @@ export async function detectMissingPrereqs(question, questionType) {
     // LLM 全失败，直接用启发式（不抛错，零预设卡壳）
     return heuristic.slice(0, 5);
   }
-  const raw = (result || '').trim().replace(/["'""。.,，!！?？\s]/g, '');
-  if (!raw || raw === 'null' || raw === '空' || raw === '无') {
+  const parsedFields = parseMissingPrereqFields(result);
+  if (parsedFields.length === 0) {
     // LLM 说"无"但启发式有强信号（养猫不提及居住/预算，西藏不提及时间/高反） → 用启发式兜底
     return heuristic.slice(0, 5);
   }
-  fields = raw.split(/[,，、；;]/).map(f => f.trim()).filter(Boolean).slice(0, 5);
+  fields = parsedFields;
   // LLM 字段 + 启发式补漏（去重，最多 5 个）
   const seen = new Set(fields.map(s => s.toLowerCase()));
   for (const h of heuristic) {
@@ -469,6 +483,22 @@ export async function buildQuestion(trigger, session, memory) {
   return '能补充一些更具体的信息吗？';
 }
 
+export function collapseClarificationTriggers(triggers) {
+  const selected = (Array.isArray(triggers) ? triggers : [])
+    .filter((trigger) => trigger?.field)
+    .slice(0, 3);
+  if (selected.length === 0) return null;
+  const fields = selected.map((trigger) => String(trigger.field).trim()).filter(Boolean);
+  if (fields.length === 0) return null;
+  const field = fields.join('、');
+  return {
+    field,
+    reason: `需要补充：${field}`,
+    source: selected[0].source,
+    priority: selected[0].priority,
+  };
+}
+
 /**
  * 开场白：LLM 基于问题和记忆动态生成
  * v3.0 零预设：失败抛错，不降级到模板文案
@@ -575,6 +605,7 @@ export async function isInformationSufficient(question, qaHistory) {
  */
 export async function evaluate(session, memory, toolResults) {
   const round = Number(session && session.round) || 1;
+  const maxRound = resolveClarificationRoundLimit(session);
   const question = String((session && (session.questionContext || session.question)) || '');
   const openingLine = await buildOpeningLine(memory, question);
   logger.info('[Autonomy] evaluate 开始', {
@@ -583,8 +614,8 @@ export async function evaluate(session, memory, toolResults) {
   });
 
   // 超过 2 轮：降级 EXECUTE
-  if (round > MAX_ROUND) {
-    logger.info('[Autonomy] 超过最大轮次，降级 EXECUTE', { round, maxRound: MAX_ROUND });
+  if (round > maxRound) {
+    logger.info('[Autonomy] 超过最大轮次，进入案卷确认', { round, maxRound });
     return {
       action: 'STOP',
       questions: [],
@@ -606,38 +637,17 @@ export async function evaluate(session, memory, toolResults) {
     return { action: 'CONTINUE', questions: [], round, openingLine };
   }
 
-  // 从所有 triggers 生成多个问题（按优先级排序，去重同类型问题，最多5个）
-  const built = [];
-  const seenField = new Set();
-  for (const t of triggers) {
-    // 去重：同一 field 的只问一次（取优先级最高的那个，triggers 已按 priority 排序）
-    const key = `${t.source}:${t.field || t.reason?.slice(0,10) || 'unknown'}`;
-    if (seenField.has(key)) continue;
-    seenField.add(key);
-    try {
-      const qText = await buildQuestion(t, session, memory);
-      if (qText && qText.trim()) {
-        built.push({
-          question: qText,
-          reason: t.reason || '',
-          source: t.source,
-          field: t.field || null,
-          priority: t.priority != null ? t.priority : null,
-        });
-      }
-    } catch (e) {
-      logger.warn('[Autonomy] buildQuestion 失败跳过', { source: t.source, error: e.message });
-    }
-    if (built.length >= 5) break;  // 硬上限：一次最多5个，太多用户烦
-  }
-  
-  // 如果构建失败至少1个，兜底用第一个trigger的（防止空数组进入无限 CONTINUE 循环）
-  let questions = built;
-  if (questions.length === 0 && triggers.length > 0) {
-    const top = triggers[0];
-    const qText = await buildQuestion(top, session, memory);
-    questions = [{ question: qText, reason: top.reason, source: top.source, field: top.field || null }];
-  }
+  const collapsed = collapseClarificationTriggers(triggers) || triggers[0];
+  const qText = await buildQuestion(collapsed, session, memory);
+  const questions = qText && qText.trim()
+    ? [{
+      question: qText,
+      reason: collapsed.reason || '',
+      source: collapsed.source,
+      field: collapsed.field || null,
+      priority: collapsed.priority != null ? collapsed.priority : null,
+    }]
+    : [];
   
   logger.info('[Autonomy] 触发追问', {
     count: questions.length,

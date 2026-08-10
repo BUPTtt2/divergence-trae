@@ -2283,27 +2283,6 @@ function YanThinkingSteps({ question, inference, candidateAgents }) {
     };
   }, [question, inference, candidateAgents]);
 
-  useEffect(() => {
-    setActive(0);
-    // E1 Fix: done 数组长度不写死 4，永远跟 steps.length 对齐
-    // 之前写死 4 会导致 steps 数量变化时数组长度变，报「changed size between renders」
-    const len = steps.length;
-    setDone(new Array(len).fill(false));
-    const timers = [];
-    // 只初始化 len 个定时器，每个对应 1 step，不再写死 4 个
-    for (let i = 0; i < len; i++) {
-      timers.push(setTimeout(() => {
-        setActive(i + 1);
-        setDone(d => {
-          const arr = Array.isArray(d) ? [...d] : new Array(len).fill(false);
-          for (let j = 0; j <= i && j < len; j++) arr[j] = true;
-          return arr;
-        });
-      }, 1100 * (i + 1)));
-    }
-    return () => timers.forEach(clearTimeout);
-  }, [question, steps.length]);
-
   // 4 步文案：只有在 inference 真实字段有值的情况下才显示右侧"·结果"
   const stepHint = (label, fallbackIfNotReady, valueIfReady) => {
     if (valueIfReady != null && String(valueIfReady).length > 0) return valueIfReady;
@@ -2324,6 +2303,27 @@ function YanThinkingSteps({ question, inference, candidateAgents }) {
     { label: '匹配智囊', hint: stepHint('匹配智囊', '演·起视角池中…', analysis.agentNames.length > 0 ? `候选视角 ${analysis.agentNames.slice(0, 2).join('·')}…` : null) },
     { label: '预判分歧', hint: stepHint('预判分歧', '演·判势中…', analysis.divergence) },
   ];
+
+  useEffect(() => {
+    setActive(0);
+    // E1 Fix: done 数组长度不写死 4，永远跟 steps.length 对齐
+    // 之前写死 4 会导致 steps 数量变化时数组长度变，报「changed size between renders」
+    const len = steps.length;
+    setDone(new Array(len).fill(false));
+    const timers = [];
+    // 只初始化 len 个定时器，每个对应 1 step，不再写死 4 个
+    for (let i = 0; i < len; i++) {
+      timers.push(setTimeout(() => {
+        setActive(i + 1);
+        setDone(d => {
+          const arr = Array.isArray(d) ? [...d] : new Array(len).fill(false);
+          for (let j = 0; j <= i && j < len; j++) arr[j] = true;
+          return arr;
+        });
+      }, 1100 * (i + 1)));
+    }
+    return () => timers.forEach(clearTimeout);
+  }, [question, steps.length]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '18px' }}>

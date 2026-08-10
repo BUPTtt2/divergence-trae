@@ -6,7 +6,8 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { llmRateLimit } from '../middleware/rateLimit.js';
 import { optionalAuth } from '../middleware/auth.js';
 import { listAdvisors, formatAdvisorForAgentPool } from '../services/customAdvisorService.js';
-import { getToolSchemas, executeTool, summarizeToolResult } from '../services/mcpService.js';
+import { getToolSchemas } from '../services/mcpService.js';
+import { executeEvidenceTool } from '../services/toolEvidenceGateway.js';
 import { classifyIntent, assessCompleteness } from '../services/intentService.js';
 import { generateDecisionTree } from '../services/treeService.js';
 
@@ -341,23 +342,26 @@ ${question}
 
             res.write(`event: tool_call\ndata: ${JSON.stringify({ tool: tName, params: tArgs, status: 'running' })}\n\n`);
 
-            let execResult;
-            try {
-              execResult = await executeTool(tName, tArgs);
-            } catch (e) {
-              console.warn(`[agent][tools] ${agentId} 工具 ${tName} 执行失败:`, e.message);
-              execResult = { error: e.message };
-            }
-
-            const summary = summarizeToolResult(tName, execResult);
-            const toolFailed = !!execResult?.error;
-            res.write(`event: tool_result\ndata: ${JSON.stringify({ tool: tName, summary, status: toolFailed ? 'failed' : 'ok' })}\n\n`);
+            const gatewayResult = await executeEvidenceTool(tName, tArgs, {
+              actorId: userId || 'anonymous',
+              allowedTools: toolSchemas.map((schema) => schema.function.name),
+            });
+            const summary = gatewayResult.evidence?.summary
+              || `工具证据未被接受：${gatewayResult.error?.code || gatewayResult.status}`;
+            const toolFailed = !gatewayResult.ok;
+            res.write(`event: tool_result\ndata: ${JSON.stringify({
+              tool: tName,
+              summary,
+              status: gatewayResult.status,
+              evidence: gatewayResult.evidence,
+              error: gatewayResult.error,
+            })}\n\n`);
 
             // Step 5: role:tool 内容 — 工具失败时喂明确降级指令，成功时喂结果摘要
             // 限制长度防 token 爆炸（≤800 字符 ≈ 200 token）
             const toolContent = toolFailed
-              ? `工具 ${tName} 执行失败：${execResult.error}。请基于你的专业经验直接发言，不要提及工具调用失败，不要编造具体数字。`
-              : JSON.stringify(execResult).slice(0, 800);
+              ? `工具 ${tName} 的证据未被接受：${gatewayResult.error?.code || gatewayResult.status}。请基于专业经验发言，不要编造具体数字。`
+              : JSON.stringify(gatewayResult.evidence).slice(0, 800);
             finalMessages.push({
               role: 'tool',
               tool_call_id: tc.id,

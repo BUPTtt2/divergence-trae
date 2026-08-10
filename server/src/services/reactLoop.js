@@ -19,15 +19,16 @@
  */
 
 import { callLLM } from './llmRouter.js';
-import { executeTool, summarizeToolResult, TOOL_REGISTRY } from './mcpService.js';
+import { executeEvidenceTool, getAgentToolRegistry } from './toolEvidenceGateway.js';
 import { generateAgentDialogue } from './agentEngine.js';
 import { AGENT_POOL } from '../data/agentPool.js';
 import { withRetry, withTimeout } from './retryHelper.js';
 import { classifyLLMError } from './errorTypes.js';
 import logger from './logger.js';
 import eventBus from './eventBus.js';
-import { appendEvent } from './eventStore.js';
+import { evidenceDomainEvent } from './agentEventSemantics.js';
 import * as memoryService from './memoryService.js';
+import { consumePendingCommands } from './deliberationCommandService.js';
 
 const MAX_ROUNDS = 4;
 const MAX_LLM_CALLS = 12;
@@ -36,6 +37,58 @@ const TOOL_TIMEOUT_MS = 25000;
 const ADVISOR_TIMEOUT_MS = 35000;
 const BLACKBOARD_MAX_CHARS = 8000;
 const TOOL_RESULT_MAX_CHARS = 2000;
+const AGENT_TOOL_REGISTRY = getAgentToolRegistry();
+
+const STANCE_PERSPECTIVE_MAP = Object.freeze({
+  财务: 'financial',
+  职业: 'career',
+  风险: 'risk',
+  情感: 'emotional',
+  反思: 'reflection',
+  宏观: 'macro',
+  行动: 'action',
+  沟通: 'communication',
+  法律: 'legal',
+  健康: 'health',
+  教育: 'education',
+  技术: 'technical',
+});
+
+export function perspectiveForAgent(agent = {}) {
+  if (typeof agent.perspective === 'string' && agent.perspective.trim()) {
+    return agent.perspective.trim().toLowerCase();
+  }
+
+  const stance = String(agent.stance || '');
+  const matched = Object.entries(STANCE_PERSPECTIVE_MAP)
+    .find(([label]) => stance.includes(label));
+  return matched?.[1] || 'reflection';
+}
+
+function normalizeAdvisorReference(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+export function resolveAdvisorAgents(requestedAgentIds, advisorPool, fallbackCount = 2) {
+  const pool = Array.isArray(advisorPool) ? advisorPool.filter((agent) => agent?.id) : [];
+  const agentsByReference = new Map();
+  for (const agent of pool) {
+    agentsByReference.set(normalizeAdvisorReference(agent.id), agent);
+    agentsByReference.set(normalizeAdvisorReference(agent.name), agent);
+  }
+
+  const resolved = [];
+  const seen = new Set();
+  for (const reference of Array.isArray(requestedAgentIds) ? requestedAgentIds : []) {
+    const agent = agentsByReference.get(normalizeAdvisorReference(reference));
+    if (agent && !seen.has(agent.id)) {
+      resolved.push(agent);
+      seen.add(agent.id);
+    }
+  }
+
+  return resolved.length > 0 ? resolved : pool.slice(0, fallbackCount);
+}
 
 /**
  * 构建演的 ReAct 系统提示
@@ -44,7 +97,7 @@ const TOOL_RESULT_MAX_CHARS = 2000;
  * @param {object} cachedMemories 缓存的记忆 {profile, related}
  */
 function buildReActSystemPrompt(state, round, cachedMemories) {
-  const availableTools = Object.values(TOOL_REGISTRY)
+  const availableTools = Object.values(AGENT_TOOL_REGISTRY)
     .map((t) => `- ${t.name}: ${t.description}`)
     .join('\n');
   const availableAgents = (state.advisorPool || AGENT_POOL.slice(0, 6))
@@ -91,7 +144,7 @@ ${availableAgents}
 
 【action 类型说明】
 - tool_call: 调工具获取实时信息。args: {"tool": "工具名", "params": {...}}
-- advisor_call: 召唤智囊发言。args: {"agentIds": ["智囊ID1", "智囊ID2"]}
+- advisor_call: 召唤智囊发言。args: {"agentIds": ["智囊ID1", "智囊ID2"]}。只能填写“可用智囊”中连字符前的 ID，不得填写姓名或未列出的智囊
 - ask_user: 信息严重不足，需追问。args: {"questions": [{"question":"问题", "reason":"为什么问"}]}
 - self_critique: 自我批判，发现盲区。args: {"critique": "发现的问题"}
 - output: 信息充分，可以立卦。args: {}
@@ -117,7 +170,12 @@ function buildBlackboard(state) {
   // 工具结果
   if (state.toolResults && state.toolResults.length > 0) {
     const toolText = state.toolResults
-      .map((r) => `[工具${r.tool}] ${r.summary || JSON.stringify(r.result || {}).slice(0, 200)}`)
+      .map((r) => {
+        const evidenceLabel = r.evidence
+          ? `${r.evidence.level}/${r.evidence.freshness}/${r.evidence.sourceName}`
+          : `未采信/${r.status || 'unknown'}`;
+        return `[工具${r.tool} · ${evidenceLabel}] ${r.summary || JSON.stringify(r.result || {}).slice(0, 200)}`;
+      })
       .join('\n');
     parts.push(`【工具观测】\n${toolText}`);
   }
@@ -186,6 +244,29 @@ function parseThinkAction(text) {
  * @param {object} state 推演状态（可变，会追加 findings/toolResults/dialogue）
  * @returns {Promise<object>} { state: 'REFLECT'|'CLARIFY', askUser?: [...] }
  */
+async function applyUserCommands(sessionId, state) {
+  const commands = await consumePendingCommands(sessionId, state.userId);
+  for (const command of commands) {
+    const type = command.command_type;
+    if (type === 'PAUSE') return { state: 'PAUSED', command };
+    if (type === 'CORRECTION') return { state: 'READY', command };
+
+    const prefix = type === 'QUESTION'
+      ? `用户向${command.target_agent_id || '智囊团'}追问`
+      : '用户补充事实';
+    state.questionContext = `${state.questionContext}\n${prefix}：${command.content}`.trim();
+    state.dialogue.push({ role: 'user', content: `${prefix}：${command.content}`, round: 0 });
+    await eventBus.emit(sessionId, {
+      type: 'USER_CONTEXT_APPLIED',
+      data: { commandId: command.id, commandType: type, content: command.content },
+      actor: state.userId,
+      correlationId: state.actionId,
+      visibility: 'public',
+    });
+  }
+  return null;
+}
+
 export async function runReActLoop(sessionId, state) {
   const startTime = Date.now();
   state.llmCallCount = state.llmCallCount || 0;
@@ -222,7 +303,7 @@ export async function runReActLoop(sessionId, state) {
   const toolSignature = (args) => {
     try {
       return `${args?.tool || 'unknown'}:${JSON.stringify(args?.params || {}).slice(0, 160)}`;
-    } catch (_) { return String(args?.tool); }
+    } catch { return String(args?.tool); }
   };
   const observationIsEmptyish = (obs) => {
     if (!obs) return true;
@@ -235,6 +316,8 @@ export async function runReActLoop(sessionId, state) {
   };
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const interruption = await applyUserCommands(sessionId, state);
+    if (interruption) return interruption;
     // 超时检查
     if (Date.now() - startTime > DELIBERATE_TIMEOUT_MS) {
       logger.warn('[ReAct] DELIBERATE 超时，强制 output', { sessionId, round, elapsed: Date.now() - startTime });
@@ -276,8 +359,22 @@ export async function runReActLoop(sessionId, state) {
     const action = parseThinkAction(thinkText);
 
     // 记录 Think 事件
-    await appendEvent(sessionId, 'REACT_THINK', { thought: action.reason, round }, 'yan');
-    eventBus.emit(sessionId, { type: 'THOUGHT', data: { step: `react_think_r${round}`, thought: action.reason, action: action.type, round } });
+    await eventBus.emit(sessionId, {
+      type: 'REACT_THINK',
+      data: { thought: action.reason, round },
+      actor: 'yan',
+      correlationId: state.actionId,
+      taskId: `react_round_${round}`,
+      visibility: 'internal',
+    });
+    await eventBus.emit(sessionId, {
+      type: 'AGENT_STARTED',
+      data: { agentId: 'yan', agentName: '演', taskId: `react_round_${round}`, label: `第 ${round} 轮推演` },
+      actor: 'yan',
+      correlationId: state.actionId,
+      taskId: `react_round_${round}`,
+      visibility: 'public',
+    });
 
     logger.info('[ReAct] Think 完成', { sessionId, round, action: action.type, reason: action.reason });
 
@@ -288,8 +385,14 @@ export async function runReActLoop(sessionId, state) {
     }
 
     // === Act ===
-    await appendEvent(sessionId, 'REACT_ACT', { action: action.type, args: action.args, round }, 'yan');
-    eventBus.emit(sessionId, { type: 'ACTION', data: { tool: action.type, args: action.args, round } });
+    await eventBus.emit(sessionId, {
+      type: 'REACT_ACT',
+      data: { action: action.type, args: action.args, round },
+      actor: 'yan',
+      correlationId: state.actionId,
+      taskId: `react_round_${round}`,
+      visibility: 'internal',
+    });
 
     let observation = '';
 
@@ -297,7 +400,7 @@ export async function runReActLoop(sessionId, state) {
       switch (action.type) {
         case 'tool_call': {
           const { tool, params } = action.args;
-          if (!TOOL_REGISTRY[tool]) {
+          if (!AGENT_TOOL_REGISTRY[tool]) {
             observation = `工具 ${tool} 不存在`;
             break;
           }
@@ -317,27 +420,51 @@ export async function runReActLoop(sessionId, state) {
             consecutiveSameTool = 1;
           }
           if (action.type === 'output') break;
-          const result = await withRetry(
-            () => withTimeout(
-              () => executeTool(tool, params || {}),
-              TOOL_TIMEOUT_MS,
-              `工具${tool}`
-            ),
-            { retries: 1, delayMs: 1000, name: `tool_${tool}` }
+          await eventBus.emit(sessionId, {
+            type: 'TOOL_STARTED',
+            data: { tool, purpose: action.reason || '查证推演所需事实' },
+            actor: 'yan',
+            correlationId: state.actionId,
+            taskId: `react_round_${round}`,
+            visibility: 'public',
+          });
+          const gatewayResult = await withTimeout(
+            () => executeEvidenceTool(tool, params || {}, {
+              sessionId,
+              actorId: state.userId || 'yan',
+              allowedTools: Object.keys(AGENT_TOOL_REGISTRY),
+            }),
+            TOOL_TIMEOUT_MS,
+            `工具${tool}`
           );
-          const summary = summarizeToolResult(tool, result);
-          observation = summary.slice(0, TOOL_RESULT_MAX_CHARS);
+          observation = (
+            gatewayResult.evidence?.summary
+            || `工具证据未被接受：${gatewayResult.error?.code || gatewayResult.status}`
+          ).slice(0, TOOL_RESULT_MAX_CHARS);
           if (!state.toolResults) state.toolResults = [];
-          state.toolResults.push({ tool, result, summary: observation });
+          state.toolResults.push({
+            tool,
+            result: gatewayResult.evidence?.data || null,
+            evidence: gatewayResult.evidence || null,
+            status: gatewayResult.status,
+            ok: gatewayResult.ok,
+            summary: observation,
+            error: gatewayResult.error || null,
+          });
+          const evidenceEvent = evidenceDomainEvent(tool, gatewayResult);
+          await eventBus.emit(sessionId, {
+            ...evidenceEvent,
+            actor: 'tool_gateway',
+            correlationId: state.actionId,
+            taskId: `react_round_${round}`,
+          });
           break;
         }
 
         case 'advisor_call': {
           const agentIds = action.args.agentIds || [];
           const pool = state.advisorPool || AGENT_POOL;
-          const agents = agentIds
-            .map((id) => pool.find((a) => a.id === id))
-            .filter(Boolean);
+          const agents = resolveAdvisorAgents(agentIds, pool);
           if (agents.length === 0) {
             observation = '未指定有效智囊';
             break;
@@ -349,6 +476,14 @@ export async function runReActLoop(sessionId, state) {
             const batch = agents.slice(i, i + BATCH);
             const results = await Promise.allSettled(
               batch.map(async (agent) => {
+                await eventBus.emit(sessionId, {
+                  type: 'AGENT_STARTED',
+                  data: { agentId: agent.id, agentName: agent.name, taskId: `react_round_${round}` },
+                  actor: agent.id,
+                  correlationId: state.actionId,
+                  taskId: `react_round_${round}`,
+                  visibility: 'public',
+                });
                 const text = await withRetry(
                   () => withTimeout(
                     () => generateAgentDialogue(
@@ -366,28 +501,34 @@ export async function runReActLoop(sessionId, state) {
                 state.llmCallCount++;
 
                 const content = (text || '').slice(0, 300);
+                const perspective = perspectiveForAgent(agent);
                 const finding = {
                   agentId: agent.id,
                   agentName: agent.name,
                   content,
                   stance: agent.stance || '',
-                  perspective: agent.perspective || '',
+                  perspective,
                 };
 
                 if (!state.findings) state.findings = [];
                 state.findings.push(finding);
 
                 // 记录事件 + 推送 SSE
-                await appendEvent(sessionId, 'ADVISOR_SPEAK', {
-                  agentId: agent.id,
-                  agentName: agent.name,
-                  content,
-                  stance: agent.stance,
-                  perspective: agent.perspective,
-                }, agent.id);
-                eventBus.emit(sessionId, {
+                await eventBus.emit(sessionId, {
                   type: 'ADVISOR_SPEAK',
-                  data: { agentId: agent.id, agentName: agent.name, content, stance: agent.stance || '' },
+                  data: { agentId: agent.id, agentName: agent.name, content, stance: agent.stance || '', perspective },
+                  actor: agent.id,
+                  correlationId: state.actionId,
+                  taskId: `react_round_${round}`,
+                  visibility: 'public',
+                });
+                await eventBus.emit(sessionId, {
+                  type: 'AGENT_COMPLETED',
+                  data: { agentId: agent.id, agentName: agent.name, taskId: `react_round_${round}` },
+                  actor: agent.id,
+                  correlationId: state.actionId,
+                  taskId: `react_round_${round}`,
+                  visibility: 'public',
                 });
 
                 return content;
@@ -402,6 +543,8 @@ export async function runReActLoop(sessionId, state) {
                 data: { error: `智囊发言失败: ${failed[0].reason?.message || '未知'}` },
               });
             }
+            const interruption = await applyUserCommands(sessionId, state);
+            if (interruption) return interruption;
           }
           observation = `${agents.length}位智囊已发言`;
           break;
@@ -409,8 +552,15 @@ export async function runReActLoop(sessionId, state) {
 
         case 'ask_user': {
           const questions = action.args.questions || [];
-          await appendEvent(sessionId, 'CLARIFY_ASKED', { questions }, 'yan');
-          eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'CLARIFY', thought: '演·追问' } });
+          await eventBus.emit(sessionId, { type: 'CLARIFY_ASKED', data: { questions }, actor: 'yan', correlationId: state.actionId, visibility: 'internal' });
+          for (const [index, question] of questions.entries()) {
+            await eventBus.emit(sessionId, {
+              type: 'UNKNOWN_IDENTIFIED',
+              data: { taskId: `clarify_${round}_${index + 1}`, question: question.question || question, reason: question.reason || '完成推演需要此信息' },
+              actor: 'yan', correlationId: state.actionId, visibility: 'summary',
+            });
+          }
+          await eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'DELIBERATE', to: 'CLARIFY', thought: '演·追问' }, actor: 'yan', correlationId: state.actionId, visibility: 'public' });
           logger.info('[ReAct] 演决定追问', { sessionId, round, questionCount: questions.length });
           return { state: 'CLARIFY', askUser: questions };
         }
@@ -426,6 +576,11 @@ export async function runReActLoop(sessionId, state) {
     } catch (err) {
       logger.error('[ReAct] Act 失败', { sessionId, round, action: action.type, error: err.message });
       observation = `行动失败：${err.message}`;
+      await eventBus.emit(sessionId, {
+        type: 'ACTION_FAILED',
+        data: { action: action.type, reason: err.message },
+        actor: 'yan', correlationId: state.actionId, taskId: `react_round_${round}`, visibility: 'summary',
+      });
     }
 
     // ===== P0 空观察结果连续 2 次 → 强制停止搜索（避免降级后反复空跑、日志刷屏）
@@ -441,16 +596,14 @@ export async function runReActLoop(sessionId, state) {
     }
     // 若当前轮已强制 output → 写入 observation 后跳出 for（避免再跑下一轮）
     if (action.type === 'output') {
-      await appendEvent(sessionId, 'REACT_OBSERVE', { observation, round }, 'yan');
-      eventBus.emit(sessionId, { type: 'OBSERVATION', data: { summary: observation, round, earlyBreak: true } });
+      await eventBus.emit(sessionId, { type: 'REACT_OBSERVE', data: { observation, round, earlyBreak: true }, actor: 'yan', correlationId: state.actionId, visibility: 'internal' });
       if (!state.dialogue) state.dialogue = [];
       state.dialogue.push({ role: 'observe', content: observation, round });
       break;
     }
 
     // === Observe ===
-    await appendEvent(sessionId, 'REACT_OBSERVE', { observation, round }, 'yan');
-    eventBus.emit(sessionId, { type: 'OBSERVATION', data: { summary: observation, round } });
+    await eventBus.emit(sessionId, { type: 'REACT_OBSERVE', data: { observation, round }, actor: 'yan', correlationId: state.actionId, visibility: 'internal' });
 
     if (!state.dialogue) state.dialogue = [];
     state.dialogue.push({ role: 'observe', content: observation, round });
