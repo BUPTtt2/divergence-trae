@@ -37,6 +37,7 @@ import tracker from '../services/tracker';
 import { persistDecisionCard } from './decisionCollectionStore.js';
 import { loadCouncilCatalog } from '../services/advisorClient';
 import { createCouncilModel } from './councilModel';
+import { emitRuntimeStatus } from '../services/runtimeStatus.js';
 
 const PHASE = {
   IDLE: 'idle',
@@ -198,6 +199,7 @@ export function useDeliberationFlow(initialQuestion = "") {
   const lastFailedActionRef = useRef(null);
   const answerInFlightRef = useRef(false);
   const commitInFlightRef = useRef(false);
+  const executeInFlightRef = useRef(false);
   const activeSessionIdRef = useRef(null);
   const planningRequestSessionRef = useRef(null);
 
@@ -909,14 +911,26 @@ export function useDeliberationFlow(initialQuestion = "") {
       setBackendError('无有效推演会话');
       return;
     }
+    if (executeInFlightRef.current) {
+      showFloatTip('本轮智囊仍在推演，请稍候');
+      return;
+    }
     const requestedAgentIds = Array.isArray(agentIdsOverride)
       ? agentIdsOverride
       : Array.from(selectedAgentIds);
+    const startedAt = performance.now();
+    let stallTimer = null;
     try {
+      executeInFlightRef.current = true;
+      setAnswerPending(true);
       setBackendError(null);
       setStreamError(null);
       showFloatTip('演 · 诸智发言中……');
       setToolCallState({ agentId: null, tools: [], currentTool: null, results: [], status: 'idle' });
+      stallTimer = window.setTimeout(() => {
+        emitRuntimeStatus({ type: 'work:stalled', reason: '智囊生成超过 18 秒，仍在等待本轮结果' });
+        showFloatTip('智囊仍在生成，本轮可安全等待，无需重复点击', 5200);
+      }, 18000);
 
       const actionKey = deliberationActionKey(roundOverride, intent);
       const result = await executeDeliberation(deliberationSessionId, {
@@ -925,10 +939,34 @@ export function useDeliberationFlow(initialQuestion = "") {
       });
       pendingActionIdsRef.current.complete(deliberationSessionId, actionKey);
       lastFailedActionRef.current = null;
+      emitRuntimeStatus({ type: 'work:progress', latencyMs: performance.now() - startedAt });
 
       setDeliberationFindings(result.findings);
       setDeliberationOracle(result.oracle);
       setInference((previous) => ({ ...(previous || {}), ...result }));
+      setArenaProjection((previous) => projectSessionSnapshot({
+        ...(inference || {}),
+        ...result,
+        sessionId: deliberationSessionId,
+        findings: Array.isArray(result.findings) ? result.findings : [],
+      }, { lastSequence: previous.lastSequence }));
+      if (Array.isArray(result.findings) && result.findings.length > 0) {
+        setAgentDialogues((previous) => {
+          let history = previous.history || {};
+          const latest = {};
+          result.findings.forEach((finding) => {
+            const agentId = finding?.agentId || finding?.advisorId || finding?.roleId;
+            const text = finding?.content || finding?.finding || finding?.text || finding?.summary;
+            if (!agentId || !text) return;
+            const entry = { text, source: 'execute-response', round: roundOverride };
+            history = appendUniqueHistory(history, agentId, entry, 'execute-response');
+            latest[agentId] = text;
+          });
+          const next = { ...previous, ...latest, history };
+          _updateHistoryCount(next);
+          return next;
+        });
+      }
       if (result.clarifyRequired || result.state === 'CLARIFY') {
         clarifyActiveRef.current = true;
         setAwaitingAnswers(result.askUser);
@@ -982,8 +1020,12 @@ export function useDeliberationFlow(initialQuestion = "") {
       setBackendError(e.message || '推演执行失败');
       showFloatTip('推演执行失败，请重试');
       setStreamError(e.message);
+    } finally {
+      if (stallTimer) window.clearTimeout(stallTimer);
+      executeInFlightRef.current = false;
+      setAnswerPending(false);
     }
-  }, [deliberationSessionId, debateRound, selectedAgentIds, showFloatTip, plannedAgents, LOG]);
+  }, [deliberationSessionId, debateRound, selectedAgentIds, showFloatTip, plannedAgents, LOG, inference, _updateHistoryCount]);
 
   const handleInterject = useCallback(async (commandType = 'SUPPLEMENT', targetAgentIds = null, contentOverride = '') => {
     if (!deliberationSessionId) return;

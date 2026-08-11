@@ -223,9 +223,8 @@ export default function Game() {
     navigate('/sandbox', { replace: true });
   }, [handleRestart, navigate]);
   const handleReturnHome = useCallback(() => {
-    handleRestart();
     navigate('/', { replace: true });
-  }, [handleRestart, navigate]);
+  }, [navigate]);
   const arenaView = useMemo(() => buildArenaViewModel({
     phase,
     projection: arenaProjection,

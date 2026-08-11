@@ -22,6 +22,23 @@ export function deriveRuntimeStatus(previous, event) {
     const failures = current.failures + 1;
     return { ...current, kind: failures > 1 ? 'offline' : 'degraded', checkedAt, failures };
   }
+  if (event?.type === 'work:stalled') {
+    return {
+      ...current,
+      kind: 'degraded',
+      checkedAt,
+      reason: event.reason || '推演等待智囊响应超时',
+    };
+  }
+  if (event?.type === 'work:progress') {
+    return {
+      kind: 'online',
+      latencyMs: Number.isFinite(event.latencyMs) ? Math.max(0, Math.round(event.latencyMs)) : current.latencyMs,
+      checkedAt,
+      failures: 0,
+      reason: '',
+    };
+  }
   return current;
 }
 

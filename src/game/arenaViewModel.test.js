@@ -82,3 +82,21 @@ test('central status hub exposes stage, active Agent, counts, and the next waiti
     waitingFor: '等待当前智囊完成，再由你决定是否插话',
   });
 });
+
+test('confirmed fact nodes show their actual content instead of duplicate generic labels', () => {
+  const view = buildArenaViewModel({
+    phase: 'clarify_loop',
+    caseFile: {
+      facts: [
+        { id: 'meal', value: '上一餐是自助餐' },
+        { id: 'goal', value: '目标是减脂一个月' },
+      ],
+      unknowns: [],
+    },
+  });
+
+  assert.deepEqual(
+    view.nodes.filter((node) => node.kind === 'fact').map((node) => node.label),
+    ['上一餐是自助餐', '目标是减脂一个月'],
+  );
+});

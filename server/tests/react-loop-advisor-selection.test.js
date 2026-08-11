@@ -50,6 +50,7 @@ test('a user question must name exactly one target advisor', () => {
     commandType: 'QUESTION',
     content: '怎么看？',
     targetAgentId: 'baby',
+    targetAgentIds: ['baby'],
   });
 });
 
@@ -78,6 +79,46 @@ test('empty orchestrator output still runs every confirmed advisor before reflec
   assert.ok(state.findings.every((finding) => finding.findingId && finding.claim));
   assert.equal(events.filter((event) => event.type === 'ADVISOR_SPEAK').length, 2);
   assert.equal(events.at(-1).type, 'ROUND_AWAITING_USER');
+});
+
+test('a confirmed case starts the selected council immediately without an orchestrator preflight', async () => {
+  const state = {
+    question: '要不要吃饭',
+    questionContext: '要不要吃饭',
+    plan: {
+      depth: 'standard',
+      selectedAgentIds: ['qiangu', 'jiankang'],
+      caseFile: { confirmedByUser: true, facts: [], unknowns: [] },
+    },
+    advisorPool: pool.slice(0, 2),
+    findings: [],
+    toolResults: [],
+    dialogue: [],
+  };
+  let orchestratorCalls = 0;
+  let active = 0;
+  let maxActive = 0;
+
+  const result = await runReActLoop('sess_confirmed_fast_path', state, {
+    callLLMFn: async () => {
+      orchestratorCalls += 1;
+      throw new Error('已确认案卷不应再次等待编排预检');
+    },
+    generateAgentDialogueFn: async (agent) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return `${agent.name}给出独立判断`;
+    },
+    emitFn: async () => {},
+    consumePendingCommandsFn: async () => [],
+  });
+
+  assert.equal(result.state, 'ROUND_REVIEW');
+  assert.equal(orchestratorCalls, 0);
+  assert.equal(maxActive, 2);
+  assert.deepEqual(state.findings.map((finding) => finding.agentId), ['qiangu', 'jiankang']);
 });
 
 test('confirmed round review is the only path from findings to reflection', async () => {

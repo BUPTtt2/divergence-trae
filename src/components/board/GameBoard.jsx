@@ -1,8 +1,22 @@
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import Board3D from './Board3D';
 import ArenaHud from './ArenaHud';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import * as THREE from 'three';
+
+function CeremonyCameraRig({ active }) {
+  const { camera } = useThree();
+  const position = useMemo(() => new THREE.Vector3(0, 2.45, 6.25), []);
+  const target = useMemo(() => new THREE.Vector3(0.05, 1.02, 0.12), []);
+
+  useFrame(() => {
+    if (!active) return;
+    camera.position.lerp(position, 0.085);
+    camera.lookAt(target);
+  });
+  return null;
+}
 
 export default function GameBoard({
   phase,
@@ -33,6 +47,7 @@ export default function GameBoard({
   // iPad 单独降级：DPR 1.5（介于移动端1与桌面2之间）；抗锯齿随 isMobile 一并关闭
   const isIPad = typeof window !== 'undefined' && (/iPad/i.test(navigator.userAgent) || (window.innerWidth > 768 && window.innerWidth <= 1024));
   const dpr = isIPad ? 1.5 : (isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+  const ceremonyActive = ['path_reveal', 'committing', 'final'].includes(phase);
 
   return (
     <div className={`relative w-full h-full${presentationMode ? ' arena-presentation-mode' : ''}`} style={{
@@ -51,7 +66,9 @@ export default function GameBoard({
       >
         <color attach="background" args={['#100c09']} />
 
+        <CeremonyCameraRig active={ceremonyActive} />
         <OrbitControls
+          enabled={!ceremonyActive}
           enablePan={false}
           enableZoom={true}
           minDistance={4}

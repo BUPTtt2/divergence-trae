@@ -24,3 +24,14 @@ test('first network failure is degraded and repeated failure is offline', () => 
   assert.equal(twice.kind, 'offline');
   assert.equal(twice.failures, 2);
 });
+
+test('an execution with no progress becomes degraded even while health probes pass', () => {
+  const online = deriveRuntimeStatus(initialRuntimeStatus(), { type: 'probe:ok', latencyMs: 42, at: 10 });
+  const stalled = deriveRuntimeStatus(online, { type: 'work:stalled', at: 20 });
+  const recovered = deriveRuntimeStatus(stalled, { type: 'work:progress', latencyMs: 1280, at: 30 });
+
+  assert.equal(stalled.kind, 'degraded');
+  assert.equal(stalled.reason, '推演等待智囊响应超时');
+  assert.equal(recovered.kind, 'online');
+  assert.equal(recovered.failures, 0);
+});

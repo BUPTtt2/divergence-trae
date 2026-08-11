@@ -125,7 +125,7 @@ export function buildArenaViewModel({
     const id = text(item.id, `fact-${index + 1}`);
     nodes.push({
       id: `fact:${id}`, kind: 'fact',
-      label: text(item.label || item.field, '已确认'),
+      label: text(item.label || item.field || item.value || item.content || item.answer, '已确认').slice(0, 18),
       detail: text(item.value || item.content || item.answer, text(fact)),
       confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : 1,
       source: displaySource(item.source),

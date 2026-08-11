@@ -76,26 +76,34 @@ function createFrontTexture({ guaName, guaIcon, question, title, summary, keys, 
     drawYao(ctx, W / 2, 96 + i * 18, 122, broken, 0.48 + i * 0.07);
   }
 
-  drawGlowText(ctx, '易 · 本局命牌', W / 2, 220, '500 20px "STKaiti", serif', '#e7c96f', 7);
-  drawGlowText(ctx, shortText(guaName, 5, '本卦'), W / 2, 310, '700 88px "STKaiti", "KaiTi", serif', MOON, 22);
-  drawGlowText(ctx, shortText(guaIcon, 3, '☯'), W / 2, 412, '500 104px "STKaiti", serif', '#fff0a8', 28);
+  drawGlowText(ctx, 'YANCE · DECISION SEAL', W / 2, 211, '500 16px Georgia, serif', '#bda65e', 5);
+  drawGlowText(ctx, shortText(guaName, 5, '本卦'), W / 2, 300, '700 78px "STKaiti", "KaiTi", serif', MOON, 20);
+  drawGlowText(ctx, shortText(guaIcon, 3, '☯'), W / 2, 392, '500 88px "STKaiti", serif', '#fff0a8', 24);
 
   ctx.strokeStyle = 'rgba(231,202,111,.5)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(110, 492);
-  ctx.lineTo(W - 110, 492);
+  ctx.moveTo(92, 474);
+  ctx.lineTo(W - 92, 474);
   ctx.stroke();
-  drawGlowText(ctx, '所问', 104, 532, '500 17px "STKaiti", serif', '#bda65e', 4, 'left');
-  drawGlowText(ctx, shortText(question, 22, '本局所问'), 170, 532, '500 22px "STKaiti", "KaiTi", serif', '#dff1e5', 6, 'left');
-  if (title) drawGlowText(ctx, shortText(title, 20), W / 2, 594, '600 30px "STKaiti", "KaiTi", serif', '#fff9e8', 8);
-  if (summary) drawGlowText(ctx, shortText(summary, 28), W / 2, 634, '500 18px "STKaiti", "KaiTi", serif', '#d9d1bf', 4);
+  drawGlowText(ctx, '所问', 92, 516, '500 16px "STKaiti", serif', '#bda65e', 4, 'left');
+  drawGlowText(ctx, shortText(question, 18, '本局所问'), 156, 516, '500 20px "STKaiti", "KaiTi", serif', '#dff1e5', 5, 'left');
+  if (title) drawGlowText(ctx, shortText(title, 16), W / 2, 574, '600 29px "STKaiti", "KaiTi", serif', '#fff9e8', 7);
+  if (summary) drawGlowText(ctx, shortText(summary, 22), W / 2, 616, '500 17px "STKaiti", "KaiTi", serif', '#cfc7b4', 3);
 
   const actions = (Array.isArray(keys) ? keys : []).filter(Boolean).slice(0, 3);
   actions.forEach((item, index) => {
-    const y = 706 + index * 58;
-    drawGlowText(ctx, String(index + 1).padStart(2, '0'), 116, y, '600 18px Georgia, serif', '#d9b75f', 5, 'left');
-    drawGlowText(ctx, shortText(item?.label || item?.title || item, 18), 172, y, '500 25px "STKaiti", "KaiTi", serif', index === 0 ? '#fff9e7' : '#dff1e5', 7, 'left');
+    const y = 690 + index * 58;
+    const marks = ['断', '行', '戒'];
+    ctx.save();
+    ctx.fillStyle = index === 0 ? 'rgba(185,71,50,.82)' : 'rgba(185,71,50,.36)';
+    ctx.strokeStyle = 'rgba(218,100,72,.72)';
+    ctx.lineWidth = 2;
+    ctx.fillRect(88, y - 20, 40, 40);
+    ctx.strokeRect(88, y - 20, 40, 40);
+    ctx.restore();
+    drawGlowText(ctx, marks[index], 108, y, '600 20px "STKaiti", serif', '#fff1d4', 3);
+    drawGlowText(ctx, shortText(item?.label || item?.title || item, 16), 154, y, '500 23px "STKaiti", "KaiTi", serif', index === 0 ? '#fff9e7' : '#dff1e5', 5, 'left');
   });
 
   ctx.save();
@@ -215,13 +223,13 @@ function DestinyOrbit({ active, reducedMotion }) {
     trigramRefs.current.forEach((sprite, index) => {
       if (!sprite) return;
       const angle = index / 8 * Math.PI * 2 + travel;
-      const depth = Math.sin(angle) * 0.58;
-      sprite.position.set(Math.cos(angle) * 1.42, 1.22 + Math.sin(angle) * 1.08, depth);
-      const foreground = (depth / 0.58 + 1) / 2;
+      const depth = -0.58 + Math.sin(angle) * 0.15;
+      sprite.position.set(Math.cos(angle) * 1.18, 1.52 + Math.sin(angle) * 0.83, depth);
+      const foreground = (Math.sin(angle) + 1) / 2;
       const pulse = reducedMotion ? 0 : Math.sin(time * 1.1 - index * 0.5) * 0.035;
-      const scale = 0.24 + foreground * 0.11 + pulse;
+      const scale = 0.19 + foreground * 0.065 + pulse;
       sprite.scale.set(scale, scale, 1);
-      sprite.material.opacity = (active ? 0.48 : 0.68) + foreground * 0.22;
+      sprite.material.opacity = (active ? 0.24 : 0.38) + foreground * 0.16;
     });
     if (ringARef.current) ringARef.current.rotation.z = travel * 0.52;
     if (ringBRef.current) ringBRef.current.rotation.z = -travel * 0.34;
@@ -229,21 +237,21 @@ function DestinyOrbit({ active, reducedMotion }) {
 
   return (
     <group>
-      <sprite position={[0, 2.86, 0.06]} scale={[0.66, 0.66, 1]}>
-        <spriteMaterial map={yanTexture} transparent opacity={active ? 0.68 : 0.86} depthWrite={false} blending={THREE.AdditiveBlending} />
+      <sprite position={[0, 3.1, -0.62]} scale={[0.48, 0.48, 1]}>
+        <spriteMaterial map={yanTexture} transparent opacity={active ? 0.34 : 0.52} depthWrite={false} blending={THREE.AdditiveBlending} />
       </sprite>
       {glyphs.map((glyph, index) => (
         <sprite key={glyph} ref={(node) => { trigramRefs.current[index] = node; }}>
           <spriteMaterial map={glyphTextures[index]} transparent opacity={0.6} depthTest depthWrite={false} blending={THREE.AdditiveBlending} />
         </sprite>
       ))}
-      <mesh ref={ringARef} position={[0, 1.22, -0.03]} rotation={[0.56, 0.06, 0]} scale={[1, 0.78, 1]}>
-        <torusGeometry args={[1.42, 0.009, 6, 96]} />
-        <meshBasicMaterial color={GOLD} transparent opacity={active ? 0.26 : 0.36} depthWrite={false} blending={THREE.AdditiveBlending} />
+      <mesh ref={ringARef} position={[0, 1.52, -0.72]} rotation={[0.22, 0.1, 0]} scale={[1, 0.72, 1]}>
+        <torusGeometry args={[1.22, 0.008, 6, 96]} />
+        <meshBasicMaterial color={GOLD} transparent opacity={active ? 0.12 : 0.2} depthWrite={false} blending={THREE.AdditiveBlending} />
       </mesh>
-      <mesh ref={ringBRef} position={[0, 1.22, -0.08]} rotation={[0.7, 0.22, 0.12]} scale={[1.12, 0.78, 1]}>
-        <torusGeometry args={[1.44, 0.005, 6, 96]} />
-        <meshBasicMaterial color={MOON} transparent opacity={active ? 0.14 : 0.2} depthWrite={false} blending={THREE.AdditiveBlending} />
+      <mesh ref={ringBRef} position={[0, 1.52, -0.78]} rotation={[0.42, 0.2, 0.12]} scale={[1.08, 0.68, 1]}>
+        <torusGeometry args={[1.25, 0.005, 6, 96]} />
+        <meshBasicMaterial color={MOON} transparent opacity={active ? 0.07 : 0.12} depthWrite={false} blending={THREE.AdditiveBlending} />
       </mesh>
     </group>
   );
@@ -296,7 +304,7 @@ function DestinyCard({ guaName, guaIcon, presentation, lineMeta, revealed, reduc
     const rise = reducedMotion ? 1 : THREE.MathUtils.smoothstep(stateRef.current.elapsed, 0.08, 1.15);
     const flip = revealed && reducedMotion ? 1 : THREE.MathUtils.smoothstep(stateRef.current.revealElapsed, 0.12, 1.08);
     const float = !reducedMotion && flip > 0.98 ? Math.sin(stateRef.current.elapsed * 0.72) * 0.026 : 0;
-    groupRef.current.position.set(0, -2.8 + rise * 4.02 + float, 0.58);
+    groupRef.current.position.set(0, -2.8 + rise * 4.4 + float, 0.58);
     const settle = flip > 0.98 ? Math.sin(stateRef.current.elapsed * 0.32) * 0.012 : 0;
     groupRef.current.rotation.set(-0.035, -Math.PI * flip + settle, 0.012);
     const scale = 0.78 + rise * 0.16;
@@ -359,9 +367,11 @@ export default function DestinyRevealFX({ phase, oracle = null, dynamicChoices =
 
   if (!active) return null;
   return (
-    <group position={[phase === 'final' ? -1.28 : -0.18, 0, 0]}>
-      <DestinyOrbit active={revealed} reducedMotion={reducedMotion} />
-      <DestinyCard guaName={guaName} guaIcon={guaIcon} presentation={presentation} lineMeta={lineMeta} revealed={revealed} reducedMotion={reducedMotion} artworkUrl={artworkUrl} />
+    <group position={[-1.28, 0, 0]}>
+      <group position={[-0.56, 0, 0]}>
+        <DestinyOrbit active={revealed} reducedMotion={reducedMotion} />
+        <DestinyCard guaName={guaName} guaIcon={guaIcon} presentation={presentation} lineMeta={lineMeta} revealed={revealed} reducedMotion={reducedMotion} artworkUrl={artworkUrl} />
+      </group>
     </group>
   );
 }

@@ -52,7 +52,8 @@ export default function SystemPulse() {
     };
   }, [check]);
 
-  const [title, detail] = LABELS[status.kind] || LABELS.checking;
+  const [title, defaultDetail] = LABELS[status.kind] || LABELS.checking;
+  const detail = status.reason || defaultDetail;
   const latency = status.latencyMs != null ? `${status.latencyMs} ms` : '—';
   const time = status.checkedAt
     ? new Date(status.checkedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })

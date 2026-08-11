@@ -87,7 +87,7 @@ function createZiweiTexture(size = 512) {
   });
 }
 
-function BaguaCompass() {
+function BaguaCompass({ compact = false }) {
   const plateRef = useRef();
   const glowRef = useRef();
   const texture = useMemo(() => createBaguaCompassTexture(768), []);
@@ -102,7 +102,11 @@ function BaguaCompass() {
     }
   });
   return (
-    <group position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+    <group
+      position={compact ? [-1.28, 0.08, -0.08] : [0, 0.08, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      scale={compact ? [0.7, 0.7, 0.7] : [1, 1, 1]}
+    >
       <mesh ref={glowRef} position={[0, 0, -0.04]}>
         <planeGeometry args={[3.5, 3.5]} />
         <meshBasicMaterial map={glow} transparent opacity={0.11} depthWrite={false} blending={THREE.AdditiveBlending} />
@@ -224,7 +228,7 @@ function ZiweiDisk({ visible }) {
 export default function LightOrb({ phase, position = [0, 1.5, 0], minimal = false }) {
   return (
     <group>
-      <BaguaCompass />
+      <BaguaCompass compact={minimal} />
       {!minimal && <>
         <CenterSymbol phase={phase} position={position} />
         <OrbitTrigrams phase={phase} position={position} />
