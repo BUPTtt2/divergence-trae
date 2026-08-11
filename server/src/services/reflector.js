@@ -334,6 +334,12 @@ function buildHexagramFromLines(lines) {
   };
 }
 
+function displayHexagramName(hexagram) {
+  const lower = String(hexagram?.lower?.name || '').trim();
+  const upper = String(hexagram?.upper?.name || '').trim();
+  return lower && lower === upper ? lower : `${lower}${upper}`;
+}
+
 function matchTrigram(lines3) {
   // lines3: [初, 中, 上] 3爻
   // PERSPECTIVE_TO_TRIGRAM.lines 也是 [底, 中, 顶]
@@ -354,8 +360,8 @@ function matchTrigram(lines3) {
  * @returns {string} 审查镜头文本
  */
 function buildReviewLensText(oracle) {
-  const primaryName = `${oracle.primary.lower.name}${oracle.primary.upper.name}`;
-  const changedName = `${oracle.changed.lower.name}${oracle.changed.upper.name}`;
+  const primaryName = displayHexagramName(oracle.primary);
+  const changedName = displayHexagramName(oracle.changed);
   const dynamicStr = oracle.dynamics.length > 0
     ? `${oracle.dynamics.map((i) => i + 1).join('、')}爻动`
     : '无动爻';
@@ -372,8 +378,8 @@ function reviewLensContext(oracle) {
     return counts;
   }, { verified: 0, unknown: 0, contested: 0 });
   return {
-    primaryName: `${oracle.primary.lower.name}${oracle.primary.upper.name}`,
-    changedName: `${oracle.changed.lower.name}${oracle.changed.upper.name}`,
+    primaryName: displayHexagramName(oracle.primary),
+    changedName: displayHexagramName(oracle.changed),
     dynamicStr: oracle.dynamics.length > 0
       ? `${oracle.dynamics.map((i) => i + 1).join('、')}爻动`
       : '无动爻',
@@ -780,8 +786,8 @@ export async function reflect(session, dependencies = {}) {
 
   logger.info('[Reflector] reflect 完成 → ORACLE', {
     sessionId: session?.id,
-    primary: `${oracle.primary.lower.name}${oracle.primary.upper.name}`,
-    changed: `${oracle.changed.lower.name}${oracle.changed.upper.name}`,
+    primary: displayHexagramName(oracle.primary),
+    changed: displayHexagramName(oracle.changed),
     dynamics: oracle.dynamics,
     oracleText: oracle.text.slice(0, 60),
   });
@@ -841,8 +847,8 @@ export async function selfTest() {
   logger.info('=== Reflector selfTest 场景1（立卦）===', {
     ok: ok1,
     state: result1.session.state,
-    primary: `${result1.oracle?.primary.lower.name}${result1.oracle?.primary.upper.name}`,
-    changed: `${result1.oracle?.changed.lower.name}${result1.oracle?.changed.upper.name}`,
+    primary: displayHexagramName(result1.oracle?.primary),
+    changed: displayHexagramName(result1.oracle?.changed),
     oracleText: result1.oracle?.text,
   });
 

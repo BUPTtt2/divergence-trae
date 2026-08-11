@@ -1669,6 +1669,11 @@ async function generateFateTicket(session, choice, feedback) {
   const question = session.question_context || session.questionContext || session.question || '';
   const oracle = session.oracle || {};
   const findings = Array.isArray(session.findings) ? session.findings : [];
+  const displayHexagramName = (hexagram) => {
+    const lower = String(hexagram?.lower?.name || '').trim();
+    const upper = String(hexagram?.upper?.name || '').trim();
+    return lower && lower === upper ? lower : `${lower}${upper}`;
+  };
 
   // 提取智囊关键观点（每条取前60字摘要）
   const keyFindings = findings.slice(0, 6).map((f) => ({
@@ -1681,9 +1686,9 @@ async function generateFateTicket(session, choice, feedback) {
   // 卦象摘要
   const hexagram = oracle.primary
     ? {
-        primary: `${oracle.primary.lower?.name || ''}${oracle.primary.upper?.name || ''}`,
+        primary: displayHexagramName(oracle.primary),
         changed: oracle.changed
-          ? `${oracle.changed.lower?.name || ''}${oracle.changed.upper?.name || ''}`
+          ? displayHexagramName(oracle.changed)
           : '',
         mutual: oracle.mutual || null,
         opposite: oracle.opposite || null,

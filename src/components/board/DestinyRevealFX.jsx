@@ -368,10 +368,8 @@ export default function DestinyRevealFX({ phase, oracle = null, dynamicChoices =
   if (!active) return null;
   return (
     <group position={[-1.28, 0, 0]}>
-      <group position={[-0.56, 0, 0]}>
-        <DestinyOrbit active={revealed} reducedMotion={reducedMotion} />
-        <DestinyCard guaName={guaName} guaIcon={guaIcon} presentation={presentation} lineMeta={lineMeta} revealed={revealed} reducedMotion={reducedMotion} artworkUrl={artworkUrl} />
-      </group>
+      <DestinyOrbit active={revealed} reducedMotion={reducedMotion} />
+      <DestinyCard guaName={guaName} guaIcon={guaIcon} presentation={presentation} lineMeta={lineMeta} revealed={revealed} reducedMotion={reducedMotion} artworkUrl={artworkUrl} />
     </group>
   );
 }

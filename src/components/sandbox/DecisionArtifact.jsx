@@ -6,6 +6,7 @@ import { createDestinyCardPresentation } from '../../game/destinyCardPresentatio
 import { generateDestinyArtwork } from '../../services/apiClient.js';
 import './decisionArtifact.css';
 import { hexagramName } from '../../game/decisionCardContract.js';
+import { resolveHexagramName } from '../../game/destinyCeremonyModel.js';
 import { sanitizeDecisionDisplayText } from '../../utils/helpers.js';
 
 const KNOWLEDGE_LABEL = {
@@ -21,11 +22,10 @@ function oracleSnapshot(oracle) {
     result[state] += 1;
     return result;
   }, { verified: 0, unknown: 0, contested: 0 });
-  const primary = [oracle?.primary?.lower?.name, oracle?.primary?.upper?.name].filter(Boolean).join('');
   return {
     lines,
     counts,
-    name: oracle?.gua || primary || '',
+    name: resolveHexagramName(oracle, ''),
   };
 }
 
