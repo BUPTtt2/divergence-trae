@@ -14,8 +14,13 @@ export function shouldMuteArena({ phase, companionOpen = false, showHistoryPanel
   return showHistoryPanel || isPresentationPhase(phase) || (companionOpen && CONVERSATION_PHASES.has(phase));
 }
 
-export function shouldShowCompanion({ phase, companionOpen = false, showHistoryPanel = false } = {}) {
-  return CONVERSATION_PHASES.has(phase) && companionOpen && !showHistoryPanel;
+export function shouldShowCompanion({ phase, showHistoryPanel = false } = {}) {
+  return CONVERSATION_PHASES.has(phase) && !showHistoryPanel;
+}
+
+export function shouldAutoOpenCompanion({ phase, awaitingAnswers = [], answerPending = false } = {}) {
+  if (phase !== 'clarify_loop' || answerPending || !Array.isArray(awaitingAnswers)) return false;
+  return awaitingAnswers.some((item) => String(item?.question || item || '').trim().length > 0);
 }
 
 export function shouldShowGlobalCompass(pathname = '') {

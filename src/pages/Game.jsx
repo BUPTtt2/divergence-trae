@@ -14,10 +14,17 @@ import { generateDialoguesForAgents } from '../services/inferenceEngine';
 import { saveAgentFeedback } from '../services/memoryStore';
 import { sanitizeDecisionDisplayText, sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
-import { initialCompanionOpen, sandboxLayoutClass, shouldMuteArena, shouldShowCompanion } from '../game/layoutState';
+import {
+  initialCompanionOpen,
+  sandboxLayoutClass,
+  shouldAutoOpenCompanion,
+  shouldMuteArena,
+  shouldShowCompanion,
+} from '../game/layoutState';
 import { uniqueMessages, uniqueRoles } from '../game/historyPresentation';
 import { buildArenaViewModel } from '../game/arenaViewModel';
 import SystemPulse from '../components/layout/SystemPulse';
+import SessionMeasurement from '../components/layout/SessionMeasurement';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -211,6 +218,12 @@ export default function Game() {
     setCompanionOpen(nextOpen);
     if (nextOpen) setShowHistoryPanel(false);
   }, [setShowHistoryPanel]);
+  useEffect(() => {
+    if (shouldAutoOpenCompanion({ phase, awaitingAnswers, answerPending })) {
+      setShowHistoryPanel(false);
+      setCompanionOpen(true);
+    }
+  }, [phase, awaitingAnswers, answerPending, setShowHistoryPanel]);
   const openHistoryPanel = useCallback((roleId = null) => {
     setFocusedHistoryRoleId(roleId);
     setCompanionOpen(false);
@@ -257,6 +270,7 @@ export default function Game() {
     <div className={`game-root ${layoutClass} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)', '--companion-width': `${companionWidth}px` }}>
       <div className="crt-overlay" />
       <SystemPulse />
+      <SessionMeasurement sessionId={flow.deliberationSessionId} phase={phase} artwork={destinyArtwork} />
       {(backendError || streamError) && (
         <div role="alert" className="runtime-alert">
           <span>Agent Runtime：{backendError || streamError}</span>

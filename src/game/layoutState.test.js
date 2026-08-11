@@ -39,7 +39,27 @@ test('one main surface always mutes arena labels and traces behind it', () => {
 test('history and the council workbench are mutually exclusive surfaces', () => {
   assert.equal(layoutState.shouldShowCompanion({ phase: 'agent_debate', companionOpen: true, showHistoryPanel: true }), false);
   assert.equal(layoutState.shouldShowCompanion({ phase: 'agent_debate', companionOpen: true, showHistoryPanel: false }), true);
+  assert.equal(layoutState.shouldShowCompanion({ phase: 'clarify_loop', companionOpen: false, showHistoryPanel: false }), true);
   assert.equal(layoutState.shouldShowCompanion({ phase: 'summary', companionOpen: true, showHistoryPanel: false }), false);
+});
+
+test('pending clarification automatically opens the answer workbench', () => {
+  assert.equal(typeof layoutState.shouldAutoOpenCompanion, 'function');
+  assert.equal(layoutState.shouldAutoOpenCompanion({
+    phase: 'clarify_loop',
+    awaitingAnswers: [{ question: '你最近一周的精神状态怎样？' }],
+    answerPending: false,
+  }), true);
+  assert.equal(layoutState.shouldAutoOpenCompanion({
+    phase: 'clarify_loop',
+    awaitingAnswers: [],
+    answerPending: false,
+  }), false);
+  assert.equal(layoutState.shouldAutoOpenCompanion({
+    phase: 'clarify_loop',
+    awaitingAnswers: [{ question: '正在提交的问题' }],
+    answerPending: true,
+  }), false);
 });
 
 test('sandbox uses its own companion navigation instead of the global floating compass', () => {
