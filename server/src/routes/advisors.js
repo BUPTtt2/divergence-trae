@@ -25,6 +25,7 @@ const MAX_LEN = {
   style: 50,
   element: 20,
   trigram: 10,
+  avatar: 40,
 };
 
 function validateLength(obj, fields) {

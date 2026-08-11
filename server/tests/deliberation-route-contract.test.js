@@ -70,3 +70,29 @@ test('SSE disconnect only closes transport and never pauses the business session
   const source = fs.readFileSync(routePath, 'utf8');
   assert.doesNotMatch(source, /pause\(sessionId,\s*['"]user_disconnected['"]/);
 });
+
+test('route returns direct value without creating a deliberation session', async () => {
+  await withServer(async (base) => {
+    const authResponse = await fetch(`${base}/api/auth/anonymous`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const auth = await authResponse.json();
+    const response = await fetch(`${base}/api/deliberation/route`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${auth.accessToken}`,
+      },
+      body: JSON.stringify({ question: '1+1 等于几' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.lane, 'direct');
+    assert.equal(body.answer, '2');
+    assert.equal(body.sessionId, undefined);
+    assert.equal(body.nextAction, 'complete');
+  });
+});

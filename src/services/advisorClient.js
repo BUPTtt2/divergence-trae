@@ -19,6 +19,7 @@ function normalizedAsset(asset = {}) {
     forged: source === 'owned',
     trigram: asset.trigram || asset.symbol || '☯',
     icon: asset.icon || asset.trigram || asset.symbol || '☯',
+    avatar: asset.avatar || asset.trigram || asset.symbol || '☯',
     color: asset.color || '#C8A850',
     glow: asset.glow || '#F0D890',
   };

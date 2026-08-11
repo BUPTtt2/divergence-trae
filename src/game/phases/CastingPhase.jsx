@@ -272,7 +272,7 @@ export default function CastingPhase({
                   className="w-full mt-4 py-3 text-sm transition-all"
                   style={{
                     background: inputValue.trim() ? `linear-gradient(135deg, ${BORDER_COLOR}, ${GLOW_COLOR})` : 'rgba(255,255,255,0.05)',
-                    color: '#1A1410',
+                    color: inputValue.trim() ? '#1A1410' : '#9A9184',
                     fontFamily: '"Ma Shan Zheng", serif',
                     letterSpacing: '0.3em',
                     border: `1px solid ${BORDER_COLOR}`,

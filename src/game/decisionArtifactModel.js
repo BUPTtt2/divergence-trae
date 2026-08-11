@@ -15,11 +15,16 @@ export function createDecisionArtifact(inference = {}, choices = []) {
     }));
   const paths = (Array.isArray(choices) ? choices : [])
     .filter((choice) => choice?.id && choice?.label)
-    .map((choice) => ({
-      ...choice,
-      keyPoints: Array.isArray(choice.keyPoints) ? choice.keyPoints.filter(Boolean).slice(0, 3) : [],
-      provenanceLabel: choice.provenance === 'agent-evidence' ? '智囊结论合成' : '受控规则备选',
-    }));
+    .map((choice) => {
+      const declaredSource = String(choice.provenance || choice.source || '').toLowerCase();
+      const generated = choice.fallback !== true && ['agent-evidence', 'model', 'model-generated', 'generated'].includes(declaredSource);
+      return {
+        ...choice,
+        keyPoints: Array.isArray(choice.keyPoints) ? choice.keyPoints.filter(Boolean).slice(0, 3) : [],
+        provenanceKind: generated ? 'generated' : 'fallback',
+        provenanceLabel: generated ? '真实生成' : '规则兜底',
+      };
+    });
   const gaps = (Array.isArray(inference?.gaps) ? inference.gaps : []).map((gap) => ({
     perspective: gap?.perspective || gap?.name || '未覆盖事项',
     reason: gap?.reason || '本轮没有足够信息形成确定判断',

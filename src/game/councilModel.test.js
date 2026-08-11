@@ -6,6 +6,7 @@ import {
   buildCouncilSeats,
   buildForgeReturnUrl,
   createCouncilModel,
+  advisorCardContract,
   toggleAdvisor,
 } from './councilModel.js';
 
@@ -54,4 +55,18 @@ test('forge return keeps session, target seat and newly forged advisor', () => {
     buildForgeReturnUrl({ sessionId: 'sess_1', seatId: 'health', advisorId: 'custom_9' }),
     '/sandbox?resume=sess_1&seat=health&advisor=custom_9',
   );
+});
+
+test('advisor cards explain recommendation, capability, blind spot, and tool availability', () => {
+  assert.deepEqual(advisorCardContract({
+    reason: '能核对现金流边界',
+    objective: '判断预算是否可持续',
+    safetyBoundaries: ['不替用户决定关系取舍'],
+    toolPolicy: { allow: ['web_search'] },
+  }), {
+    recommendationReason: '能核对现金流边界',
+    capability: '判断预算是否可持续',
+    blindSpot: '不替用户决定关系取舍',
+    tools: '可用 web_search',
+  });
 });

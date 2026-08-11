@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getFollowUps, completeFollowUp } from '../services/apiClient';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import './FollowUpReminder.css';
 
 const T = {
@@ -22,6 +22,7 @@ const EASE = [0.16, 1, 0.3, 1];
 
 export default function FollowUpReminder() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [followUps, setFollowUps] = useState([]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [completingId, setCompletingId] = useState(null);
@@ -40,8 +41,10 @@ export default function FollowUpReminder() {
   }, []);
 
   useEffect(() => {
+    if (location.pathname === '/sandbox') return undefined;
     loadFollowUps();
-  }, [loadFollowUps]);
+    return undefined;
+  }, [loadFollowUps, location.pathname]);
 
   const handleComplete = useCallback(async (id) => {
     if (!resultText.trim()) return;
@@ -69,7 +72,7 @@ export default function FollowUpReminder() {
     return `${date.getMonth() + 1}月${date.getDate()}日`;
   };
 
-  if (followUps.length === 0) return null;
+  if (location.pathname === '/sandbox' || followUps.length === 0) return null;
 
   return (
     <motion.div

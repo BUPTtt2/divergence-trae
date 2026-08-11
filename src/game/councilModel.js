@@ -14,17 +14,47 @@ function advisorPerspective(advisor) {
   return String(advisor?.perspective || advisor?.stance || advisor?.perspectiveLabel || '综合').replace(/视角$/, '').trim();
 }
 
+function firstText(value, fallback) {
+  if (Array.isArray(value)) return String(value.find(Boolean) || fallback);
+  return String(value || fallback);
+}
+
+export function advisorCardContract(advisor = {}) {
+  const toolPolicy = advisor.toolPolicy || advisor.tool_policy || {};
+  const allowedTools = Array.isArray(toolPolicy.allow) ? toolPolicy.allow.filter(Boolean) : [];
+  return {
+    recommendationReason: firstText(advisor.reason, '提供一个与当前案卷互补的独立视角。'),
+    capability: firstText(advisor.objective || advisor.deliverable || advisor.description || advisor.desc, '围绕案卷事实给出可追溯判断。'),
+    blindSpot: firstText(advisor.safetyBoundaries || advisor.safety_boundaries, `主要覆盖${advisorPerspective(advisor)}，其他视角需要由不同智囊补足。`),
+    tools: allowedTools.length > 0 ? `可用 ${allowedTools.join('、')}` : '不调用外部工具',
+  };
+}
+
 export function createCouncilModel({
   official = [],
   owned = [],
   market = [],
   recommendedIds = [],
+  recommendationDetails = [],
   selectedIds = [],
   selectionSource = 'none',
 } = {}) {
-  const officialPool = uniqueAdvisors(official);
-  const ownedPool = uniqueAdvisors(owned);
-  const marketPool = uniqueAdvisors(market);
+  const detailById = new Map((Array.isArray(recommendationDetails) ? recommendationDetails : [])
+    .filter((item) => item?.agentId)
+    .map((item) => [String(item.agentId), item]));
+  const enrich = (advisors) => uniqueAdvisors(advisors).map((advisor) => {
+    const detail = detailById.get(advisor.id);
+    return detail ? {
+      ...advisor,
+      reason: detail.reason || advisor.reason,
+      recommendationScore: detail.score || advisor.recommendationScore,
+      matchedDimensions: detail.matchedDimensions || advisor.matchedDimensions || [],
+      recommendationSource: detail.source || advisor.recommendationSource,
+    } : advisor;
+  });
+  const officialPool = enrich(official);
+  const ownedPool = enrich(owned);
+  const marketPool = enrich(market);
   const catalog = uniqueAdvisors([...officialPool, ...ownedPool, ...marketPool]);
   const catalogById = new Map(catalog.map((advisor) => [advisor.id, advisor]));
   const recommendationOrder = uniqueAdvisors((Array.isArray(recommendedIds) ? recommendedIds : [])
@@ -51,6 +81,13 @@ function rebuild(model, selectedIds, selectionSource) {
     owned: model?.owned,
     market: model?.market,
     recommendedIds: (model?.recommended || []).map((advisor) => advisor.id),
+    recommendationDetails: (model?.recommended || []).map((advisor) => ({
+      agentId: advisor.id,
+      reason: advisor.reason,
+      score: advisor.recommendationScore,
+      matchedDimensions: advisor.matchedDimensions,
+      source: advisor.recommendationSource,
+    })),
     selectedIds,
     selectionSource,
   });
@@ -121,4 +158,5 @@ export default {
   createCouncilModel,
   replaceSeat,
   toggleAdvisor,
+  advisorCardContract,
 };

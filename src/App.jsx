@@ -14,24 +14,13 @@ import FollowUpReminder from './components/FollowUpReminder';
 import AppNav from './components/AppNav';
 import { fetchAgentPersonas } from './services/inferenceEngine';
 import { tracker, initWebVitals } from './services/tracker';
+import { shouldShowGlobalCompass } from './game/layoutState';
+import { loadWithRetry } from './utils/lazyRetry';
+import Game from './pages/Game';
 
-/* lazy import 重试：浏览器缓存旧 chunk hash 时自动刷新 */
-function lazyRetry(fn, retries = 2) {
-  return lazy(() =>
-    fn().catch(async (err) => {
-      if (retries <= 0) throw err;
-      if (err && /Failed to fetch dynamically imported module|Importing a module script failed/i.test(err.message || '')) {
-        if (retries === 1) {
-          console.warn('[lazyRetry] chunk 加载失败，强制刷新页面');
-          if (typeof window !== 'undefined') window.location.reload();
-          return new Promise(() => {});
-        }
-        await new Promise((r) => setTimeout(r, 600));
-        return fn();
-      }
-      throw err;
-    })
-  );
+/* 有限重试：失败后交给 ErrorBoundary，绝不留下永久加载态 */
+function lazyRetry(loader) {
+  return lazy(() => loadWithRetry(loader));
 }
 
 /* 水墨风格 Loading 骨架屏 */
@@ -72,7 +61,6 @@ function InkLoading() {
 /* 页面级代码分割：每个页面独立 chunk，减小首屏包体积 */
 const Landing = lazyRetry(() => import('./pages/Landing'));
 const Scenarios = lazyRetry(() => import('./pages/Scenarios'));
-const Game = lazyRetry(() => import('./pages/Game'));
 const Collection = lazyRetry(() => import('./pages/Collection'));
 const Community = lazyRetry(() => import('./pages/Community'));
 const Daily = lazyRetry(() => import('./pages/Daily'));
@@ -249,6 +237,7 @@ function AnimatedRoutes() {
           </Suspense>
         </motion.div>
       </AnimatePresence>
+      {shouldShowGlobalCompass(location.pathname) && <DraggableCompass />}
     </>
   );
 }
@@ -284,7 +273,6 @@ export default function App() {
             <AuthProvider>
               <GameProvider>
                 <AnimatedRoutes />
-                <DraggableCompass />
                 <AchievementToast />
                 <FollowUpReminder />
                 {/* 已废弃：旧轨 <YanChat /> */}

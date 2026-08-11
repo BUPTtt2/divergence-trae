@@ -1,0 +1,2 @@
+ALTER TABLE cards
+ADD COLUMN IF NOT EXISTS artwork JSONB DEFAULT '{}'::jsonb;

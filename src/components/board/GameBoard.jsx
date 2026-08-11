@@ -1,6 +1,8 @@
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import Board3D from './Board3D';
+import ArenaHud from './ArenaHud';
+import { useState } from 'react';
 
 export default function GameBoard({
   phase,
@@ -18,7 +20,14 @@ export default function GameBoard({
   deliberationOracle,
   deliberationSessionId,
   fateRevealed = false,
+  destinyArtwork = null,
+  arenaView,
+  directResult,
+  onDirectChoice,
+  processingNarrative,
+  presentationMode = false,
 }) {
+  const [selectedArenaNode, setSelectedArenaNode] = useState(null);
   // 移动端/iPad 3D性能降级
   const isMobile = typeof window !== 'undefined' && (window.innerWidth <= 768 || /iPad|iPhone|Android/i.test(navigator.userAgent));
   // iPad 单独降级：DPR 1.5（介于移动端1与桌面2之间）；抗锯齿随 isMobile 一并关闭
@@ -26,7 +35,9 @@ export default function GameBoard({
   const dpr = isIPad ? 1.5 : (isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 2));
 
   return (
-    <div className="relative w-full h-full" style={{ background: '#1A1410' }}>
+    <div className={`relative w-full h-full${presentationMode ? ' arena-presentation-mode' : ''}`} style={{
+      background: 'radial-gradient(circle at 50% 56%, #2a2117 0%, #17110d 36%, #080706 78%)',
+    }}>
       <Canvas
         camera={{
           fov: 45,
@@ -34,11 +45,11 @@ export default function GameBoard({
           far: 100,
           position: [0, 3, 7],
         }}
-        style={{ width: '100%', height: '100%', background: '#1A1410' }}
+        style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ antialias: !isMobile, alpha: false, powerPreference: 'high-performance' }}
         dpr={dpr}
       >
-        <color attach="background" args={['#1A1410']} />
+        <color attach="background" args={['#100c09']} />
 
         <OrbitControls
           enablePan={false}
@@ -69,8 +80,20 @@ export default function GameBoard({
           deliberationOracle={deliberationOracle}
           deliberationSessionId={deliberationSessionId}
           fateRevealed={fateRevealed}
+          destinyArtwork={destinyArtwork}
+          arenaView={arenaView}
+          onArenaNodeSelect={setSelectedArenaNode}
+          presentationMode={presentationMode}
         />
       </Canvas>
+      <ArenaHud
+        view={arenaView}
+        selectedNode={presentationMode ? null : selectedArenaNode}
+        onClose={() => setSelectedArenaNode(null)}
+        directResult={directResult}
+        onDirectChoice={onDirectChoice}
+        processingNarrative={processingNarrative}
+      />
     </div>
   );
 }

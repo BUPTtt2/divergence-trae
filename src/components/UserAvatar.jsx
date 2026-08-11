@@ -13,13 +13,16 @@ const T = {
   accent: '#A8472E',
 };
 
-export default function UserAvatar({ size = 36, showModal = false, onModalClose }) {
+export default function UserAvatar({ size = 36, showModal = false, onModalClose, compactPreferences = false }) {
   const [localProfile, setLocalProfile] = useState(null);
   const [localShow, setLocalShow] = useState(false);
   const [editNickname, setEditNickname] = useState('');
   const [editBio, setEditBio] = useState('');
   const [editAvatar, setEditAvatar] = useState('');
   const [editColor, setEditColor] = useState('');
+  const [editDecisionStyle, setEditDecisionStyle] = useState('balanced');
+  const [editAnswerStyle, setEditAnswerStyle] = useState('structured');
+  const [editMemoryConsent, setEditMemoryConsent] = useState('confirmed-only');
   const [stats, setStats] = useState(null);
   const [achievements, setAchievements] = useState([]);
   const [activeTab, setActiveTab] = useState('profile');
@@ -70,6 +73,9 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
       setEditBio(profile.bio || '');
       setEditAvatar(profile.avatar);
       setEditColor(profile.color);
+      setEditDecisionStyle(profile.preferences?.decisionStyle || 'balanced');
+      setEditAnswerStyle(profile.preferences?.answerStyle || 'structured');
+      setEditMemoryConsent(profile.preferences?.memoryConsent || 'confirmed-only');
     }
   }, [profile]);
 
@@ -88,8 +94,13 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
       bio: editBio.trim(),
       avatar: editAvatar,
       color: editColor,
+      preferences: {
+        decisionStyle: editDecisionStyle,
+        answerStyle: editAnswerStyle,
+        memoryConsent: editMemoryConsent,
+      },
     });
-    setProfile(updated);
+    setLocalProfile(updated);
     handleClose();
   };
 
@@ -230,21 +241,21 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="p-6 w-[360px] max-w-[90vw] mx-4 max-h-[85vh] overflow-y-auto"
+              className={`p-6 ${compactPreferences ? 'w-[440px]' : 'w-[360px]'} max-w-[90vw] mx-4 max-h-[85vh] overflow-y-auto`}
               style={{ backgroundColor: T.paperLight, borderRadius: 5, border: '1px solid ' + T.border }}
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-[16px] font-serif font-semibold mb-1" style={{ color: T.ink }}>
-                {activeTab === 'profile' ? '个人资料' : activeTab === 'achievements' ? '成就' : '推演统计'}
+                {compactPreferences ? '我与偏好' : activeTab === 'profile' ? '我与偏好' : activeTab === 'achievements' ? '成就' : '推演统计'}
               </h3>
               <p className="text-[11px] mb-4" style={{ color: T.muted }}>
-                {activeTab === 'profile' ? '设置你的身份，数据仅保存在本地' :
+                {compactPreferences ? '这里保存真实的本地资料、回答方式与记忆授权，不展示模拟等级或成就' : activeTab === 'profile' ? '身份、回答方式与记忆范围会真实保存到本机' :
                  activeTab === 'achievements' ? `已解锁 ${achievements.filter(a => a.unlocked).length} / ${achievements.length} 项成就` :
                  `等级 ${stats?.level || 1} · ${getLevelName(stats?.level || 1)}`}
               </p>
 
               {/* Tab 切换 */}
-              <div className="flex gap-1 mb-5" style={{ borderBottom: `1px solid ${T.border}` }}>
+              {!compactPreferences && <div className="flex gap-1 mb-5" style={{ borderBottom: `1px solid ${T.border}` }}>
                 {[
                   { id: 'profile', label: '资料' },
                   { id: 'achievements', label: '成就' },
@@ -264,9 +275,9 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
                     {tab.label}
                   </button>
                 ))}
-              </div>
+              </div>}
 
-              {stats && (
+              {!compactPreferences && stats && (
                 <div className="mb-4 p-3" style={{ backgroundColor: T.paper, borderRadius: 4, border: `1px solid ${T.border}` }}>
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-[11px] font-medium" style={{ color: T.ink }}>
@@ -295,7 +306,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
                 {status === 'offline' && (
                   <>
                     <div className="text-[11px] mb-2" style={{ color: T.accent }}>
-                      网络连接不稳定，已降级预设模式
+                      网络连接不稳定，当前使用本机模式
                     </div>
                     <div className="flex flex-col gap-1.5">
                       <button
@@ -345,7 +356,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
                 {status === 'anonymous' && (
                   <>
                     <div className="text-[11px] mb-2" style={{ color: T.muted }}>
-                      匿名访客 · 数据已同步云端
+                      匿名访客 · 当前资料与偏好保存在本机
                     </div>
                     <button
                       onClick={() => openAuthModal('upgrade')}
@@ -377,7 +388,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
                 )}
               </div>
 
-              {activeTab === 'profile' && (
+              {(compactPreferences || activeTab === 'profile') && (
                 <>
                   <div className="flex justify-center mb-4">
                     <div
@@ -467,10 +478,29 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
                       placeholder="一句话介绍自己..."
                     />
                   </div>
+
+                  <div className="mb-4 p-3" style={{ backgroundColor: T.paper, border: `1px solid ${T.border}`, borderRadius: 4 }}>
+                    <div className="text-[11px] font-medium mb-2" style={{ color: T.ink }}>推演偏好</div>
+                    <label className="text-[10px] mb-2 block" style={{ color: T.muted }}>决策取向
+                      <select value={editDecisionStyle} onChange={(event) => setEditDecisionStyle(event.target.value)} className="w-full mt-1 px-2 py-2 text-[11px]" style={{ backgroundColor: T.paperLight, border: `1px solid ${T.border}`, color: T.ink }}>
+                        <option value="balanced">平衡收益与风险</option><option value="cautious">优先控制风险</option><option value="experimental">优先小步试验</option>
+                      </select>
+                    </label>
+                    <label className="text-[10px] mb-2 block" style={{ color: T.muted }}>回答方式
+                      <select value={editAnswerStyle} onChange={(event) => setEditAnswerStyle(event.target.value)} className="w-full mt-1 px-2 py-2 text-[11px]" style={{ backgroundColor: T.paperLight, border: `1px solid ${T.border}`, color: T.ink }}>
+                        <option value="structured">先结论，再依据与行动</option><option value="conversational">边聊边澄清</option><option value="brief">只看精简结论</option>
+                      </select>
+                    </label>
+                    <label className="text-[10px] block" style={{ color: T.muted }}>记忆范围
+                      <select value={editMemoryConsent} onChange={(event) => setEditMemoryConsent(event.target.value)} className="w-full mt-1 px-2 py-2 text-[11px]" style={{ backgroundColor: T.paperLight, border: `1px solid ${T.border}`, color: T.ink }}>
+                        <option value="confirmed-only">只保存我确认的事实与偏好</option><option value="session-only">只在本局使用</option><option value="off">不保存长期记忆</option>
+                      </select>
+                    </label>
+                  </div>
                 </>
               )}
 
-              {activeTab === 'achievements' && (
+              {!compactPreferences && activeTab === 'achievements' && (
                 <div className="space-y-2 mb-4">
                   {achievements.map(ach => (
                     <div
@@ -506,7 +536,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
                 </div>
               )}
 
-              {activeTab === 'stats' && stats && (
+              {!compactPreferences && activeTab === 'stats' && stats && (
                 <div className="space-y-3 mb-4">
                   {[
                     { label: '累计推演', value: stats.totalCasts, unit: '卦' },
@@ -535,7 +565,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose 
                 >
                   关闭
                 </button>
-                {activeTab === 'profile' && (
+                {(compactPreferences || activeTab === 'profile') && (
                   <button
                     onClick={handleSave}
                     className="flex-1 py-2 text-[11px] font-medium"

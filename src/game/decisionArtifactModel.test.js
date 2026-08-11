@@ -13,7 +13,7 @@ test('decision artifact keeps findings, uncertainty and business paths in one mo
 
   assert.equal(artifact.findings[0].agentName, '衡生');
   assert.equal(artifact.gaps[0].perspective, 'medical');
-  assert.equal(artifact.paths[0].provenanceLabel, '智囊结论合成');
+  assert.equal(artifact.paths[0].provenanceLabel, '真实生成');
 });
 
 test('blocked deliberation cannot expose summary, oracle or paths', () => {
@@ -27,4 +27,19 @@ test('blocked deliberation cannot expose summary, oracle or paths', () => {
   assert.equal(artifact.summary, '');
   assert.equal(artifact.oracle, null);
   assert.deepEqual(artifact.paths, []);
+});
+
+test('decision paths expose whether they were model-generated or controlled fallback', () => {
+  const artifact = createDecisionArtifact({}, [
+    { id: 'generated', label: '先做一周小实验', provenance: 'agent-evidence' },
+    { id: 'fallback', label: '保持现状', provenance: 'controlled-fallback' },
+  ]);
+
+  assert.deepEqual(artifact.paths.map((path) => ({
+    kind: path.provenanceKind,
+    label: path.provenanceLabel,
+  })), [
+    { kind: 'generated', label: '真实生成' },
+    { kind: 'fallback', label: '规则兜底' },
+  ]);
 });

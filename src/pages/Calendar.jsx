@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
 import { getCards, getFollowUps, getUserId } from '../services/apiClient';
-import { buildDecisionCalendar } from './calendarModel';
+import { readLocalDecisionCards } from '../game/decisionCollectionStore.js';
+import { buildRecoverableDecisionCalendar } from './calendarModel';
 
 const T = {
   paper: '#F2EDE0',
@@ -31,17 +32,22 @@ export default function Calendar() {
   const [loadError, setLoadError] = useState('');
 
   const loadCalendar = useCallback(async () => {
-    try {
-      const [cards, followUpResult] = await Promise.all([
-        getCards(getUserId()),
-        getFollowUps(),
-      ]);
-      setEntries(buildDecisionCalendar(cards, followUpResult?.items || []));
+    const localCards = readLocalDecisionCards();
+    const [cardsResult, followUpsResult] = await Promise.allSettled([
+      getCards(getUserId()),
+      getFollowUps(),
+    ]);
+    const cloudCards = cardsResult.status === 'fulfilled' ? cardsResult.value : [];
+    const followUps = followUpsResult.status === 'fulfilled' ? followUpsResult.value?.items || [] : [];
+    setEntries(buildRecoverableDecisionCalendar({ cloudCards, localCards, followUps }));
+    const failed = [cardsResult, followUpsResult].filter((result) => result.status === 'rejected');
+    if (failed.length > 0) {
+      console.warn('[Calendar] 云端数据局部不可用，已保留可恢复记录');
+      setLoadError(localCards.length > 0
+        ? '云端暂未连通，当前展示本机保存的真实命签。'
+        : '云端暂未连通；重试后可同步命签与回访。');
+    } else {
       setLoadError('');
-    } catch (e) {
-      console.warn('[Calendar] 决策日历加载失败:', e.message);
-      setEntries([]);
-      setLoadError(e?.message || '决策日历暂不可用');
     }
   }, []);
 
@@ -81,7 +87,7 @@ export default function Calendar() {
   const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: F.regular }}>
+    <div className="xm-paper-page min-h-screen" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: F.regular }}>
 
       {/* Main Content */}
       <div className="pt-14 max-w-[900px] mx-auto px-6 py-12">
@@ -217,7 +223,7 @@ export default function Calendar() {
                     <div className="text-[12px]">{entry.decision || entry.summary}</div>
                     {entry.kind === 'follow-up' && (
                       <button
-                        onClick={() => navigate('/collection')}
+                        onClick={() => navigate('/cards')}
                         style={{ minHeight: 44, marginTop: 10, padding: '8px 12px', color: T.accent, border: `1px solid ${T.accent}40`, borderRadius: 3 }}
                       >
                         {entry.status === 'completed' ? '查看回访' : '去记录结果'}
@@ -238,7 +244,7 @@ export default function Calendar() {
           </div>
         )}
 
-        {!loadError && entries.length === 0 && (
+        {entries.length === 0 && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

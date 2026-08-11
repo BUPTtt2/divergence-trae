@@ -12,7 +12,7 @@ import eventBus from './eventBus.js';
 import { evidenceDomainEvent, planDomainEvents } from './agentEventSemantics.js';
 import { withRetry } from './retryHelper.js';
 import { buildIntakePlan, buildQuickPlan, routeDeliberationDepth } from './deliberationDepthRouter.js';
-import { buildInformationOrchestration } from './informationSufficiency.js';
+import { buildInformationOrchestration, summarizeCaseRound } from './informationSufficiency.js';
 import { analyzeCaseIntake } from './caseAnalystService.js';
 import { buildDecisionCase } from './decisionCaseService.js';
 import OrchestratorAgent from '../agents/system/OrchestratorAgent.js';
@@ -189,24 +189,6 @@ export async function ensurePlannerAnalysis(existingAnalysis, generateAnalysis) 
 
 // ============ 主入口 ============
 
-function reuseCaseAnalysis(previousAnalysis, previousFields, answers = []) {
-  const originUnderstanding = String(
-    previousAnalysis?.originUnderstanding || previousAnalysis?.understanding || '',
-  ).trim();
-  const confirmedContext = answers
-    .map((answer) => String(answer?.answer || answer?.text || answer?.content || '').trim())
-    .filter((answer) => answer && !/^(暂不回答|不知道|不清楚|跳过)$/.test(answer))
-    .slice(-6);
-  return {
-    ...previousAnalysis,
-    originUnderstanding,
-    understanding: confirmedContext.length > 0
-      ? `${originUnderstanding} 已确认补充：${confirmedContext.join('；')}。`
-      : originUnderstanding,
-    informationFields: previousFields,
-  };
-}
-
 /**
  * Plan 阶段主入口
  * @param {object} session { id?, user_id, question, state, round?, questionContext?, questionType? }
@@ -225,15 +207,13 @@ export async function plan(session, dependencies = {}) {
   const analyzeCase = dependencies.analyzeCaseIntakeFn || analyzeCaseIntake;
   const previousFields = session.plan?.informationFields || [];
   const previousAnalysis = session.plan?.caseAnalysis || null;
-  const caseAnalysis = previousAnalysis && previousFields.length >= 2
-    ? reuseCaseAnalysis(previousAnalysis, previousFields, session.answers || [])
-    : await analyzeCase({
-      question: session.question || question,
-      answers: session.answers || [],
-      previousFields,
-      previousAnalysis,
-      depth: depthRoute.depth,
-    });
+  const caseAnalysis = await analyzeCase({
+    question: session.question || question,
+    answers: session.answers || [],
+    previousFields,
+    previousAnalysis,
+    depth: depthRoute.depth,
+  });
   session.information_inferences = caseAnalysis.inferences;
   session.case_understanding = caseAnalysis.understanding;
   session.case_unknown_labels = caseAnalysis.unknownLabels;
@@ -244,7 +224,15 @@ export async function plan(session, dependencies = {}) {
     depth: depthRoute.depth,
     informationFields: caseAnalysis.informationFields,
   });
-  adaptiveIntake.caseAnalysis = caseAnalysis;
+  const caseRound = summarizeCaseRound({
+    question: session.question || question,
+    answers: session.answers || [],
+    caseAnalysis,
+    sufficiency: adaptiveIntake.sufficiency,
+  });
+  const enrichedCaseAnalysis = { ...caseAnalysis, ...caseRound };
+  adaptiveIntake.caseAnalysis = enrichedCaseAnalysis;
+  session.case_analysis = enrichedCaseAnalysis;
   if (depthRoute.depth !== 'quick' && !adaptiveIntake.sufficiency.complete) {
     const result = buildIntakePlan(session, adaptiveIntake, depthRoute);
     const saveSession = dependencies.saveSessionFn || memoryService.saveSession;
@@ -369,14 +357,20 @@ export async function plan(session, dependencies = {}) {
   // 编排总管在一次模型调用中同时完成问题拆解、维度规划与智囊推荐。
   const agentResult = await agentEngine.analyzeQuestion(question, userId, { useCustomAdvisors: true });
   const selectedAgentIds = Array.isArray(agentResult.agentIds) ? agentResult.agentIds : [];
+  const recommendationByAgent = new Map((Array.isArray(agentResult.recommendations) ? agentResult.recommendations : [])
+    .map((item) => [String(item?.agentId || ''), item]));
   const selectedAgents = selectedAgentIds
     .map(id => {
       const fromPool = typeof agentEngine.getAgentById === 'function' ? agentEngine.getAgentById(id) : null;
+      const recommendation = recommendationByAgent.get(id) || {};
       if (fromPool) return {
         id: fromPool.id, name: fromPool.name, stance: fromPool.stance,
         perspective: fromPool.perspective,
         role: fromPool.role || 'dynamic', trigram: fromPool.trigram || '☰',
-        color: fromPool.color || '#C8A850', glow: fromPool.glow || '#F0D890'
+        color: fromPool.color || '#C8A850', glow: fromPool.glow || '#F0D890',
+        reason: recommendation.reason || '',
+        recommendationScore: recommendation.score || null,
+        matchedDimensions: recommendation.matchedDimensions || [],
       };
       return null;
     })
@@ -419,6 +413,12 @@ export async function plan(session, dependencies = {}) {
     askUser: [],
     minFindings: MIN_FINDINGS,
     analysis: agentResult.analysis || '',
+    recommendation: {
+      source: agentResult.fallback ? 'controlled-fallback' : 'model',
+      agentIds: selectedAgentIds,
+      reasoning: agentResult.reasoning || '',
+      details: Array.isArray(agentResult.recommendations) ? agentResult.recommendations : [],
+    },
     informationFields: adaptiveIntake.informationFields,
     informationStates: adaptiveIntake.sufficiency.fieldStates,
     readiness: adaptiveIntake.sufficiency.readiness,
@@ -446,7 +446,7 @@ export async function plan(session, dependencies = {}) {
   deliberationPlan.askUser = askUser;
   deliberationPlan.round = session.round;
   deliberationPlan.openingLine = openingLine;
-  deliberationPlan.caseAnalysis = caseAnalysis;
+  deliberationPlan.caseAnalysis = enrichedCaseAnalysis;
   deliberationPlan.caseFile = buildDecisionCase({ session, plan: deliberationPlan, memories, depthRoute });
 
   // 7. 持久化（saveSession 会自动生成 id 若缺失）

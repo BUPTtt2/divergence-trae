@@ -63,9 +63,10 @@ export function initDB() {
     try {
       pool = new Pool({
         connectionString: DATABASE_URL,
-        max: 10,
+        max: process.env.NODE_ENV === 'production' ? 2 : 10,
         idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
+        connectionTimeoutMillis: 15000,
+        allowExitOnIdle: process.env.NODE_ENV === 'production',
         ssl: DATABASE_URL.includes('railway') || DATABASE_URL.includes('supabase')
           ? { rejectUnauthorized: false }
           : undefined,
@@ -232,7 +233,7 @@ export async function query(options) {
     const { table, action, data, filter, queryOptions, id, expected } = options;
 
     // 表名白名单校验
-    const ALLOWED_TABLES = ['users', 'refresh_tokens', 'cards', 'community_posts', 'community_replies', 'community_likes', 'achievements', 'user_memories', 'conversations', 'conversation_messages', 'custom_advisors', 'published_advisors', 'advisor_subscriptions', 'daily_divinations', 'user_levels', 'decision_follow_ups', 'product_events', 'inference_sessions', 'shared_agents', 'agent_usage_log', 'deliberation_sessions', 'session_summaries', 'user_memory', 'deliberation_events', 'deliberation_snapshots', 'deliberation_commands', 'session_eval'];
+    const ALLOWED_TABLES = ['users', 'refresh_tokens', 'cards', 'community_posts', 'community_replies', 'community_likes', 'achievements', 'user_memories', 'conversations', 'conversation_messages', 'custom_advisors', 'published_advisors', 'advisor_subscriptions', 'daily_divinations', 'user_levels', 'decision_follow_ups', 'product_events', 'inference_sessions', 'shared_agents', 'agent_usage_log', 'llm_usage_events', 'deliberation_sessions', 'session_summaries', 'user_memory', 'deliberation_events', 'deliberation_snapshots', 'deliberation_commands', 'session_eval'];
     if (!ALLOWED_TABLES.includes(table)) {
       throw new Error(`非法表名: ${table}`);
     }

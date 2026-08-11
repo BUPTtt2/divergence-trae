@@ -1,356 +1,408 @@
-/* ============================================================
-   【全新流程动画 3/3】命牌 3D 翻牌 DestinyRevealFX
-   - 仅在 phase=path_reveal / final 时激活
-   - 动画分 5 段：
-     1. 升起：牌从地下(-y)升到正前方(y=0.3, z=0.2)
-     2. 翻牌：Y 轴 180° 翻开（背面 → 正面）
-     3. 定住：牌面稳定，朱砂印出现
-     4. 光晕：牌周围出现金色光晕粒子
-     5. 悬浮：轻微上下浮动，保持微旋转
-   - 牌面使用 canvas 纹理（卦象名 + 关键字 + 朱砂印）
-   ============================================================ */
-import { useMemo, useRef, useEffect } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useEffect, useMemo, useRef } from 'react';
+import { useFrame } from '@react-three/fiber';
+import { useReducedMotion } from 'framer-motion';
 import * as THREE from 'three';
+import { buildFateCardPresentation } from '../../game/fateCardPresentation';
+import {
+  createTrigramOrbit,
+  DESTINY_ARCHIVE_ARTWORK,
+  resolveDestinyArtwork,
+  shouldShowDestinyCeremony,
+} from '../../game/destinyCeremonyModel';
 
-/* 生成命牌正面纹理 */
-function createCardFrontTexture({
-  guaName = '大有',
-  guaIcon = '☰',
-  summary = '元亨',
-  key1 = '天垂象',
-  key2 = '利有攸往',
-  key3 = '君子自强',
-  color = '#B83828',
-}) {
-  const W = 512, H = 768;
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const ctx = c.getContext('2d');
-  // 1. 背景：宣纸渐变
-  const bg = ctx.createLinearGradient(0, 0, 0, H);
-  bg.addColorStop(0, '#F3E9D2');
-  bg.addColorStop(0.5, '#F0E4C6');
-  bg.addColorStop(1, '#E6D4AE');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-  // 2. 边框 (双框)
-  ctx.strokeStyle = '#9A6A38';
-  ctx.lineWidth = 5;
-  ctx.strokeRect(24, 24, W - 48, H - 48);
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(36, 36, W - 72, H - 72);
-  // 3. 卦象大字 + 符号
-  ctx.fillStyle = '#3A2414';
-  ctx.font = `800 ${W * 0.18}px "Ma Shan Zheng", "STKaiti", serif`;
-  ctx.textAlign = 'center';
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 18;
-  ctx.fillText(guaName, W / 2, H * 0.18);
-  ctx.shadowBlur = 0;
-  // 卦象符号(更大)
-  ctx.font = `700 ${W * 0.24}px "Ma Shan Zheng", serif`;
-  ctx.fillStyle = color;
-  ctx.globalAlpha = 0.92;
-  ctx.fillText(guaIcon, W / 2, H * 0.34);
-  ctx.globalAlpha = 1;
-  // 4. 卦辞
-  ctx.fillStyle = '#4A3018';
-  ctx.font = `600 ${W * 0.06}px "Ma Shan Zheng", "STKaiti", serif`;
-  ctx.fillText('卦  辞', W / 2, H * 0.48);
-  ctx.font = `500 ${W * 0.052}px "STKaiti", "KaiTi", serif`;
-  ctx.fillStyle = '#6A4020';
-  ctx.fillText(summary.slice(0, 12), W / 2, H * 0.54);
-  // 5. 三行关键要点（每行带前缀·）
-  const kY0 = H * 0.64;
-  const kGap = H * 0.075;
-  ctx.fillStyle = '#4A3018';
-  ctx.font = `500 ${W * 0.045}px "Ma Shan Zheng", "STKaiti", serif`;
-  ctx.textAlign = 'left';
-  [key1, key2, key3].forEach((k, i) => {
-    ctx.fillStyle = color;
-    ctx.fillText('·', W * 0.18, kY0 + kGap * i);
-    ctx.fillStyle = '#3A2414';
-    ctx.fillText(String(k || '').slice(0, 12), W * 0.22, kY0 + kGap * i);
-  });
-  ctx.textAlign = 'center';
-  // 6. 朱砂印（右下角）
-  const sealSize = W * 0.16;
-  const sx = W * 0.78 - sealSize / 2;
-  const sy = H * 0.88 - sealSize / 2;
-  ctx.save();
-  ctx.translate(sx + sealSize / 2, sy + sealSize / 2);
-  ctx.rotate(-0.08);
-  ctx.strokeStyle = '#B23420';
-  ctx.lineWidth = 5;
-  ctx.fillStyle = 'rgba(178,52,32,0.86)';
-  ctx.shadowColor = '#B23420';
-  ctx.shadowBlur = 6;
-  ctx.fillRect(-sealSize / 2, -sealSize / 2, sealSize, sealSize);
-  ctx.strokeRect(-sealSize / 2, -sealSize / 2, sealSize, sealSize);
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = '#FFF4E0';
-  ctx.font = `700 ${sealSize * 0.4}px "Ma Shan Zheng", serif`;
-  ctx.fillText('演', 0, -sealSize * 0.12);
-  ctx.font = `500 ${sealSize * 0.28}px "STKaiti", serif`;
-  ctx.fillText('之印', 0, sealSize * 0.28);
-  ctx.restore();
-  return new THREE.CanvasTexture(c);
+const CARD_W = 1.46;
+const CARD_H = 2.19;
+const GOLD = '#d9b75f';
+const MOON = '#fff8df';
+const JADE = '#dff8eb';
+const CINNABAR = '#b94732';
+
+function shortText(value, length = 20, fallback = '') {
+  const text = String(value || '').replace(/[_*#`]+/g, '').replace(/\s+/g, ' ').trim();
+  return (text || fallback).slice(0, length);
 }
 
-/* 命牌背面纹理（金/暗木色 + 八卦小环） */
-function createCardBackTexture({ color = '#D4A060' } = {}) {
-  const W = 512, H = 768;
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const ctx = c.getContext('2d');
-  // 背景
-  const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, '#3A2214');
-  bg.addColorStop(0.5, '#4F2F1C');
-  bg.addColorStop(1, '#2A1608');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-  // 外圈：金漆描边
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 9;
-  ctx.strokeRect(28, 28, W - 56, H - 56);
-  ctx.strokeStyle = 'rgba(240,210,150,0.35)';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(48, 48, W - 96, H - 96);
-  // 中心大太极
-  const cx = W / 2, cy = H / 2;
-  const R = Math.min(W, H) * 0.2;
+function hexagramName(oracle, fallback = '本卦') {
+  if (typeof oracle?.primary === 'string') return shortText(oracle.primary, 5, fallback);
+  const name = oracle?.primary?.name || [oracle?.primary?.lower?.name, oracle?.primary?.upper?.name].filter(Boolean).join('');
+  return shortText(oracle?.gua || name, 5, fallback);
+}
+
+function drawGlowText(ctx, text, x, y, font, color = MOON, blur = 12, align = 'center') {
   ctx.save();
-  ctx.translate(cx, cy);
-  // 阴
-  ctx.beginPath();
-  ctx.fillStyle = '#E8D4A0';
-  ctx.arc(0, 0, R, 0, Math.PI * 2);
-  ctx.fill();
-  // 阳半圆
-  ctx.beginPath();
-  ctx.fillStyle = '#3A2214';
-  ctx.arc(0, 0, R, -Math.PI / 2, Math.PI / 2);
-  ctx.fill();
-  // 两个小圆
-  ctx.beginPath();
-  ctx.fillStyle = '#E8D4A0';
-  ctx.arc(0, R / 2, R / 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.fillStyle = '#3A2214';
-  ctx.arc(0, -R / 2, R / 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-  // 环 8 卦字
-  ctx.font = `600 ${W * 0.055}px "Ma Shan Zheng", serif`;
-  ctx.fillStyle = 'rgba(240,210,150,0.85)';
-  ctx.textAlign = 'center';
+  ctx.textAlign = align;
   ctx.textBaseline = 'middle';
-  const trigrams = ['☰', '☱', '☲', '☳', '☴', '☵', '☶', '☷'];
-  const trR = R + W * 0.08;
-  for (let i = 0; i < 8; i++) {
-    const a = -Math.PI / 2 + (i / 8) * Math.PI * 2;
-    ctx.fillText(trigrams[i], cx + Math.cos(a) * trR, cy + Math.sin(a) * trR);
-  }
-  // 四角装饰
-  const corner = (x, y, w, h) => {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(x, y + h);
-    ctx.lineTo(x, y);
-    ctx.lineTo(x + w, y);
-    ctx.stroke();
-  };
-  corner(60, 60, 40, 40);
-  corner(W - 60, 60, -40, 40);
-  corner(60, H - 60, 40, -40);
-  corner(W - 60, H - 60, -40, -40);
-  return new THREE.CanvasTexture(c);
+  ctx.font = font;
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur;
+  ctx.fillText(text, x, y);
+  ctx.restore();
 }
 
-/* 命牌 3D 组件：前后两面 + 厚度 */
-function DestinyCard({
-  delay = 0.6,
-  guaName = '大有',
-  guaIcon = '☰',
-  summary = '元亨利贞',
-  keys = [],
-  color = '#B83828',
-}) {
-  const cardGroup = useRef();
-  const stateRef = useRef({
-    t: 0, risen: false, flipped: false, stamped: false,
+function drawYao(ctx, x, y, width, broken, alpha = 1) {
+  ctx.save();
+  ctx.fillStyle = `rgba(255,244,201,${alpha})`;
+  ctx.shadowColor = '#fff2bd';
+  ctx.shadowBlur = 12;
+  const h = 7;
+  if (broken) {
+    const part = width * 0.41;
+    ctx.fillRect(x - width / 2, y - h / 2, part, h);
+    ctx.fillRect(x + width / 2 - part, y - h / 2, part, h);
+  } else {
+    ctx.fillRect(x - width / 2, y - h / 2, width, h);
+  }
+  ctx.restore();
+}
+
+function createFrontTexture({ guaName, guaIcon, question, title, summary, keys, lineMeta, sourceMark }) {
+  const W = 640;
+  const H = 960;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(8,9,7,.2)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = 'rgba(255,232,154,.82)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(32, 28, W - 64, H - 56);
+  ctx.strokeStyle = 'rgba(255,244,204,.34)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(48, 44, W - 96, H - 88);
+  ctx.strokeRect(58, 54, W - 116, H - 108);
+
+  const meta = Array.isArray(lineMeta) ? lineMeta : [];
+  for (let i = 0; i < 6; i += 1) {
+    const value = meta[i]?.value ?? meta[i]?.yinYang ?? meta[i]?.type;
+    const broken = value === 0 || value === 'yin' || value === '阴' || value === 'broken';
+    drawYao(ctx, W / 2, 96 + i * 18, 122, broken, 0.48 + i * 0.07);
+  }
+
+  drawGlowText(ctx, '易 · 本局命牌', W / 2, 220, '500 20px "STKaiti", serif', '#e7c96f', 7);
+  drawGlowText(ctx, shortText(guaName, 5, '本卦'), W / 2, 310, '700 88px "STKaiti", "KaiTi", serif', MOON, 22);
+  drawGlowText(ctx, shortText(guaIcon, 3, '☯'), W / 2, 412, '500 104px "STKaiti", serif', '#fff0a8', 28);
+
+  ctx.strokeStyle = 'rgba(231,202,111,.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(110, 492);
+  ctx.lineTo(W - 110, 492);
+  ctx.stroke();
+  drawGlowText(ctx, '所问', 104, 532, '500 17px "STKaiti", serif', '#bda65e', 4, 'left');
+  drawGlowText(ctx, shortText(question, 22, '本局所问'), 170, 532, '500 22px "STKaiti", "KaiTi", serif', '#dff1e5', 6, 'left');
+  if (title) drawGlowText(ctx, shortText(title, 20), W / 2, 594, '600 30px "STKaiti", "KaiTi", serif', '#fff9e8', 8);
+  if (summary) drawGlowText(ctx, shortText(summary, 28), W / 2, 634, '500 18px "STKaiti", "KaiTi", serif', '#d9d1bf', 4);
+
+  const actions = (Array.isArray(keys) ? keys : []).filter(Boolean).slice(0, 3);
+  actions.forEach((item, index) => {
+    const y = 706 + index * 58;
+    drawGlowText(ctx, String(index + 1).padStart(2, '0'), 116, y, '600 18px Georgia, serif', '#d9b75f', 5, 'left');
+    drawGlowText(ctx, shortText(item?.label || item?.title || item, 18), 172, y, '500 25px "STKaiti", "KaiTi", serif', index === 0 ? '#fff9e7' : '#dff1e5', 7, 'left');
   });
-  const { camera } = useThree();
 
-  // BUG FIX: keys 安全兜底（非数组一律转空数组，避免 reading '0' of undefined）
-  const safeKeys = Array.isArray(keys) ? keys : [];
-  const k0 = safeKeys.length >= 1 ? safeKeys[0] : '天垂象';
-  const k1 = safeKeys.length >= 2 ? safeKeys[1] : '利有攸往';
-  const k2 = safeKeys.length >= 3 ? safeKeys[2] : '君子自强';
+  ctx.save();
+  ctx.translate(W - 118, H - 116);
+  ctx.rotate(-0.06);
+  ctx.fillStyle = 'rgba(185,71,50,.88)';
+  ctx.strokeStyle = 'rgba(255,135,105,.9)';
+  ctx.lineWidth = 3;
+  ctx.shadowColor = CINNABAR;
+  ctx.shadowBlur = 18;
+  ctx.fillRect(-42, -42, 84, 84);
+  ctx.strokeRect(-42, -42, 84, 84);
+  drawGlowText(ctx, '演', 0, -10, '700 35px "STKaiti", serif', '#fff5df', 4);
+  drawGlowText(ctx, '落印', 0, 22, '500 16px "STKaiti", serif', '#fff5df', 3);
+  ctx.restore();
 
-  const frontTex = useMemo(() => createCardFrontTexture({
-    guaName: String(guaName || '大有').slice(0, 4),
-    guaIcon: String(guaIcon || '☰').slice(0, 2),
-    summary: String(summary || '元亨利贞').slice(0, 12),
-    key1: k0, key2: k1, key3: k2,
-    color: color || '#B83828',
-  }), [guaName, guaIcon, summary, k0, k1, k2, color]);
-  const backTex = useMemo(() => createCardBackTexture({ color: color || '#D4A060' }), [color]);
+  ctx.save();
+  ctx.translate(92, H - 96);
+  ctx.fillStyle = sourceMark === '藏' ? 'rgba(107,91,60,.9)' : 'rgba(185,71,50,.9)';
+  ctx.fillRect(-24, -24, 48, 48);
+  drawGlowText(ctx, sourceMark || '灵', 0, 1, '700 24px "STKaiti", serif', '#fff5df', 3);
+  ctx.restore();
 
-  // 牌尺寸
-  const W = 1.6, H = 2.4, T = 0.08;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
 
-  useFrame((_, dtRaw) => {
-    if (!cardGroup.current) return;
-    const dt = Math.min(dtRaw, 0.05);
-    stateRef.current.t += dt;
-    const t = Math.max(0, stateRef.current.t - delay);
-    // 1. 升起 (0-0.6s): 从屏幕下方浮到「光球的左前上方」，避开中央八卦罗盘 & 右侧命签面板
-    //    终点位置：x 向左偏移 1.4，y 升到 1.9，z 推到 1.4（相机空间前方）
-    const riseT = Math.min(1, t / 0.6);
-    const easeRise = 1 - Math.pow(1 - riseT, 3);
-    const y = -3 + (4.9) * easeRise;              // end y ≈ 1.9
-    const z = -0.4 + (1.8) * easeRise;              // end z ≈ 1.4（浮到近前，不挡罗盘）
-    const x = 0 + (-1.4) * easeRise;                // end x ≈ -1.4（左偏，避开右侧 FateCardPanel）
-    // 2. 翻牌 (0.5-1.3s): rotY 0 → π
-    const flipT = Math.max(0, Math.min(1, (t - 0.5) / 0.8));
-    const easeFlip = flipT < 0.5 ? 2 * flipT * flipT : 1 - Math.pow(-2 * flipT + 2, 2) / 2;
-    const rotY = -Math.PI * easeFlip;
-    // 3. 浮动 (1.3s+): sin 上下 + 微自转
-    let floatY = 0, floatRotY = 0, floatRotX = 0, floatZ = 0;
-    if (flipT >= 1) {
-      floatY = Math.sin(t * 1.2) * 0.07;
-      floatRotY = Math.sin(t * 0.7) * 0.06;
-      floatRotX = Math.sin(t * 0.5) * 0.04;
-      floatZ = Math.sin(t * 0.9) * 0.04;
-    }
-    cardGroup.current.position.set(x, y + floatY, z + floatZ);
-    // 轻微内倾 + 朝向相机，不跟罗盘/光球重叠
-    cardGroup.current.rotation.set(
-      -0.05 + floatRotX,
-      rotY + 0.08 + floatRotY,
-      0.03,
-    );
+function createBackTexture({ lineMeta }) {
+  const W = 640;
+  const H = 960;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.fillStyle = '#050605';
+  ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(W / 2, H / 2, 20, W / 2, H / 2, W * 0.65);
+  glow.addColorStop(0, 'rgba(255,250,224,.32)');
+  glow.addColorStop(0.5, 'rgba(217,183,95,.12)');
+  glow.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(18,24,21,.42)';
+  ctx.fillRect(38, 34, W - 76, H - 68);
+  ctx.strokeStyle = 'rgba(255,235,167,.9)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(32, 28, W - 64, H - 56);
+  ctx.strokeStyle = 'rgba(229,201,112,.32)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(49, 45, W - 98, H - 90);
+
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  for (let ring = 0; ring < 3; ring += 1) {
+    ctx.strokeStyle = `rgba(255,232,150,${0.5 - ring * 0.12})`;
+    ctx.lineWidth = ring === 0 ? 3 : 1;
+    ctx.beginPath();
+    ctx.arc(0, 0, 130 + ring * 34, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  drawGlowText(ctx, '☯', 0, 0, '500 178px "STKaiti", serif', '#fff6d7', 34);
+  ['☰','☱','☲','☳','☴','☵','☶','☷'].forEach((glyph, index) => {
+    const angle = index / 8 * Math.PI * 2 - Math.PI / 2;
+    drawGlowText(ctx, glyph, Math.cos(angle) * 235, Math.sin(angle) * 235, '500 38px serif', '#e6c86e', 9);
+  });
+  ctx.restore();
+
+  const meta = Array.isArray(lineMeta) ? lineMeta : [];
+  for (let i = 0; i < 6; i += 1) {
+    const value = meta[i]?.value ?? meta[i]?.yinYang ?? meta[i]?.type;
+    drawYao(ctx, W / 2, 728 + i * 24, value === 0 || value === 'yin' || value === '阴', 0.58 + i * 0.05);
+  }
+  drawGlowText(ctx, '六爻待明 · 触牌揭示', W / 2, 882, '500 22px "STKaiti", serif', '#e5cf8b', 8);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
+
+function createGlyphTexture(glyph, color = '#f6dda0', size = 256) {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const glow = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size * 0.48);
+  glow.addColorStop(0, 'rgba(228,194,111,.18)');
+  glow.addColorStop(1, 'rgba(228,194,111,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, size, size);
+  drawGlowText(ctx, glyph, size / 2, size / 2, `500 ${Math.round(size * 0.5)}px "STKaiti", "KaiTi", serif`, color, size * 0.065);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function TrigramCrown({ active, reducedMotion }) {
+  const groupRef = useRef();
+  const orbit = useMemo(() => createTrigramOrbit(0.9), []);
+  const glyphTextures = useMemo(() => orbit.map((item) => createGlyphTexture(item.glyph)), [orbit]);
+  const yanTexture = useMemo(() => createGlyphTexture('演', '#fff5d3', 384), []);
+
+  useEffect(() => () => {
+    glyphTextures.forEach((texture) => texture.dispose());
+    yanTexture.dispose();
+  }, [glyphTextures, yanTexture]);
+
+  useFrame(({ clock }) => {
+    if (!groupRef.current) return;
+    const time = clock.getElapsedTime();
+    groupRef.current.rotation.z = reducedMotion ? 0 : Math.sin(time * 0.14) * 0.055;
+    groupRef.current.children.forEach((child, index) => {
+      if (!child.material) return;
+      const pulse = reducedMotion ? 0 : Math.sin(time * 1.05 - index * 0.48) * 0.08;
+      child.material.opacity = active ? 0.52 + pulse : 0.22;
+    });
   });
 
   return (
-    <group ref={cardGroup} position={[0, -3, -0.4]}>
-      {/* 正面 (朝向 -z, 翻完后对向屏幕) */}
-      <mesh position={[0, 0, -T / 2]}>
-        <planeGeometry args={[W, H]} />
-        <meshStandardMaterial map={frontTex} roughness={0.7} metalness={0.08} transparent={false} />
-      </mesh>
-      {/* 背面 */}
-      <mesh position={[0, 0, T / 2]} rotation={[0, Math.PI, 0]}>
-        <planeGeometry args={[W, H]} />
-        <meshStandardMaterial map={backTex} roughness={0.6} metalness={0.1} transparent={false} />
-      </mesh>
-      {/* 4 个侧面（简单box组合做厚度） */}
-      <mesh position={[0, H / 2, 0]}>
-        <boxGeometry args={[W, T, T]} />
-        <meshStandardMaterial color="#3A2214" />
-      </mesh>
-      <mesh position={[0, -H / 2, 0]}>
-        <boxGeometry args={[W, T, T]} />
-        <meshStandardMaterial color="#3A2214" />
-      </mesh>
-      <mesh position={[-W / 2, 0, 0]}>
-        <boxGeometry args={[T, H, T]} />
-        <meshStandardMaterial color="#2A1608" />
-      </mesh>
-      <mesh position={[W / 2, 0, 0]}>
-        <boxGeometry args={[T, H, T]} />
-        <meshStandardMaterial color="#2A1608" />
+    <group ref={groupRef} position={[0, 2.63, 0.26]}>
+      <sprite scale={[0.56, 0.56, 1]}>
+        <spriteMaterial map={yanTexture} transparent opacity={active ? 0.78 : 0.42} depthWrite={false} blending={THREE.AdditiveBlending} />
+      </sprite>
+      {orbit.map((item, index) => (
+        <sprite key={item.glyph} position={[item.x, item.y, 0]} scale={[0.3, 0.3, 1]}>
+          <spriteMaterial map={glyphTextures[index]} transparent opacity={0.5} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </sprite>
+      ))}
+      <mesh>
+        <ringGeometry args={[1.08, 1.088, 96]} />
+        <meshBasicMaterial color={GOLD} transparent opacity={active ? 0.2 : 0.08} depthWrite={false} blending={THREE.AdditiveBlending} side={THREE.DoubleSide} />
       </mesh>
     </group>
   );
 }
 
-/* 命牌周围金色 halo 粒子 */
-function CardHalo({ active = false }) {
-  const ref = useRef();
-  const startRef = useRef(-1);
-  const count = 220;
-  const [positions, phases, colors] = useMemo(() => {
-    const p = new Float32Array(count * 3);
-    const ph = new Float32Array(count);
-    const co = new Float32Array(count * 3);
-    const g = new THREE.Color('#F0D080');
-    for (let i = 0; i < count; i++) {
-      // 初始：以牌所在位置为中心的椭球
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      const r = 1.4 + Math.random() * 0.6;
-      p[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
-      p[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta) * 0.8 + 0.4;
-      p[i * 3 + 2] = r * Math.cos(phi);
-      ph[i] = Math.random() * Math.PI * 2;
-      const rr = 0.85 + Math.random() * 0.3;
-      co[i * 3]     = Math.min(1, g.r * rr);
-      co[i * 3 + 1] = Math.min(1, g.g * rr);
-      co[i * 3 + 2] = Math.min(1, g.b * rr);
-    }
-    return [p, ph, co];
-  }, []);
+function DestinyCard({ guaName, guaIcon, presentation, lineMeta, revealed, reducedMotion, artworkUrl }) {
+  const groupRef = useRef();
+  const stateRef = useRef({ elapsed: 0, revealElapsed: 0 });
+  const front = useMemo(() => createFrontTexture({
+    guaName,
+    guaIcon,
+    question: presentation.question,
+    title: presentation.title,
+    summary: presentation.summary,
+    keys: presentation.actions,
+    lineMeta,
+    sourceMark: presentation.sourceMark,
+  }), [guaName, guaIcon, presentation, lineMeta]);
+  const back = useMemo(() => createBackTexture({ lineMeta }), [lineMeta]);
+  const surface = useMemo(() => {
+    const loader = new THREE.TextureLoader();
+    const texture = loader.load(artworkUrl || DESTINY_ARCHIVE_ARTWORK, (loaded) => {
+      loaded.colorSpace = THREE.SRGBColorSpace;
+      loaded.anisotropy = 8;
+    }, undefined, () => {
+      if ((artworkUrl || DESTINY_ARCHIVE_ARTWORK) === DESTINY_ARCHIVE_ARTWORK) return;
+      loader.load(DESTINY_ARCHIVE_ARTWORK, (fallback) => {
+        texture.image = fallback.image;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.needsUpdate = true;
+        fallback.dispose();
+      });
+    });
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }, [artworkUrl]);
 
-  useFrame(({ clock }) => {
-    if (!ref.current) return;
-    const t = clock.getElapsedTime();
-    if (active && startRef.current < 0) startRef.current = t;
-    const posAttr = ref.current.geometry.attributes.position;
-    const arr = posAttr.array;
-    for (let i = 0; i < count; i++) {
-      const ang = phases[i] + t * 0.8;
-      const r0 = 1.3 + 0.25 * Math.sin(ang);
-      const theta = (i / count) * Math.PI * 2 + t * 0.3;
-      const phi = Math.acos(Math.sin((i / count) * Math.PI + t * 0.15));
-      arr[i * 3]     = r0 * Math.sin(phi) * Math.cos(theta);
-      arr[i * 3 + 1] = r0 * Math.sin(phi) * Math.sin(theta) * 0.75 + 0.35;
-      arr[i * 3 + 2] = r0 * Math.cos(phi);
-    }
-    posAttr.needsUpdate = true;
-    // opacity
-    const k = startRef.current > 0 ? Math.min(1, (t - startRef.current) / 0.8) : 0;
-    ref.current.material.opacity = 0.85 * k;
+  useEffect(() => () => {
+    front.dispose();
+    back.dispose();
+    surface.dispose();
+  }, [back, front, surface]);
+
+  useFrame((_, rawDelta) => {
+    if (!groupRef.current) return;
+    const delta = Math.min(rawDelta, 0.05);
+    stateRef.current.elapsed += delta;
+    stateRef.current.revealElapsed = revealed ? stateRef.current.revealElapsed + delta : 0;
+    const rise = reducedMotion ? 1 : THREE.MathUtils.smoothstep(stateRef.current.elapsed, 0.08, 1.15);
+    const flip = revealed && reducedMotion ? 1 : THREE.MathUtils.smoothstep(stateRef.current.revealElapsed, 0.08, 0.95);
+    const float = !reducedMotion && flip > 0.98 ? Math.sin(stateRef.current.elapsed * 0.72) * 0.026 : 0;
+    groupRef.current.position.set(0, -2.8 + rise * 4.02 + float, 0.58);
+    groupRef.current.rotation.set(-0.025, -Math.PI * flip + Math.sin(stateRef.current.elapsed * 0.32) * 0.018, 0.01);
+    const scale = 0.78 + rise * 0.16;
+    groupRef.current.scale.setScalar(scale);
   });
 
   return (
-    <points ref={ref} frustumCulled={false} visible={active}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" count={count} array={positions} itemSize={3} />
-        <bufferAttribute attach="attributes-color"    count={count} array={colors}    itemSize={3} />
-      </bufferGeometry>
-      <pointsMaterial
-        size={0.055}
-        vertexColors
-        transparent
-        opacity={0}
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-        sizeAttenuation
-      />
-    </points>
+    <group ref={groupRef} position={[0, -2.7, 0.58]}>
+      <mesh position={[0, 0, -0.022]} rotation={[0, Math.PI, 0]}>
+        <planeGeometry args={[CARD_W, CARD_H]} />
+        <meshBasicMaterial map={surface} color="#d8cba8" transparent opacity={1} side={THREE.DoubleSide} toneMapped={false} />
+      </mesh>
+      <mesh position={[0, 0, -0.034]} rotation={[0, Math.PI, 0]}>
+        <planeGeometry args={[CARD_W, CARD_H]} />
+        <meshBasicMaterial map={front} transparent opacity={1} side={THREE.DoubleSide} toneMapped={false} />
+      </mesh>
+      <mesh position={[0, 0, 0.025]}>
+        <planeGeometry args={[CARD_W, CARD_H]} />
+        <meshBasicMaterial map={back} transparent opacity={1} side={THREE.DoubleSide} toneMapped={false} />
+      </mesh>
+      <mesh>
+        <boxGeometry args={[CARD_W + 0.018, CARD_H + 0.018, 0.045]} />
+        <meshBasicMaterial color={GOLD} transparent opacity={0.28} wireframe depthWrite={false} />
+      </mesh>
+      <pointLight position={[0, 0.05, 0.42]} color={revealed ? MOON : '#e8cd83'} intensity={revealed ? 0.8 : 0.45} distance={3.2} decay={2} />
+    </group>
   );
 }
 
-export default function DestinyRevealFX({
-  phase,
-  oracle = null,
-  dynamicChoices = [],
-  selectedChoice = null,
-  revealed = false,
-}) {
-  // ★ 修复：命牌页（path_reveal/final）不再渲染 3D 浮起命牌和金色粒子特效
-  //   原设计：左前上方浮起一张命牌 + 周围光晕粒子
-  //   用户反馈：视觉冗余，且这张牌与右侧 FateCardPanel 命牌面板内容重复、关系混乱
-  //   新设计：所有命牌内容统一在右侧 FateCardPanel 显示，3D 场景留给中央八卦罗盘 & 智囊光球
+function YaoIgnition({ active }) {
+  const refs = useRef([]);
+  useFrame(({ clock }) => {
+    const time = clock.getElapsedTime();
+    refs.current.forEach((mesh, index) => {
+      if (!mesh) return;
+      const wave = Math.max(0.12, Math.sin(time * 2.15 - index * 0.52));
+      mesh.material.opacity = active ? 0.18 + wave * 0.72 : 0.08;
+      mesh.scale.x = 0.82 + wave * 0.22;
+    });
+  });
   return (
-    <group visible={false} position={[0, 0, 0]}>
-      {/* 保持组件挂载接口不变，避免 Board/Board3D 报错；内容始终不显示 */}
+    <group position={[0, 1.2, 0.84]}>
+      {Array.from({ length: 6 }, (_, index) => (
+        <mesh key={index} ref={(node) => { refs.current[index] = node; }} position={[0, -0.29 + index * 0.115, 0]}>
+          <planeGeometry args={[0.76, 0.022]} />
+          <meshBasicMaterial color={index < 3 ? GOLD : MOON} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function Halo({ active }) {
+  const outerRef = useRef();
+  const innerRef = useRef();
+  useFrame(({ clock }) => {
+    const time = clock.getElapsedTime();
+    if (outerRef.current) {
+      outerRef.current.rotation.z = time * 0.14;
+      outerRef.current.material.opacity = active ? 0.22 + Math.sin(time) * 0.07 : 0.07;
+    }
+    if (innerRef.current) {
+      innerRef.current.rotation.z = -time * 0.22;
+      innerRef.current.material.opacity = active ? 0.3 + Math.sin(time * 1.3) * 0.08 : 0.08;
+    }
+  });
+  return (
+    <group position={[0, 1.18, 0.4]}>
+      <mesh ref={outerRef}>
+        <ringGeometry args={[0.73, 0.742, 96]} />
+        <meshBasicMaterial color={GOLD} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh ref={innerRef}>
+        <ringGeometry args={[0.57, 0.579, 72]} />
+        <meshBasicMaterial color={JADE} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  );
+}
+
+export default function DestinyRevealFX({ phase, oracle = null, dynamicChoices = [], selectedChoice = null, revealed = false, inference = null, artwork = null }) {
+  const reducedMotion = useReducedMotion();
+  const active = shouldShowDestinyCeremony(phase);
+  const choice = useMemo(
+    () => selectedChoice || dynamicChoices[0] || {},
+    [dynamicChoices, selectedChoice],
+  );
+  const guaName = hexagramName(oracle, choice?.gua || '本卦');
+  const guaIcon = oracle?.trigram || oracle?.primary?.symbol || choice?.trigram || '☯';
+  const presentation = useMemo(() => {
+    const base = buildFateCardPresentation({
+      fateContent: choice?.fateContent || null,
+      inference,
+      selectedChoice: choice,
+      question: choice?.question || oracle?.question || '',
+    });
+    return {
+      ...base,
+      summary: base.summary || shortText(oracle?.text || oracle?.tip || choice?.description, 56),
+      actions: base.actions.length
+        ? base.actions
+        : (choice?.keyPoints || choice?.steps || oracle?.actions || []).slice(0, 3),
+    };
+  }, [choice, inference, oracle]);
+  const lineMeta = oracle?.lineMeta || oracle?.lines || oracle?.yao || [];
+  const artworkUrl = resolveDestinyArtwork(artwork, choice);
+
+  if (!active) return null;
+  return (
+    <group position={[phase === 'final' ? -1.28 : -0.18, 0, 0]}>
+      {!reducedMotion && <YaoIgnition active={!revealed} />}
+      {!reducedMotion && <Halo active={revealed} />}
+      <TrigramCrown active={revealed} reducedMotion={reducedMotion} />
+      <DestinyCard guaName={guaName} guaIcon={guaIcon} presentation={presentation} lineMeta={lineMeta} revealed={revealed} reducedMotion={reducedMotion} artworkUrl={artworkUrl} />
     </group>
   );
 }

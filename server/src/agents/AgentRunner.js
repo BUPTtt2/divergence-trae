@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import eventBus from '../services/eventBus.js';
 import logger from '../services/logger.js';
 import { withRetry, withTimeout } from '../services/retryHelper.js';
+import { withLLMUsageContext } from '../services/llmUsageContext.js';
 import BaseAgent from './BaseAgent.js';
 
 const FAIL_WINDOW_MS = 5 * 60 * 1000;
@@ -146,7 +147,17 @@ async function executeAgentRun(agent, baseCtx, { actionId, correlationId, round,
 
   let result;
   try {
-    const wrapped = () => withTimeout(async () => agent.run(sessionCtx), agent.timeoutMs, `Agent:${agent.id}`);
+    const wrapped = () => withTimeout(
+      async () => withLLMUsageContext({
+        sessionId: baseCtx.sessionId,
+        userId: baseCtx.userId,
+        agentId: agent.id,
+        stage: actionId,
+        actionId,
+      }, () => agent.run(sessionCtx)),
+      agent.timeoutMs,
+      `Agent:${agent.id}`,
+    );
     result = agent.retries > 0
       ? await withRetry(wrapped, { retries: agent.retries, delayMs: 600, backoffMs: 1200, name: `Agent:${agent.id}` })
       : await wrapped();

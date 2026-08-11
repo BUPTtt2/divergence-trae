@@ -8,6 +8,10 @@ function createHmac(secret, data) {
   return crypto.createHmac('sha256', secret).update(data).digest('hex');
 }
 
+function allowLegacyIdentity() {
+  return process.env.NODE_ENV !== 'production' && process.env.ALLOW_LEGACY_AUTH === 'true';
+}
+
 function extractBearerIdentity(req) {
   const authHeader = req.headers.authorization;
   const bearerMatch = typeof authHeader === 'string'
@@ -16,7 +20,7 @@ function extractBearerIdentity(req) {
   if (bearerMatch) {
     const token = (bearerMatch[1] || '').trim();
     if (!token) return { present: true, userId: null };
-    if (token.startsWith('local-')) {
+    if (allowLegacyIdentity() && token.startsWith('local-')) {
       return { present: true, userId: token.slice('local-'.length) || null };
     }
     try {
@@ -31,6 +35,7 @@ function extractBearerIdentity(req) {
 function extractUserId(req) {
   const bearer = extractBearerIdentity(req);
   if (bearer.present) return bearer.userId;
+  if (!allowLegacyIdentity()) return null;
   return req.headers['x-user-id'] || req.body?.userId || null;
 }
 

@@ -143,27 +143,37 @@ test('empty bearer and unusual bearer whitespace fail closed', () => {
   }
 });
 
-test('legacy identity fallback remains available when Authorization is absent', () => {
+test('legacy header, body and local bearer identities fail closed by default', () => {
   for (const middleware of [requireUser, optionalAuth]) {
-    const req = { headers: { 'x-user-id': 'legacy-header-user' }, body: { userId: 'legacy-body-user' } };
-    const res = responseRecorder();
-    let nextCalls = 0;
-    middleware(req, res, () => { nextCalls += 1; });
-
-    assert.equal(nextCalls, 1);
-    assert.equal(req.userId, 'legacy-header-user');
+    for (const req of [
+      { headers: { 'x-user-id': 'legacy-header-user' }, body: { userId: 'legacy-body-user' } },
+      requestWithToken('local-legacy-user'),
+    ]) {
+      const res = responseRecorder();
+      let nextCalls = 0;
+      middleware(req, res, () => { nextCalls += 1; });
+      assert.notEqual(req.userId, 'legacy-header-user');
+      assert.notEqual(req.userId, 'legacy-user');
+      assert.equal(nextCalls, middleware === optionalAuth ? 1 : 0);
+    }
   }
 });
 
-test('legacy local bearer identities remain compatible at the existing middleware boundary', () => {
-  for (const middleware of [requireUser, optionalAuth]) {
-    const req = requestWithToken('local-legacy-user');
-    const res = responseRecorder();
-    let nextCalls = 0;
-    middleware(req, res, () => { nextCalls += 1; });
-
-    assert.equal(nextCalls, 1);
-    assert.equal(req.userId, 'legacy-user');
+test('legacy identity compatibility requires an explicit non-production flag', () => {
+  const previous = process.env.ALLOW_LEGACY_AUTH;
+  process.env.ALLOW_LEGACY_AUTH = 'true';
+  try {
+    for (const middleware of [requireUser, optionalAuth]) {
+      const req = requestWithToken('local-legacy-user');
+      const res = responseRecorder();
+      let nextCalls = 0;
+      middleware(req, res, () => { nextCalls += 1; });
+      assert.equal(nextCalls, 1);
+      assert.equal(req.userId, 'legacy-user');
+    }
+  } finally {
+    if (previous == null) delete process.env.ALLOW_LEGACY_AUTH;
+    else process.env.ALLOW_LEGACY_AUTH = previous;
   }
 });
 

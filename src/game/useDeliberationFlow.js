@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   startDeliberation,
+  routeConversation,
   planDeliberation,
   answerDeliberation,
   confirmCaseDeliberation,
@@ -15,19 +16,25 @@ import {
   setRunMode,
 } from '../services/deliberationClient';
 import { useDeliberationStream } from '../hooks/useDeliberationStream';
-import { createPendingActionRegistry } from './deliberationActions';
+import { createPendingActionRegistry, deliberationActionKey } from './deliberationActions';
 import { applyAgentEvent, applyTransportEvent, createArenaProjection, projectSessionSnapshot } from './agentEventProjection';
 import { readStoredSseCursor } from '../services/sseStream';
 import {
   adaptFateTicket,
   mapSessionToInternalPhase,
+  sessionIsPaused,
   mapServerStateToInternalPhase,
   selectedAdvisorIdsForSession,
+  resolveDirectChoice,
+  classifySessionFailure,
+  resolveSessionRestore,
+  clearExpiredSessionRecovery,
+  restorableSessionId,
   shouldRequestPlanning,
   shouldResumePlanning,
 } from './sandboxRuntime';
 import tracker from '../services/tracker';
-import { saveCard } from '../services/apiClient';
+import { persistDecisionCard } from './decisionCollectionStore.js';
 import { loadCouncilCatalog } from '../services/advisorClient';
 import { createCouncilModel } from './councilModel';
 
@@ -45,6 +52,7 @@ const PHASE = {
   ORACLE: 'oracle',
   BRANCH: 'branch',
   COMMITTING: 'committing',
+  DIRECT: 'direct',
 };
 
 const INTERNAL_TO_VIEW_PHASE = Object.freeze({
@@ -61,6 +69,7 @@ const INTERNAL_TO_VIEW_PHASE = Object.freeze({
   [PHASE.REVEAL]: 'path_reveal',
   [PHASE.COMMITTING]: 'committing',
   [PHASE.DONE]: 'final',
+  [PHASE.DIRECT]: 'direct_answer',
 });
 
 const VIEW_PHASE_LABEL = Object.freeze({
@@ -76,6 +85,7 @@ const VIEW_PHASE_LABEL = Object.freeze({
   branch_select: '分岔 · 选择路径',
   path_reveal: '命签 · 待落印',
   final: '推演 · 已归档',
+  direct_answer: '直接回应 · 无需开演',
 });
 
 function internalPhaseForServerState(state) {
@@ -84,6 +94,19 @@ function internalPhaseForServerState(state) {
 
 const MAX_DEBATE_ROUNDS = 3;
 const ACTIVE_SESSION_KEY = 'yance_active_deliberation_session';
+
+function dialogueFingerprint(agentId, value, source = '') {
+  const text = typeof value === 'string' ? value : value?.text || value?.content || '';
+  const eventId = typeof value === 'object' ? value?.eventId || value?.__eventId : '';
+  return eventId ? `event:${eventId}` : `${agentId}:${source}:${String(text).trim().replace(/\s+/g, ' ')}`;
+}
+
+function appendUniqueHistory(history, agentId, entry, source = '') {
+  const existing = Array.isArray(history?.[agentId]) ? history[agentId] : [];
+  const fingerprint = dialogueFingerprint(agentId, entry, source);
+  if (!fingerprint || existing.some((item) => dialogueFingerprint(agentId, item, item?.source || source) === fingerprint)) return history;
+  return { ...(history || {}), [agentId]: [...existing, entry] };
+}
 
 function notifyActiveSessionChanged() {
   try { window.dispatchEvent(new CustomEvent('yance:active-session-changed')); } catch {}
@@ -140,9 +163,11 @@ export function useDeliberationFlow(initialQuestion = "") {
   const [arenaProjection, setArenaProjection] = useState(createArenaProjection);
   const [pendingPlanSessionId, setPendingPlanSessionId] = useState(null);
   const [answerPending, setAnswerPending] = useState(false);
+  const [processingNarrative, setProcessingNarrative] = useState(null);
   const [councilCatalog, setCouncilCatalog] = useState(() => createCouncilModel());
   const [councilCatalogLoading, setCouncilCatalogLoading] = useState(false);
   const [councilCatalogError, setCouncilCatalogError] = useState('');
+  const [directResult, setDirectResult] = useState(null);
 
   const _addDebugLog = useCallback((msg) => {
     setDebugLogs(prev => {
@@ -171,6 +196,7 @@ export function useDeliberationFlow(initialQuestion = "") {
   const pendingActionIdsRef = useRef(createPendingActionRegistry());
   const startOperationRef = useRef(0);
   const lastFailedActionRef = useRef(null);
+  const answerInFlightRef = useRef(false);
   const commitInFlightRef = useRef(false);
   const activeSessionIdRef = useRef(null);
   const planningRequestSessionRef = useRef(null);
@@ -193,13 +219,11 @@ export function useDeliberationFlow(initialQuestion = "") {
     setHistoryCount(count);
   }, []);
 
-  const _appendDialogue = useCallback((agentId, text, source, round) => {
+  const _appendDialogue = useCallback((agentId, text, source, round, eventId = '') => {
     setAgentDialogues(prev => {
-      const history = { ...(prev.history || {}) };
-      const existing = history[agentId] || [];
-      const entry = typeof text === 'string' ? text : { text, source, round };
-      if (existing.includes(entry)) return prev;
-      history[agentId] = [...existing, entry];
+      const entry = { text: typeof text === 'string' ? text : text?.text || text?.content || '', source, round, eventId };
+      const history = appendUniqueHistory(prev.history || {}, agentId, entry, source);
+      if (history === prev.history) return prev;
       _updateHistoryCount({ ...prev, history });
       return { ...prev, [agentId]: text, history };
     });
@@ -222,13 +246,36 @@ export function useDeliberationFlow(initialQuestion = "") {
 
   useEffect(() => {
     let cancelled = false;
-    let savedSessionId = null;
-    try { savedSessionId = sessionStorage.getItem(ACTIVE_SESSION_KEY); } catch {}
+    let storedSessionId = null;
+    try { storedSessionId = sessionStorage.getItem(ACTIVE_SESSION_KEY); } catch {}
+    const savedSessionId = restorableSessionId({
+      currentUrl: window.location.href,
+      storedSessionId,
+    });
     if (!savedSessionId) return undefined;
 
     getDeliberation(savedSessionId).then((response) => {
-      const session = response?.session;
-      if (cancelled || !session?.sessionId) return;
+      const outcome = resolveSessionRestore({ savedSessionId, response });
+      if (cancelled) return;
+      if (outcome.kind !== 'restored') {
+        const nextUrl = clearExpiredSessionRecovery({
+          sessionStorage,
+          localStorage,
+          currentUrl: window.location.href,
+          sessionId: savedSessionId,
+        });
+        window.history.replaceState({}, '', nextUrl);
+        activeSessionIdRef.current = null;
+        setDeliberationSessionId(null);
+        setPendingPlanSessionId(null);
+        setPhase(PHASE.IDLE);
+        setShowInput(true);
+        setShowQuestion(false);
+        setBackendError(outcome.message);
+        notifyActiveSessionChanged();
+        return;
+      }
+      const session = outcome.session;
       let cursor = 0;
       try { cursor = readStoredSseCursor(localStorage, savedSessionId); } catch {}
       setArenaProjection(projectSessionSnapshot(session, { lastSequence: cursor }));
@@ -240,19 +287,34 @@ export function useDeliberationFlow(initialQuestion = "") {
       setShowInput(false);
       setShowQuestion(true);
       setPhase(mapSessionToInternalPhase(session));
+      setIsPaused(sessionIsPaused(session));
       setInference(session);
       const agents = Array.isArray(session.plan?.agents) ? session.plan.agents : [];
       setPlannedAgents(agents);
       setSelectedAgentIds(new Set(selectedAdvisorIdsForSession(session)));
       setAwaitingAnswers(Array.isArray(session.askUser) ? session.askUser : []);
-      setAwaitingUser(['WAIT', 'ROUND_REVIEW', 'DELIBERATION_BLOCKED', 'ORACLE', 'COMPLETE'].includes(session.state));
+      setAwaitingUser(['WAIT', 'ROUND_REVIEW', 'DELIBERATION_BLOCKED', 'ORACLE', 'COMPLETE', 'PAUSED'].includes(session.state));
       setChoices(Array.isArray(session.dynamicChoices) ? session.dynamicChoices : []);
       setDeliberationOracle(session.oracle || null);
       setDeliberationFindings(session.findings || null);
       setDeliberationCommitResult(session.commitResult || null);
       if (session.commitResult?.fateTicket) setFateContent(adaptFateTicket(session.commitResult.fateTicket));
-    }).catch(() => {
-      try { sessionStorage.removeItem(ACTIVE_SESSION_KEY); } catch {}
+    }).catch((error) => {
+      const outcome = resolveSessionRestore({ savedSessionId, error });
+      const nextUrl = clearExpiredSessionRecovery({
+        sessionStorage,
+        localStorage,
+        currentUrl: window.location.href,
+        sessionId: savedSessionId,
+      });
+      try { window.history.replaceState({}, '', nextUrl); } catch {}
+      activeSessionIdRef.current = null;
+      setDeliberationSessionId(null);
+      setPendingPlanSessionId(null);
+      setPhase(PHASE.IDLE);
+      setShowInput(true);
+      setShowQuestion(false);
+      setBackendError(outcome.message);
       notifyActiveSessionChanged();
     });
 
@@ -265,7 +327,10 @@ export function useDeliberationFlow(initialQuestion = "") {
     const session = response?.session;
     if (!session?.sessionId || activeSessionIdRef.current !== sessionId) return;
     setInference(session);
+    setShowInput(false);
+    setShowQuestion(true);
     setPhase(mapSessionToInternalPhase(session));
+    setIsPaused(sessionIsPaused(session));
     const agents = Array.isArray(session.plan?.agents) ? session.plan.agents : [];
     setPlannedAgents(agents);
     setSelectedAgentIds(new Set(selectedAdvisorIdsForSession(session)));
@@ -280,9 +345,22 @@ export function useDeliberationFlow(initialQuestion = "") {
   }, []);
 
   const recommendedAgentIds = useMemo(
-    () => plannedAgents.map((agent) => agent?.id).filter(Boolean),
-    [plannedAgents],
+    () => {
+      const explicit = inference?.plan?.recommendation?.agentIds;
+      return (Array.isArray(explicit) && explicit.length > 0 ? explicit : plannedAgents.map((agent) => agent?.id)).filter(Boolean);
+    },
+    [inference?.plan?.recommendation?.agentIds, plannedAgents],
   );
+  const recommendationDetails = useMemo(() => {
+    const explicit = inference?.plan?.recommendation?.details;
+    if (Array.isArray(explicit) && explicit.length > 0) return explicit;
+    return plannedAgents.map((agent) => ({
+      agentId: agent.id,
+      reason: agent.reason,
+      score: agent.recommendationScore,
+      matchedDimensions: agent.matchedDimensions,
+    }));
+  }, [inference?.plan?.recommendation?.details, plannedAgents]);
   useEffect(() => {
     if (recommendedAgentIds.length === 0) return undefined;
     let cancelled = false;
@@ -293,16 +371,17 @@ export function useDeliberationFlow(initialQuestion = "") {
       setCouncilCatalog(createCouncilModel({
         ...catalog,
         recommendedIds: recommendedAgentIds,
+        recommendationDetails,
       }));
     }).catch((error) => {
       if (cancelled) return;
-      setCouncilCatalog(createCouncilModel({ official: plannedAgents, recommendedIds: recommendedAgentIds }));
+      setCouncilCatalog(createCouncilModel({ official: plannedAgents, recommendedIds: recommendedAgentIds, recommendationDetails }));
       setCouncilCatalogError(error?.message || '智囊目录暂不可用');
     }).finally(() => {
       if (!cancelled) setCouncilCatalogLoading(false);
     });
     return () => { cancelled = true; };
-  }, [plannedAgents, recommendedAgentIds]);
+  }, [plannedAgents, recommendedAgentIds, recommendationDetails]);
 
   useEffect(() => {
     if (councilCatalog.catalog.length === 0) return;
@@ -336,14 +415,14 @@ export function useDeliberationFlow(initialQuestion = "") {
       setAgentDialogues(prev => ({
         ...prev,
         yan: data?.thought || prev.yan,
-        history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), data?.thought || ''] },
+        history: appendUniqueHistory(prev.history || {}, 'yan', { text: data?.thought || '', source: 'thought', eventId: data?.__eventId }, 'thought'),
       }));
     },
     onAdvisorSpeak: (data) => {
       const agentId = data?.agentId;
       const content = data?.content || '';
       if (agentId && content) {
-        _appendDialogue(agentId, content, 'llm');
+        _appendDialogue(agentId, content, 'llm', data?.round, data?.__eventId);
         setAgentDialogues(prev => ({ ...prev, [agentId]: content }));
       }
     },
@@ -360,7 +439,7 @@ export function useDeliberationFlow(initialQuestion = "") {
         setAgentDialogues(prev => ({
           ...prev,
           yan: data.insight,
-          history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), data.insight] },
+          history: appendUniqueHistory(prev.history || {}, 'yan', { text: data.insight, source: 'observation', eventId: data?.__eventId }, 'observation'),
         }));
       }
     },
@@ -448,7 +527,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     return undefined;
   }, [pendingPlanSessionId, deliberationSessionId, showFloatTip, LOG, userInput]);
 
-  const handleStart = useCallback(async (question) => {
+  const handleStart = useCallback(async (question, options = {}) => {
     if (!question || !question.trim()) return;
     const operationId = ++startOperationRef.current;
     const q = question.trim();
@@ -470,6 +549,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     setDebateConvergence(null);
     setDebateBlackboard(null);
     setDebateMentionQueue([]);
+    setDirectResult(null);
 
     try {
       setRunMode('REMOTE');
@@ -483,8 +563,21 @@ export function useDeliberationFlow(initialQuestion = "") {
       }
       LOG.mode('REMOTE');
 
+      const route = options.forceDeliberation
+        ? { lane: 'deep', complexity: 2, requiresSession: true, reasons: ['user_requested_deliberation'], intentFrame: { lane: 'deep', goal: q, confidence: 1, ...(options.intentPatch || {}) } }
+        : await routeConversation(q);
+      if (startOperationRef.current !== operationId) return;
+      if (!route.requiresSession) {
+        setDirectResult(route);
+        setInference({ route, question: q });
+        setPhase(PHASE.DIRECT);
+        setAwaitingUser(true);
+        showFloatTip(route.lane === 'safety' ? '安全优先 · 不进入推演' : '已直接回应 · 未消耗多智囊流程');
+        return;
+      }
+
       showFloatTip('演 · 起卦中……');
-      const session = await startDeliberation(q, { deferPlanning: true });
+      const session = await startDeliberation(q, { deferPlanning: true, intentFrame: route.intentFrame });
       if (startOperationRef.current !== operationId) return;
       if (!session?.sessionId || session?.state === 'LOCAL_FULL') {
         throw new Error('Agent Runtime 未返回有效 Session');
@@ -531,6 +624,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     setCurrentResponse('');
     setIsPaused(false);
     setInference(null);
+    setDirectResult(null);
     setDebateRound(1);
     setDebateConvergence(null);
     setDebateBlackboard(null);
@@ -563,6 +657,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     setArenaProjection(createArenaProjection());
     setPendingPlanSessionId(null);
     setAnswerPending(false);
+    setProcessingNarrative(null);
     setCouncilCatalog(createCouncilModel());
     setCouncilCatalogLoading(false);
     setCouncilCatalogError('');
@@ -571,6 +666,15 @@ export function useDeliberationFlow(initialQuestion = "") {
     commitInFlightRef.current = false;
     lastFailedActionRef.current = null;
   }, [clearTimers]);
+
+  const handleDirectChoice = useCallback((choice) => {
+    const next = resolveDirectChoice({ question: userInput, choice });
+    if (next.action === 'none') return;
+    handleStart(next.question, {
+      forceDeliberation: next.action === 'start_session',
+      intentPatch: next.intentPatch,
+    });
+  }, [userInput, handleStart]);
 
   const handleSelectAgent = useCallback((id) => {
     setSelectedAgentIds(prev => {
@@ -582,21 +686,32 @@ export function useDeliberationFlow(initialQuestion = "") {
   }, []);
 
   const handleAcceptRecommendedAgents = useCallback(() => {
-    setSelectedAgentIds(new Set(recommendedAgentIds));
-  }, [recommendedAgentIds]);
+    const validIds = (councilCatalog?.recommended || []).map((advisor) => advisor?.id).filter(Boolean);
+    setSelectedAgentIds((previous) => new Set([
+      ...Array.from(previous || []),
+      ...validIds,
+    ]));
+  }, [councilCatalog]);
 
   const handleSubmitAnswers = useCallback(async (answers) => {
+    if (answerInFlightRef.current) return;
     if (!deliberationSessionId) {
       setBackendError('无有效推演会话');
       showFloatTip('推演会话已失效，请重新开始');
       return;
     }
     try {
+      answerInFlightRef.current = true;
       setAnswerPending(true);
       setAwaitingUser(false);
       setBackendError(null);
       setStreamError(null);
       showFloatTip('演 · 正在消化你的回答……');
+      setProcessingNarrative({
+        step: 2,
+        label: '正在重整案卷',
+        detail: '区分事实、理解与未知，并生成下一步',
+      });
 
       const result = await answerDeliberation(deliberationSessionId, answers);
       lastFailedActionRef.current = null;
@@ -605,7 +720,11 @@ export function useDeliberationFlow(initialQuestion = "") {
       setYanQuestionRounds((previous) => [
         ...previous,
         ...(Array.isArray(answers) ? answers : []).map((answer, index) => ({
-          question: awaitingAnswers[index]?.question || answer?.question || '',
+          question: awaitingAnswers.find((item) => (
+            item?.fieldId === answer?.fieldId
+            || item?.id === answer?.fieldId
+            || item?.id === answer?.id
+          ))?.question || awaitingAnswers[index]?.question || answer?.question || '',
           userAnswer: answer?.answer || answer?.text || answer?.content || String(answer || ''),
         })),
       ]);
@@ -622,7 +741,6 @@ export function useDeliberationFlow(initialQuestion = "") {
         history: { ...(prev.history || {}), yan: [...((prev.history || {}).yan || []), result?.openingLine || '演 · 诸智集结……'] },
       }));
 
-      await new Promise(r => setTimeout(r, 1500));
       if (Array.isArray(result?.askUser) && result.askUser.length > 0) {
         setAwaitingAnswers(result.askUser);
         clarifyActiveRef.current = true;
@@ -639,17 +757,59 @@ export function useDeliberationFlow(initialQuestion = "") {
         setAwaitingUser(true);
         showFloatTip('诸智集结，准备发言……');
       }
+      setProcessingNarrative(null);
 
     } catch (e) {
-      lastFailedActionRef.current = { type: 'answer', answers };
+      const failure = classifySessionFailure(e);
+      lastFailedActionRef.current = failure === 'expired' ? null : { type: 'answer', answers };
       LOG.error('handleSubmitAnswers', e);
-      setBackendError(e.message || '提交回答失败');
-      showFloatTip('提交失败，请重试');
+      if (failure === 'expired') {
+        try { sessionStorage.removeItem(ACTIVE_SESSION_KEY); } catch {}
+        activeSessionIdRef.current = null;
+        setDeliberationSessionId(null);
+        setPendingPlanSessionId(null);
+        notifyActiveSessionChanged();
+        setBackendError('原推演会话已失效，已清理旧状态。请重新开演，刚才的输入仍保留在页面中。');
+        showFloatTip('旧会话已清理，请重新开演');
+        setPhase(PHASE.IDLE);
+        setShowInput(true);
+      } else {
+        setBackendError(e.message || '提交回答失败');
+        showFloatTip('提交失败，请重试');
+      }
       setAwaitingUser(true);
+      setProcessingNarrative(null);
     } finally {
+      answerInFlightRef.current = false;
       setAnswerPending(false);
     }
   }, [deliberationSessionId, showFloatTip, awaitingAnswers, LOG]);
+
+  const handleContinueCaseQuestions = useCallback((unknowns = []) => {
+    const questions = (Array.isArray(unknowns) ? unknowns : []).map((unknown, index) => ({
+      id: unknown.id || `case_unknown_${index + 1}`,
+      fieldId: unknown.id || `case_unknown_${index + 1}`,
+      question: unknown.question || unknown.prompt || '请补充这项关键信息',
+      prompt: unknown.question || unknown.prompt || '请补充这项关键信息',
+      reason: unknown.reason || '这项信息会改变推演路径。',
+      blocking: unknown.blocking !== false,
+    }));
+    if (questions.length === 0) return;
+    setAwaitingAnswers(questions);
+    clarifyActiveRef.current = true;
+    setPhase(PHASE.CLARIFY);
+    setAwaitingUser(true);
+    setBackendError(null);
+    showFloatTip(`还有 ${questions.length} 项关键信息，可一起回答`);
+  }, [showFloatTip]);
+
+  const handleOpenCaseFile = useCallback(() => {
+    setPhase(PHASE.READY);
+    setAwaitingUser(true);
+    setBackendError(null);
+    setStreamError(null);
+    showFloatTip('已打开当前案卷；更正后会先重新确认，再决定是否重跑智囊');
+  }, [showFloatTip]);
 
   const handleConfirmCaseFile = useCallback(async (command = {}) => {
     if (!deliberationSessionId) return;
@@ -662,7 +822,7 @@ export function useDeliberationFlow(initialQuestion = "") {
       setInference((previous) => ({ ...(previous || {}), ...result }));
       if (Array.isArray(result?.plan?.agents)) {
         setPlannedAgents(result.plan.agents);
-        setSelectedAgentIds(new Set());
+        setSelectedAgentIds(new Set(result.plan.pendingAdvisorIds || []));
       }
       setPhase(PHASE.COUNCIL);
       setActiveAgentIdx(-1);
@@ -677,7 +837,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     }
   }, [deliberationSessionId, showFloatTip]);
 
-  const handleSaveToCollection = useCallback(async () => {
+  const handleSaveToCollection = useCallback(async (artworkOverride = null) => {
     try {
       const ticket = deliberationCommitResult?.fateTicket;
       if (!ticket?.ticketId) throw new Error('Session 尚未生成可收藏的命签');
@@ -692,6 +852,8 @@ export function useDeliberationFlow(initialQuestion = "") {
 
       const card = {
         sessionId: deliberationSessionId,
+        sourceSessionId: deliberationSessionId,
+        ticketId: ticket.ticketId,
         gua: guaName,
         trigram: selectedChoice?.icon || '☯',
         element: '',
@@ -701,7 +863,7 @@ export function useDeliberationFlow(initialQuestion = "") {
         style: 'Session 命签',
         advisors: agentNotes.map((note) => note.name).filter(Boolean),
         verse: ticket.oracleText || '',
-        summary: agentNotes.map((note) => note.note).filter(Boolean).join('；'),
+        summary: ticket.summary || inference?.masterSummary || agentNotes.map((note) => note.note).filter(Boolean).join('；'),
         cardSource: 'deliberation_session',
         yanSummary: inference?.masterSummary || '',
         agentNotes,
@@ -709,32 +871,40 @@ export function useDeliberationFlow(initialQuestion = "") {
         commit: ticket.feedback || currentCommit || '',
         date: new Date(ticket.timestamp || Date.now()).toISOString().split('T')[0],
         hasAchievement: false,
-        reversalConditions: Array.isArray(inference?.reversalConditions)
-          ? inference.reversalConditions
-          : [],
-        nextActions: Array.isArray(inference?.nextActions)
-          ? inference.nextActions
-          : [],
-        evidence: Array.isArray(inference?.toolResults)
-          ? inference.toolResults
+        reversalConditions: Array.isArray(ticket.reversalConditions) && ticket.reversalConditions.length > 0
+          ? ticket.reversalConditions
+          : (Array.isArray(inference?.reversalConditions) ? inference.reversalConditions : []),
+        nextActions: Array.isArray(ticket.nextActions) && ticket.nextActions.length > 0
+          ? ticket.nextActions
+          : (Array.isArray(inference?.nextActions) ? inference.nextActions : []),
+        evidence: Array.isArray(ticket.evidence) && ticket.evidence.length > 0
+          ? ticket.evidence
+          : (Array.isArray(inference?.toolResults)
+            ? inference.toolResults
               .map((item) => item?.evidence)
               .filter((item) => item?.accepted === true)
-          : [],
+            : []),
+        contextIndex: Array.isArray(ticket.contextIndex) ? ticket.contextIndex : [],
+        artwork: artworkOverride || ticket.artwork || { source: 'archive' },
       };
 
-      const savedResult = await saveCard(card);
+      const savedResult = await persistDecisionCard(card);
       const savedCard = savedResult?.card || savedResult;
       if (!savedCard?.id) throw new Error('命签未写入决策账本');
       LOG.save(savedCard);
 
-      showFloatTip(`命签「${card.gua} · ${card.title}」已写入决策账本`);
+      showFloatTip(savedResult.mode === 'local'
+        ? `命签「${card.gua} · ${card.title}」已存本机，云端恢复后可再同步`
+        : `命签「${card.gua} · ${card.title}」已写入决策账本`);
+      return savedResult;
     } catch (e) {
       LOG.error('handleSaveToCollection', e);
       showFloatTip('保存失败，请重试');
+      throw e;
     }
   }, [deliberationCommitResult, deliberationSessionId, inference, selectedChoice, currentCommit, showFloatTip, LOG]);
 
-  const handleExecuteDebate = useCallback(async (roundOverride = debateRound, agentIdsOverride = null) => {
+  const handleExecuteDebate = useCallback(async (roundOverride = debateRound, agentIdsOverride = null, intent = 'execute') => {
     if (!deliberationSessionId) {
       setBackendError('无有效推演会话');
       return;
@@ -748,7 +918,7 @@ export function useDeliberationFlow(initialQuestion = "") {
       showFloatTip('演 · 诸智发言中……');
       setToolCallState({ agentId: null, tools: [], currentTool: null, results: [], status: 'idle' });
 
-      const actionKey = `execute-r${roundOverride}`;
+      const actionKey = deliberationActionKey(roundOverride, intent);
       const result = await executeDeliberation(deliberationSessionId, {
         actionId: pendingActionIdsRef.current.get(deliberationSessionId, actionKey),
         agentIds: requestedAgentIds,
@@ -764,8 +934,11 @@ export function useDeliberationFlow(initialQuestion = "") {
         setAwaitingAnswers(result.askUser);
         setPhase(PHASE.CLARIFY);
       } else if (result.state === 'READY') {
+        if (Array.isArray(result.affectedAdvisorIds)) {
+          setSelectedAgentIds(new Set(result.affectedAdvisorIds));
+        }
         setPhase(PHASE.READY);
-        showFloatTip('你的纠正已收到，请重新确认案卷');
+        showFloatTip(`案卷已重整；确认后只重跑 ${result.affectedAdvisorIds?.length || 0} 位受影响智囊`);
       } else if (result.state === 'PAUSED') {
         setIsPaused(true);
         setAwaitingUser(true);
@@ -803,6 +976,7 @@ export function useDeliberationFlow(initialQuestion = "") {
         type: 'execute',
         round: roundOverride,
         agentIds: requestedAgentIds,
+        intent,
       };
       LOG.error('handleExecuteDebate', e);
       setBackendError(e.message || '推演执行失败');
@@ -811,15 +985,20 @@ export function useDeliberationFlow(initialQuestion = "") {
     }
   }, [deliberationSessionId, debateRound, selectedAgentIds, showFloatTip, plannedAgents, LOG]);
 
-  const handleInterject = useCallback(async (commandType = 'SUPPLEMENT', targetAgentId = null) => {
+  const handleInterject = useCallback(async (commandType = 'SUPPLEMENT', targetAgentIds = null, contentOverride = '') => {
     if (!deliberationSessionId) return;
-    const content = String(currentResponse || '').trim();
+    const content = String(contentOverride || currentResponse || '').trim();
+    const requestedTargetIds = [...new Set((Array.isArray(targetAgentIds) ? targetAgentIds : [targetAgentIds]).filter(Boolean))];
     if (commandType !== 'PAUSE' && !content) {
       showFloatTip('先写下你要补充、纠正或追问的内容');
       return;
     }
+    if (commandType === 'QUESTION' && requestedTargetIds.length === 0) {
+      showFloatTip('请至少选择一位要追问的智囊');
+      return;
+    }
     try {
-      await interjectDeliberation(deliberationSessionId, { commandType, content, targetAgentId });
+      await interjectDeliberation(deliberationSessionId, { commandType, content, targetAgentIds: requestedTargetIds });
       if (commandType !== 'PAUSE') {
         setAgentDialogues((previous) => ({
           ...previous,
@@ -833,16 +1012,19 @@ export function useDeliberationFlow(initialQuestion = "") {
       const message = {
         SUPPLEMENT: '补充已交给案卷分析 Agent，确认更新后再继续',
         CORRECTION: '纠正已交给案卷分析 Agent，当前推演已停下',
-        QUESTION: targetAgentId ? '追问已交给指定智囊' : '追问已交给全体智囊',
+        QUESTION: `追问已交给 ${requestedTargetIds.length} 位指定智囊`,
         PAUSE: '暂停指令已提交',
       }[commandType] || '已提交';
       showFloatTip(message);
-      return handleExecuteDebate();
+      // execute 始终携带本局已确认阵容；真正的本条收件人已经随 QUESTION
+      // 写入命令队列，由后端 roundAdvisorIds 限定。这样私聊/@ 不会把本局阵容
+      // 改成单个智囊，也不会破坏后续总结门槛。
+      return handleExecuteDebate(debateRound);
     } catch (error) {
       setBackendError(error.message || '提交失败');
       showFloatTip('提交失败，请重试');
     }
-  }, [currentResponse, deliberationSessionId, handleExecuteDebate, showFloatTip]);
+  }, [currentResponse, debateRound, deliberationSessionId, handleExecuteDebate, showFloatTip]);
 
   const handleResume = useCallback(async () => {
     if (!deliberationSessionId) return;
@@ -961,7 +1143,7 @@ export function useDeliberationFlow(initialQuestion = "") {
   }, [awaitingAnswers, handleSubmitAnswers]);
 
   const handleConfirmAgents = useCallback(async () => {
-    const minimumAdvisorCount = inference?.plan?.depth === 'quick' ? 1 : 2;
+    const minimumAdvisorCount = 2;
     if (selectedAgentIds.size < minimumAdvisorCount) {
       showFloatTip(`本轮至少需要 ${minimumAdvisorCount} 位独立智囊`);
       return;
@@ -970,7 +1152,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     setActiveAgentIdx(0);
     setAwaitingUser(false);
     return handleExecuteDebate();
-  }, [handleExecuteDebate, inference?.plan?.depth, selectedAgentIds, showFloatTip]);
+  }, [handleExecuteDebate, selectedAgentIds, showFloatTip]);
 
   const handleRunAnotherRound = useCallback(async () => {
     const nextRound = debateRound + 1;
@@ -984,8 +1166,8 @@ export function useDeliberationFlow(initialQuestion = "") {
       setPhase(PHASE.CHOICE);
       return;
     }
-    return handleExecuteDebate();
-  }, [inference, handleExecuteDebate]);
+    return handleExecuteDebate(debateRound, null, 'summary');
+  }, [debateRound, inference, handleExecuteDebate]);
 
   const handleChoiceClick = useCallback((choice) => {
     if (!choice) return;
@@ -1049,7 +1231,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     if (failed.type === 'answer') return handleSubmitAnswers(failed.answers);
     if (failed.type === 'execute') {
       setSelectedAgentIds(new Set(failed.agentIds || []));
-      return handleExecuteDebate(failed.round, failed.agentIds || []);
+      return handleExecuteDebate(failed.round, failed.agentIds || [], failed.intent || 'execute');
     }
     if (failed.type === 'commit') return handleCommitChoice(failed.choice, failed.feedback);
   }, [handleStart, handleSubmitAnswers, handleExecuteDebate, handleCommitChoice, showFloatTip]);
@@ -1169,6 +1351,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     setDeliberationCommitResult,
     setStreamError,
     handleRestart,
+    handleDirectChoice,
     handleSelectAgent,
     handleAcceptRecommendedAgents,
     handleSubmitAnswers,
@@ -1200,6 +1383,8 @@ export function useDeliberationFlow(initialQuestion = "") {
     commitPending,
     arenaProjection,
     answerPending,
+    processingNarrative,
+    directResult,
     MAX_CLARIFY_ROUNDS: 8,
     handleUserAdvance,
     handleSkipClarify,
@@ -1213,6 +1398,8 @@ export function useDeliberationFlow(initialQuestion = "") {
     handleSkipToSummary,
     handleCommit,
     handleConfirmCaseFile,
+    handleContinueCaseQuestions,
+    handleOpenCaseFile,
     handleBackFromCaseFile: handleRestart,
     saveGameState,
     handleStart: () => handleStart(inputValue),

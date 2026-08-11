@@ -78,10 +78,13 @@ function resetBackendCircuit() {
 
 // 内联实现 refreshAccessToken，不依赖 auth.js
 async function refreshAccessToken() {
+  const sharedRefresh = typeof globalThis !== 'undefined' ? globalThis.__yanceAuthRefreshPromise : null;
+  if (sharedRefresh) return sharedRefresh;
   const refreshToken = getRefreshTokenSync();
   const curUserId = typeof window !== 'undefined' ? getCurrentUserIdSync() : null;
   if (!shouldAttemptTokenRefresh({ refreshToken, userId: curUserId })) return null;
 
+  const refreshOperation = (async () => {
   try {
     const resp = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
       method: 'POST',
@@ -113,6 +116,14 @@ async function refreshAccessToken() {
     storageRemove(TOKEN_KEYS.TOKEN_EXPIRY);
     return null;
   }
+  })();
+  const sharedOperation = refreshOperation.finally(() => {
+    if (typeof globalThis !== 'undefined' && globalThis.__yanceAuthRefreshPromise === sharedOperation) {
+      delete globalThis.__yanceAuthRefreshPromise;
+    }
+  });
+  if (typeof globalThis !== 'undefined') globalThis.__yanceAuthRefreshPromise = sharedOperation;
+  return sharedOperation;
 }
 
 // 内联实现 clearAuth，不依赖 auth.js
@@ -235,14 +246,14 @@ async function requestWithFallback(path, options = {}, attempt = 1) {
 
 /**
  * 获取当前用户 ID（向后兼容入口）
- * 内部委托给 auth.js 的 getCurrentUserId：
+ * 使用无循环依赖的同步身份读取：
  *   - 登录用户 → user.id
  *   - 匿名云端用户 → user.id
  *   - 离线降级 → 本地匿名 ID
  * @returns {string} 用户 ID
  */
 export function getUserId() {
-  return getCurrentUserId();
+  return getCurrentUserIdSync();
 }
 
 /* ============================================================
@@ -666,6 +677,19 @@ export async function interpretHexagram(hexagram, question, agentDialogues) {
 export async function getCards() {
   const result = await request('/api/cards');
   return Array.isArray(result?.cards) ? result.cards : [];
+}
+
+export async function getDeliberationUsage(sessionId) {
+  if (!sessionId) throw new Error('缺少推演会话 ID');
+  return request(`/api/deliberation/${encodeURIComponent(sessionId)}/usage`);
+}
+
+export async function generateDestinyArtwork(sessionId) {
+  if (!sessionId) return { available: false, reason: 'missing_session' };
+  return request(`/api/deliberation/${encodeURIComponent(sessionId)}/destiny-art`, {
+    method: 'POST',
+    timeout: 95000,
+  });
 }
 
 /**

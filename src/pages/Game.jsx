@@ -1,6 +1,6 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Board from '../components/board/GameBoard';
 import AgentDialogueOverlay from '../components/board/AgentDialogueOverlay';
 import ProcessStepper from '../components/board/ProcessStepper';
@@ -12,9 +12,10 @@ import { COLORS } from '../components/board/layoutConfig';
 import { detectQuestionType } from '../data/agents';
 import { generateDialoguesForAgents } from '../services/inferenceEngine';
 import { saveAgentFeedback } from '../services/memoryStore';
-import { sanitizeLLMText } from '../utils/helpers';
+import { sanitizeDecisionDisplayText, sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
-import { sandboxLayoutClass } from '../game/layoutState';
+import { initialCompanionOpen, sandboxLayoutClass, shouldMuteArena } from '../game/layoutState';
+import { buildArenaViewModel } from '../game/arenaViewModel';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -48,7 +49,7 @@ const _normalizeMsg = (raw) => {
   if (s.startsWith('【你】')) {
     s = '你：' + s.slice('【你】'.length);
   }
-  return sanitizeLLMText(s);
+  return sanitizeDecisionDisplayText(sanitizeLLMText(s));
 };
 
 const VIRTUAL_ROLES = [
@@ -127,7 +128,7 @@ function _renderNavButton(phase, ctx) {
     case 'clarify_loop':
       return mk('跳过追问 · 按现有信息继续', ctx.handleSkipClarify, false);
     case 'agent_select':
-      return mk('已选智囊 · 开辩', ctx.handleUserAdvance, true, (ctx.activeAgents||[]).filter(a=>a&&a.role!=='master').length===0, '请先选择至少一位智囊');
+      return mk('已选智囊 · 开辩', ctx.handleUserAdvance, true, (ctx.activeAgents||[]).filter(a=>a&&a.role!=='master').length<2, '请先选择至少两位独立智囊');
     case 'agent_debate': {
       const N = (ctx.activeAgents||[]).filter(a=>a&&a.role!=='master').length;
       const allDone = N > 0 && (ctx.activeAgentIdx >= N - 1 || (ctx.debateConvergence && ctx.debateConvergence.converged && ctx.debateRound >= 1));
@@ -158,6 +159,7 @@ function _renderNavButton(phase, ctx) {
 
 export default function Game() {
   const location = useLocation();
+  const navigate = useNavigate();
   const flow = useSandboxFlow({ DEFAULT_CHOICES, initialQuestion: location.state?.initialQuestion || '' });
   const {
     phase, userInput, inputValue, setInputValue, inference, showInput,
@@ -170,21 +172,65 @@ export default function Game() {
     agentErrors, fateContent, activeAgents, candidateAgents, choices, phaseLabel,
     historyCount, mentionMessages, setFloatTip, setInference,
     backendError, streamError, handleRejectRetry,
-    commitPending, answerPending,
+    commitPending, answerPending, processingNarrative,
     councilCatalog, councilCatalogLoading, councilCatalogError, recommendedAgentIds,
     arenaProjection,
     caseFile, yanQuestionRounds, awaitingAnswers,
-    handleRestart, handleStart, handleUserAdvance, handleSubmitAnswers, handleSkipClarify, handleConfirmAgents,
+    directResult,
+    handleRestart, handleStart, handleDirectChoice, handleUserAdvance, handleSubmitAnswers, handleSkipClarify, handleConfirmAgents,
+    handleRunAnotherRound, handleSkipToSummary,
     handleAcceptRecommendedAgents,
     handleInterject,
     handleResume,
     handleChoiceClick, handleRevealFate,
     handleShowChoices, handleCommit, handleStartOracle,
-    handleProceedToChoices, handleSkipOracle, handleAgentClick,
-    handleSaveToCollection, handleConfirmCaseFile, handleBackFromCaseFile,
+    handleProceedToChoices, handleSkipOracle, handleAgentClick: handleFlowAgentClick,
+    handleSaveToCollection, handleConfirmCaseFile, handleContinueCaseQuestions, handleBackFromCaseFile,
     saveGameState, fateRevealed,
   } = flow;
-  const [companionOpen, setCompanionOpen] = useState(true);
+  const [companionOpen, setCompanionOpen] = useState(initialCompanionOpen);
+  const [companionWidth, setCompanionWidth] = useState(() => (
+    typeof window === 'undefined' ? 760 : Math.round(Math.min(920, Math.max(660, window.innerWidth * 0.52)))
+  ));
+  const [focusedHistoryRoleId, setFocusedHistoryRoleId] = useState(null);
+  const [decisionArtifactOpen, setDecisionArtifactOpen] = useState(true);
+  const [destinyArtwork, setDestinyArtwork] = useState(null);
+  const previousDecisionPhaseRef = useRef('');
+  useEffect(() => {
+    const decisionPhase = ['summary', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase);
+    if (decisionPhase && previousDecisionPhaseRef.current !== phase) setDecisionArtifactOpen(true);
+    previousDecisionPhaseRef.current = decisionPhase ? phase : '';
+  }, [phase]);
+  const handleCompanionOpenChange = useCallback((nextOpen) => {
+    setCompanionOpen(nextOpen);
+    if (nextOpen) setShowHistoryPanel(false);
+  }, [setShowHistoryPanel]);
+  const openHistoryPanel = useCallback((roleId = null) => {
+    setFocusedHistoryRoleId(roleId);
+    setCompanionOpen(false);
+    setShowHistoryPanel(true);
+  }, [setShowHistoryPanel]);
+  const handleAgentClick = useCallback((agent) => {
+    setFocusedHistoryRoleId(agent?.id || null);
+    setShowHistoryPanel(false);
+    setCompanionOpen(true);
+    handleFlowAgentClick?.(agent);
+  }, [handleFlowAgentClick, setShowHistoryPanel]);
+  const handleExitDeliberation = useCallback(() => {
+    handleRestart();
+    setCompanionOpen(false);
+    navigate('/sandbox', { replace: true });
+  }, [handleRestart, navigate]);
+  const handleReturnHome = useCallback(() => {
+    handleRestart();
+    navigate('/', { replace: true });
+  }, [handleRestart, navigate]);
+  const arenaView = useMemo(() => buildArenaViewModel({
+    phase,
+    projection: arenaProjection,
+    caseFile,
+    directResult,
+  }), [phase, arenaProjection, caseFile, directResult]);
 
   // ★ Fix: 全局反馈 toast — 受用/失言按钮按下后任何阶段都立刻显示"生效了"
   const [feedbackToast, setFeedbackToast] = useState(null); // { text, color, key }
@@ -198,28 +244,23 @@ export default function Game() {
     feedbackToastTimerRef.current = setTimeout(() => setFeedbackToast(null), 1600);
   }, []);
 
-  const layoutClass = sandboxLayoutClass(phase, companionOpen);
+  const layoutClass = sandboxLayoutClass(phase, companionOpen, decisionArtifactOpen);
+  const presentationMode = shouldMuteArena({ phase, companionOpen, showHistoryPanel });
+  const fateStage = ['path_reveal', 'committing', 'final'].includes(phase);
+  const sceneOverlayMode = presentationMode && !fateStage;
 
   return (
-    <div className={`game-root ${layoutClass} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)' }}>
+    <div className={`game-root ${layoutClass} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)', '--companion-width': `${companionWidth}px` }}>
       <div className="crt-overlay" />
       {(backendError || streamError) && (
-        <div role="alert" style={{
-          position: 'fixed', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 100,
-          display: 'flex', alignItems: 'center', gap: 12, maxWidth: 'min(560px, 90vw)',
-          padding: '9px 12px', background: 'rgba(34, 14, 12, 0.96)', color: '#F1C2AE',
-          border: '1px solid rgba(168, 71, 46, 0.8)', fontSize: 12,
-        }}>
+        <div role="alert" className="runtime-alert">
           <span>Agent Runtime：{backendError || streamError}</span>
-          <button type="button" onClick={handleRejectRetry} style={{
-            flexShrink: 0, padding: '4px 9px', color: '#F0D890', background: 'transparent',
-            border: '1px solid rgba(240, 216, 144, 0.6)', cursor: 'pointer',
-          }}>重试</button>
+          <button type="button" onClick={handleRejectRetry}>重试</button>
         </div>
       )}
       <div className="flex-1 min-h-0 overflow-hidden relative">
-        {!showInput && phase !== 'case_file_confirm' && (
-          <div className="sandbox-stage w-full h-full relative">
+        {!showInput && (
+          <div className={`sandbox-stage w-full h-full relative${sceneOverlayMode ? ' is-presentation' : ''}`}>
             <Board
               phase={phase}
               activeAgentIdx={activeAgentIdx}
@@ -228,14 +269,42 @@ export default function Game() {
               onAgentClick={handleAgentClick}
               userInput={userInput}
               showQuestion={showQuestion}
-              selectedChoice={selectedChoice}
+              choices={choices}
+              selectedChoice={selectedChoice || fateContent?.path || (fateContent?.choice ? {
+                id: fateContent.ticketId || 'restored-final-path',
+                label: fateContent.choice,
+                keyPoints: fateContent.keyPoints || [],
+                question: fateContent.question || userInput,
+                source: fateContent.source,
+                fateContent,
+              } : null)}
               inference={inference}
+              deliberationOracle={inference?.oracle || fateContent?.hexagram || null}
               fateRevealed={fateRevealed}
+              destinyArtwork={destinyArtwork}
+              arenaView={arenaView}
+              directResult={directResult}
+              onDirectChoice={handleDirectChoice}
+              processingNarrative={processingNarrative}
+              presentationMode={presentationMode}
             />
           </div>
         )}
 
-        {!showInput && <ProcessStepper phase={phase} />}
+        {!showInput && phase !== 'direct_answer' && !sceneOverlayMode && !['path_reveal', 'committing', 'final'].includes(phase) && <ProcessStepper phase={phase} />}
+
+        {phase === 'direct_answer' && (
+          <button
+            type="button"
+            onClick={handleRestart}
+            className="fixed bottom-7 left-1/2 -translate-x-1/2 z-20 px-5 py-3"
+            style={{
+              color: '#E8C670', background: 'rgba(10,8,7,.9)',
+              border: '1px solid rgba(232,198,112,.45)', cursor: 'pointer',
+              fontFamily: '"Noto Serif SC", serif', letterSpacing: '.14em',
+            }}
+          >再问一件事</button>
+        )}
 
         {!showInput && ['casting', 'yan_analyze', 'clarify_loop', 'agent_debate'].includes(phase) && (
           <DeliberationConversation
@@ -247,6 +316,8 @@ export default function Game() {
             setCurrentResponse={setCurrentResponse}
             projection={arenaProjection}
             onAdvance={handleUserAdvance}
+            onRunAnotherRound={handleRunAnotherRound}
+            onGenerateSummary={handleSkipToSummary}
             onSubmitAnswers={handleSubmitAnswers}
             onSkipClarify={handleSkipClarify}
             onInterject={handleInterject}
@@ -256,7 +327,20 @@ export default function Game() {
             assignments={activeAgents.length > 0 ? activeAgents : (inference?.plan?.agents || [])}
             orchestration={inference?.plan?.orchestration}
             open={companionOpen}
-            onOpenChange={setCompanionOpen}
+            onOpenChange={handleCompanionOpenChange}
+            onExit={handleExitDeliberation}
+            onHome={handleReturnHome}
+            sessionId={flow.deliberationSessionId}
+            width={companionWidth}
+            onWidthChange={setCompanionWidth}
+            caseFile={caseFile}
+            contextLedger={inference?.plan?.contextLedger || []}
+            intentFrame={inference?.plan?.intentFrame || inference?.route?.intentFrame || null}
+            focusedAdvisorId={focusedHistoryRoleId || ''}
+            onFocusAdvisor={setFocusedHistoryRoleId}
+            history={agentDialogues?.history || {}}
+            clarifyRound={inference?.round || 1}
+            maxClarifyRounds={inference?.maxRound || 2}
           />
         )}
 
@@ -372,6 +456,7 @@ export default function Game() {
                 <DecisionCaseReviewPanel
                   caseFile={caseFile}
                   onConfirm={handleConfirmCaseFile}
+                  onContinueQuestions={handleContinueCaseQuestions}
                   onRestart={handleBackFromCaseFile}
                 />
               </motion.div>
@@ -380,24 +465,28 @@ export default function Game() {
         </AnimatePresence>
 
         {phase === 'agent_select' && (
-          <CouncilWorkbench
-            catalog={councilCatalog}
-            recommendedIds={recommendedAgentIds}
-            selectedAgentIds={selectedAgentIds}
-            loading={councilCatalogLoading}
-            error={councilCatalogError}
-            sessionId={flow.deliberationSessionId}
-            minimumAdvisorCount={inference?.plan?.depth === 'quick' ? 1 : 2}
-            onToggle={(id) => setSelectedAgentIds((previous) => {
-              const next = new Set(previous);
-              if (next.has(id)) next.delete(id);
-              else next.add(id);
-              return next;
-            })}
-            onAcceptRecommendation={handleAcceptRecommendedAgents}
-            onConfirm={handleConfirmAgents}
-            onSaveGameState={saveGameState}
-          />
+          <div className="council-stage">
+            <CouncilWorkbench
+              catalog={councilCatalog}
+              recommendedIds={recommendedAgentIds}
+              selectedAgentIds={selectedAgentIds}
+              loading={councilCatalogLoading}
+              error={councilCatalogError}
+              sessionId={flow.deliberationSessionId}
+              minimumAdvisorCount={2}
+              caseFile={caseFile}
+              onToggle={(id) => setSelectedAgentIds((previous) => {
+                const next = new Set(previous);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })}
+              onAcceptRecommendation={handleAcceptRecommendedAgents}
+              onConfirm={handleConfirmAgents}
+              onSaveGameState={saveGameState}
+              recommendationSource={inference?.plan?.recommendation?.source === 'controlled-fallback' || inference?.fallback ? 'fallback' : 'model'}
+            />
+          </div>
         )}
 
         {!['casting', 'yan_analyze', 'clarify_loop', 'agent_select', 'agent_debate', 'case_file_confirm', 'summary', 'branch_select'].includes(phase) && <AgentDialogueOverlay
@@ -435,9 +524,10 @@ export default function Game() {
         />}
 
 
-        {['summary', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase) && (
+        {['summary', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase) && !showHistoryPanel && decisionArtifactOpen && (
           <DecisionArtifact
             phase={phase}
+            sessionId={flow.deliberationSessionId}
             inference={inference}
             choices={choices}
             selectedChoice={selectedChoice}
@@ -451,18 +541,26 @@ export default function Game() {
             onCommit={handleCommit}
             onRestart={handleRestart}
             onSave={handleSaveToCollection}
-            onOpenHistory={() => setShowHistoryPanel(true)}
+            onOpenHistory={() => openHistoryPanel(null)}
+            onClose={() => setDecisionArtifactOpen(false)}
+            onArtworkChange={setDestinyArtwork}
           />
         )}
 
-        {historyCount > 0 && !showHistoryPanel && (
+        {['summary', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase) && !showHistoryPanel && !decisionArtifactOpen && (
+          <button type="button" className="decision-artifact-launcher" onClick={() => setDecisionArtifactOpen(true)} aria-label="重新打开本局决策案卷">
+            <span aria-hidden="true">命</span>打开命牌
+          </button>
+        )}
+
+        {historyCount > 0 && !showHistoryPanel && phase !== 'agent_debate' && (
           <motion.div
             className="absolute top-4 right-4 z-20"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
           >
             <button
-              onClick={() => setShowHistoryPanel(true)}
+              onClick={() => openHistoryPanel(null)}
               style={{
                 padding: '5px 12px',
                 background: 'rgba(8,8,12,0.7)',
@@ -483,10 +581,10 @@ export default function Game() {
         <AnimatePresence>
           {showHistoryPanel && (
             <motion.div
-              className="absolute top-0 right-0 h-full w-[min(280px,85vw)] z-30"
-              initial={{ x: 280, opacity: 0 }}
+              className="history-reading-shell absolute top-0 right-0 h-full z-50"
+              initial={{ x: 980, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 280, opacity: 0 }}
+              exit={{ x: 980, opacity: 0 }}
               transition={{ duration: 0.5, ease: 'easeOut' }}
               style={{
                 background: 'rgba(8,8,12,0.95)',
@@ -504,6 +602,25 @@ export default function Game() {
                     style={{ color: '#807870', fontSize: '16px', cursor: 'pointer', background: 'transparent', border: 'none' }}
                   >×</button>
                 </div>
+                <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 12, borderBottom: `1px solid ${BORDER_COLOR}30`, marginBottom: 12 }}>
+                  {[{ id: null, name: '全部' }, ...VIRTUAL_ROLES, ...(activeAgents || []).filter(a => a && a.role !== 'master')].map((role) => (
+                    <button key={role.id || 'all'} type="button" onClick={() => setFocusedHistoryRoleId(role.id)} style={{
+                      minHeight: 34, flex: '0 0 auto', padding: '0 11px', cursor: 'pointer',
+                      border: focusedHistoryRoleId === role.id ? `1px solid ${GLOW_COLOR}` : `1px solid ${BORDER_COLOR}35`,
+                      background: focusedHistoryRoleId === role.id ? 'rgba(232,198,112,.12)' : 'transparent',
+                      color: focusedHistoryRoleId === role.id ? '#F0D890' : '#8F8676',
+                      font: '10px/1 "Noto Serif SC", serif',
+                    }}>{role.name || role.id}</button>
+                  ))}
+                </div>
+                {!focusedHistoryRoleId && (
+                  <section className="history-reading-shell__archive" aria-label="本局档案摘要">
+                    <small>本局档案</small>
+                    <h2>{sanitizeDecisionDisplayText(fateContent?.question || userInput || '本局问题')}</h2>
+                    <p>{sanitizeDecisionDisplayText(fateContent?.summary || inference?.masterSummary || inference?.summary || '完整推演发言与最终选择按时间保留在下方。')}</p>
+                    {selectedChoice?.label && <strong>最终选择 · {sanitizeDecisionDisplayText(selectedChoice.label)}</strong>}
+                  </section>
+                )}
                 <div className="flex-1 overflow-y-auto ingot-scroll">
                   {(() => {
                     const history = agentDialogues?.history || {};
@@ -515,6 +632,7 @@ export default function Game() {
                     const blocks = [];
                     for (const role of allRoles) {
                       if (!role || !role.id) continue;
+                      if (focusedHistoryRoleId && role.id !== focusedHistoryRoleId) continue;
                       const rawArr = history[role.id] || [];
                       const msgs = Array.isArray(rawArr)
                         ? rawArr.map(_normalizeMsg).filter(Boolean)
@@ -543,11 +661,11 @@ export default function Game() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                             {msgs.map((msg, i) => (
                               <div key={i} style={{
-                                fontSize: '11px',
+                                fontSize: '13px',
                                 color: msg.startsWith('你：') ? 'var(--cyber-jade, #8CD8B8)' : '#E0DDD5',
                                 fontFamily: '"Noto Serif SC", serif',
-                                lineHeight: 1.8,
-                                padding: '6px 10px',
+                                lineHeight: 1.9,
+                                padding: '11px 13px',
                                 borderLeft: `2px solid ${msg.startsWith('你：') ? 'var(--cyber-jade, #4ADE99)80' : (agentColor.glow + '80')}`,
                                 background: msg.startsWith('你：')
                                   ? 'rgba(74, 222, 153, 0.04)'
@@ -830,7 +948,7 @@ export default function Game() {
                   className="w-full mt-4 py-3 text-sm transition-all"
                   style={{
                     background: inputValue.trim() ? `linear-gradient(135deg, ${BORDER_COLOR}, ${GLOW_COLOR})` : 'rgba(255,255,255,0.05)',
-                    color: '#1A1410',
+                    color: inputValue.trim() ? '#1A1410' : '#9A9184',
                     fontFamily: '"Ma Shan Zheng", serif',
                     letterSpacing: '0.3em',
                     border: `1px solid ${BORDER_COLOR}`,
@@ -874,7 +992,7 @@ export default function Game() {
                 智囊发言异常
               </div>
               <div style={{ fontSize: '12px', color: '#A0A0A0', fontFamily: '"Noto Serif SC", serif', marginBottom: '16px', lineHeight: 1.8 }}>
-                以下智囊未能连接到AI生成真实回答，使用了预设模板：
+                以下智囊暂未连接模型，当前显示离线推演结果：
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
                 {Object.entries(agentErrors).map(([agentId, error]) => (

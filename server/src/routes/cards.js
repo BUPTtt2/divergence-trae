@@ -121,6 +121,7 @@ router.post(
       reversal_conditions: JSON.stringify(req.body.reversalConditions || []),
       next_actions: JSON.stringify(req.body.nextActions || []),
       evidence: JSON.stringify(req.body.evidence || []),
+      artwork: JSON.stringify(req.body.artwork || {}),
       created_at: new Date().toISOString(),
     };
 
@@ -160,6 +161,7 @@ router.put(
     }
     if (req.body.advisors) updates.advisors = JSON.stringify(req.body.advisors);
     if (req.body.pillars) updates.pillars = JSON.stringify(req.body.pillars);
+    if (req.body.artwork) updates.artwork = JSON.stringify(req.body.artwork);
 
     const result = await query({
       table: TABLE,

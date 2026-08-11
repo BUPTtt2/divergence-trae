@@ -1,0 +1,8 @@
+.decision-card-identity { position:relative; display:flex; align-items:flex-start; gap:14px; padding-right:28px; }
+.decision-card-identity > .xm-source-mark { position:absolute; top:0; right:0; }
+.decision-card-identity__trigram { font:700 2.4rem/1 "Ma Shan Zheng",serif; color:var(--decision-card-accent,#a8472e); }
+.decision-card-identity div { min-width:0; }
+.decision-card-identity small { display:block; color:#7a7468; font:10px/1.4 monospace; }
+.decision-card-identity strong { display:block; color:inherit; font:700 1.15rem/1.5 "Noto Serif SC",serif; }
+.decision-card-identity p { margin:2px 0 0; font-size:12px; line-height:1.5; }
+.decision-card-identity.is-compact .decision-card-identity__trigram { font-size:2rem; }

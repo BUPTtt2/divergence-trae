@@ -8,7 +8,7 @@ export const getApiBase = () => {
   if (typeof window !== 'undefined' && window.__API_BASE__) {
     return window.__API_BASE__;
   }
-  if (import.meta.env.VITE_API_BASE) {
+  if (import.meta.env?.VITE_API_BASE) {
     return import.meta.env.VITE_API_BASE;
   }
   // DEV / PROD 都走同源相对路径（空字符串 = 当前 origin）：

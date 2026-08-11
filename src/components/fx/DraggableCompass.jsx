@@ -43,15 +43,20 @@ const KEYWORD_TO_GUA = [
   { kws: ['愤怒', '冲动', '爆发', '立刻', '马上'], gua: '震' },
 ];
 
-/* 4 个核心工具 + 返回按钮 + 我 */
+/* 全局命令中心：只暴露真实存在的入口 */
 const TOOLS = [
-  { id: 'back',   label: '返回', desc: '返回上一页',        rune: '☶', color: '#7A7468' },
-  { id: 'cast',   label: '投卦', desc: '三枚铜钱立一卦',    rune: '☰', color: '#A8472E' },
-  { id: 'yan',    label: '推演台', desc: '开始或继续真实推演', rune: '演', color: '#A8472E' },
-  { id: 'note',   label: '落笔', desc: '此刻所感,落于灵台',  rune: '☱', color: '#7A7468' },
-  { id: 'profile',label: '我',   desc: '个人资料与设置',     rune: '☯', color: '#A8472E' },
-  { id: 'lock',   label: '镇纸', desc: '再点解除,固定位置',  rune: '☳', color: '#7A7468' },
-  { id: 'hide',   label: '隐',   desc: '再点召回,Shift+H',   rune: '☴', color: '#7A7468' },
+  { id: 'yan', label: '当前推演', desc: '继续本局或进入推演台', rune: '演', primary: true },
+  { id: 'new', label: '新开一局', desc: '结束当前入口并重新立案', rune: '新', primary: true },
+  { id: 'home', label: '首页', desc: '回到演策首页', rune: '首' },
+  { id: 'back', label: '返回', desc: '返回上一页', rune: '返' },
+  { id: 'agents', label: '智囊阁', desc: '搜索、订阅与铸造智囊', rune: '智' },
+  { id: 'cards', label: '锦囊', desc: '命牌、推演记录与回访', rune: '藏' },
+  { id: 'memory', label: '系统记忆', desc: '查看真实本地偏好与事实', rune: '忆' },
+  { id: 'profile', label: '我与偏好', desc: '资料、回答方式与记忆范围', rune: '我' },
+  { id: 'note', label: '落笔', desc: '保存一条本地笔记', rune: '笔' },
+  { id: 'cast', label: '投卦', desc: '三枚铜钱立一卦', rune: '卦' },
+  { id: 'lock', label: '镇纸', desc: '固定或解除悬浮位置', rune: '定' },
+  { id: 'hide', label: '暂隐', desc: '五秒后自动召回', rune: '隐' },
 ];
 
 const MODE_GLYPHS = { compass: '☯', coin: '外', shu: '书', brush: '笔' };
@@ -89,6 +94,7 @@ export default function DraggableCompass() {
   const [noteOpen, setNoteOpen] = useState(false);
   const [unpackOpen, setUnpackOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [unpackQ, setUnpackQ] = useState('');
   const [noteText, setNoteText] = useState('');
   const [noteCount, setNoteCount] = useState(0);
@@ -96,6 +102,7 @@ export default function DraggableCompass() {
   const [hasActiveSession, setHasActiveSession] = useState(() => {
     try { return Boolean(sessionStorage.getItem(ACTIVE_SESSION_KEY)); } catch { return false; }
   });
+  const [capabilityStatus, setCapabilityStatus] = useState({ memories: 0, cards: 0, preferences: false });
   // 三连抽同卦彩蛋
   const [streak, setStreak] = useState([]); // 最近 3 次抽卦结果
   const [combo, setCombo] = useState(null); // {gua, count}
@@ -125,6 +132,32 @@ export default function DraggableCompass() {
       setStreak(log.slice(0, 3).map(x => x.name));
     } catch {}
   }, []);
+
+  const refreshCapabilityStatus = useCallback(() => {
+    try {
+      const memoryKeys = ['yance:memory:facts', 'yance:memory:working', 'yance:memory:episodes', 'yance:memory:semantic'];
+      const memories = memoryKeys.reduce((total, key) => {
+        const value = JSON.parse(localStorage.getItem(key) || '[]');
+        return total + (Array.isArray(value) ? value.length : 0);
+      }, 0);
+      const activeSessionId = sessionStorage.getItem(ACTIVE_SESSION_KEY) || '';
+      const advisorThreads = activeSessionId ? JSON.parse(sessionStorage.getItem(`yance:advisor-threads:${activeSessionId}`) || '[]') : [];
+      const advisorMessages = Array.isArray(advisorThreads) ? advisorThreads.reduce((total, thread) => total + (Array.isArray(thread?.messages) ? thread.messages.length : 0), 0) : 0;
+      const cards = JSON.parse(localStorage.getItem('yance_collection') || '[]');
+      const profile = JSON.parse(localStorage.getItem('yance_user_profile') || 'null');
+      setCapabilityStatus({
+        memories: memories + advisorMessages,
+        cards: Array.isArray(cards) ? cards.length : 0,
+        preferences: Boolean(profile?.preferences),
+      });
+    } catch {
+      setCapabilityStatus({ memories: 0, cards: 0, preferences: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (menuOpen || memoryOpen || profileOpen) refreshCapabilityStatus();
+  }, [menuOpen, memoryOpen, profileOpen, refreshCapabilityStatus]);
 
   useEffect(() => {
     const refresh = () => {
@@ -316,6 +349,22 @@ export default function DraggableCompass() {
     } else if (toolId === 'yan') {
       setMenuOpen(false);
       navigate('/sandbox');
+    } else if (toolId === 'new') {
+      try { sessionStorage.removeItem(ACTIVE_SESSION_KEY); } catch {}
+      setMenuOpen(false);
+      window.location.assign('/sandbox?new=1');
+    } else if (toolId === 'home') {
+      setMenuOpen(false);
+      navigate('/');
+    } else if (toolId === 'agents') {
+      setMenuOpen(false);
+      navigate('/agents');
+    } else if (toolId === 'cards') {
+      setMenuOpen(false);
+      navigate('/cards');
+    } else if (toolId === 'memory') {
+      setMenuOpen(false);
+      setMemoryOpen(true);
     } else if (toolId === 'note') {
       setMenuOpen(false);
       setNoteOpen(true);
@@ -341,6 +390,14 @@ export default function DraggableCompass() {
       }, 5000);
     }
   }, [handleCast, showBubble, locked, navigate]);
+
+  const describeTool = (tool) => {
+    if (tool.id === 'yan') return hasActiveSession ? '恢复当前本局' : '尚无本局，进入立案';
+    if (tool.id === 'memory') return capabilityStatus.memories > 0 ? `${capabilityStatus.memories} 条真实记忆` : '尚无已确认记忆';
+    if (tool.id === 'cards') return capabilityStatus.cards > 0 ? `${capabilityStatus.cards} 份命牌与记录` : '尚无命牌记录';
+    if (tool.id === 'profile') return capabilityStatus.preferences ? '偏好已设置，可随时调整' : '偏好未设置';
+    return tool.desc;
+  };
 
   if (hidden) return null;
 
@@ -608,6 +665,31 @@ export default function DraggableCompass() {
         )}
       </motion.div>
 
+      {!menuOpen && !bubble && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: 66,
+            transform: 'translateX(-50%)',
+            whiteSpace: 'nowrap',
+            padding: '4px 8px',
+            border: '1px solid rgba(200,168,80,0.48)',
+            borderRadius: 10,
+            background: 'rgba(18,15,11,0.9)',
+            color: '#D9C694',
+            fontSize: 9,
+            lineHeight: 1,
+            letterSpacing: '0.08em',
+            boxShadow: '0 4px 14px rgba(0,0,0,0.28)',
+            pointerEvents: 'none',
+          }}
+        >
+          {hasActiveSession ? '点按续演与导航' : '全局助手 · 点按'}
+        </div>
+      )}
+
       {/* 锁定状态的解锁提示 - 上方贴近, 不挡气泡 */}
       {locked && (
         <div
@@ -635,25 +717,25 @@ export default function DraggableCompass() {
       <AnimatePresence>
         {menuOpen && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.85, x: 10 }}
+            initial={{ opacity: 0, scale: 0.94, x: -8 }}
             animate={{ opacity: 1, scale: 1, x: 0 }}
-            exit={{ opacity: 0, scale: 0.85, x: 10 }}
+            exit={{ opacity: 0, scale: 0.94, x: -8 }}
             transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
-              left: 68,
-              top: -4,
-              padding: 6,
-              display: 'flex', flexDirection: 'column', gap: 2,
-              background: 'rgba(240, 235, 221, 0.98)',
-              border: '1px solid rgba(168,71,46,0.4)',
-              borderRadius: 3,
-              boxShadow: '0 8px 28px rgba(22,22,29,0.18)',
-              backdropFilter: 'blur(12px)',
-              WebkitBackdropFilter: 'blur(12px)',
-              minWidth: 110,
+              left: 72,
+              top: 0,
+              padding: 10,
+              display: 'grid', gridTemplateColumns: 'repeat(2, minmax(118px, 1fr))', gap: 6,
+              background: 'linear-gradient(145deg, rgba(19,15,11,.97), rgba(8,7,6,.96))',
+              border: '1px solid rgba(213,177,88,.42)',
+              borderRadius: 8,
+              boxShadow: '0 18px 52px rgba(0,0,0,.46), inset 0 0 0 1px rgba(255,255,255,.025)',
+              backdropFilter: 'blur(18px)',
+              WebkitBackdropFilter: 'blur(18px)',
+              minWidth: 268,
             }}
           >
             {TOOLS.map(t => (
@@ -662,18 +744,18 @@ export default function DraggableCompass() {
                 onClick={(e) => { e.stopPropagation(); handleTool(t.id); }}
                 title={t.desc}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '4px 10px',
-                  background: 'transparent', border: 'none', borderRadius: 2,
+                  minHeight: 48, display: 'grid', gridTemplateColumns: '28px 1fr', alignItems: 'center', gap: 8,
+                  padding: '7px 10px',
+                  background: 'rgba(255,255,255,.018)', border: '1px solid rgba(213,177,88,.12)', borderRadius: 4,
                   cursor: 'pointer', textAlign: 'left',
-                  transition: 'background 0.2s',
+                  transition: 'background 0.2s, border-color .2s, transform .2s',
                   whiteSpace: 'nowrap',
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(168,71,46,0.08)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(213,177,88,.09)'; e.currentTarget.style.borderColor = 'rgba(213,177,88,.42)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,.018)'; e.currentTarget.style.borderColor = 'rgba(213,177,88,.12)'; e.currentTarget.style.transform = 'none'; }}
               >
-                <span style={{ fontSize: 13, color: t.color, fontFamily: '"Ma Shan Zheng", serif', width: 14, textAlign: 'center' }}>{t.rune}</span>
-                <span style={{ fontSize: 11, color: '#1A1410', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.15em' }}>{t.label}</span>
+                <span style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', fontSize: 14, color: t.primary ? '#efd47d' : '#b6a887', border: '1px solid rgba(213,177,88,.2)', fontFamily: '"Ma Shan Zheng", serif' }}>{t.rune}</span>
+                <span style={{ display: 'grid', fontSize: 12, color: t.primary ? '#f0dda0' : '#d2c8b8', fontFamily: '"Noto Serif SC", serif', letterSpacing: '0.08em' }}>{t.id === 'yan' && hasActiveSession ? '继续本局' : t.label}<small style={{ marginTop: 3, color: '#71695d', fontSize: 8, letterSpacing: 0 }}>{describeTool(t)}</small></span>
               </button>
             ))}
             {/* 锁定时, 镇纸按钮变成"解镇纸" */}
@@ -694,7 +776,7 @@ export default function DraggableCompass() {
               </button>
             )}
             {/* 4 模式切换 - 紧凑一行 */}
-            <div style={{ display: 'flex', gap: 2, padding: '4px 4px 0', borderTop: '1px dashed rgba(168,71,46,0.2)', marginTop: 2 }}>
+            <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 4, padding: '8px 0 0', borderTop: '1px solid rgba(213,177,88,.14)', marginTop: 2 }}>
               {['compass', 'coin', 'shu', 'brush'].map(m => (
                 <button
                   key={m}
@@ -702,9 +784,9 @@ export default function DraggableCompass() {
                   title={`切换为 ${m}`}
                   style={{
                     flex: 1, padding: '3px 0', fontSize: 10,
-                    background: mode === m ? 'rgba(168,71,46,0.15)' : 'transparent',
-                    color: mode === m ? '#A8472E' : '#7A7468',
-                    border: '1px solid rgba(168,71,46,0.2)',
+                    background: mode === m ? 'rgba(213,177,88,.14)' : 'transparent',
+                    color: mode === m ? '#efd47d' : '#776f63',
+                    border: '1px solid rgba(213,177,88,.16)',
                     borderRadius: 2, cursor: 'pointer',
                     fontFamily: '"Ma Shan Zheng", serif',
                   }}
@@ -712,8 +794,8 @@ export default function DraggableCompass() {
               ))}
             </div>
             {/* 隐藏提示 */}
-            <div style={{ fontSize: 8, color: '#7A7468', textAlign: 'center', marginTop: 3, letterSpacing: '0.1em' }}>
-              投/落/镇 · 双击投币 · 长按摇卦
+            <div style={{ gridColumn: '1 / -1', fontSize: 8, color: '#6f675b', textAlign: 'left', marginTop: 1, letterSpacing: '0.08em' }}>
+              拖动主盘调整位置 · 双击投币 · 长按摇卦
             </div>
           </motion.div>
         )}
@@ -888,8 +970,38 @@ export default function DraggableCompass() {
         <UserAvatar
           showModal={profileOpen}
           onModalClose={() => setProfileOpen(false)}
+          compactPreferences
         />
       )}
+      {memoryOpen && (() => {
+        let memories = [];
+        try {
+          const groups = [
+            ['偏好与事实', 'yance:memory:facts'],
+            ['近期上下文', 'yance:memory:working'],
+            ['推演经历', 'yance:memory:episodes'],
+            ['模式认识', 'yance:memory:semantic'],
+          ];
+          memories = groups.flatMap(([group, key]) => {
+            const values = JSON.parse(localStorage.getItem(key) || '[]');
+            return (Array.isArray(values) ? values : []).slice(-8).reverse().map((item, index) => ({ id: `${key}:${item.id || index}`, group, text: item.content || item.question || item.decision || '', confidence: item.confidence }));
+          }).filter((item) => item.text);
+          const activeSessionId = sessionStorage.getItem(ACTIVE_SESSION_KEY) || '';
+          const advisorThreads = activeSessionId ? JSON.parse(sessionStorage.getItem(`yance:advisor-threads:${activeSessionId}`) || '[]') : [];
+          const advisorMemories = (Array.isArray(advisorThreads) ? advisorThreads : []).flatMap((thread) => (thread.messages || []).slice(-10).reverse().map((message, index) => ({
+            id: `advisor:${thread.id}:${message.id || index}`,
+            group: `本局智囊对话 · ${thread.title || (thread.kind === 'group' ? '临时讨论' : '单聊')}`,
+            text: `${message.authorName || (message.role === 'user' ? '我' : '智囊')}：${message.text || ''}`,
+          }))).filter((item) => item.text);
+          memories = [...advisorMemories, ...memories];
+        } catch { memories = []; }
+        return <div onClick={() => setMemoryOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 10020, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.68)', backdropFilter: 'blur(8px)' }}>
+          <section onClick={(event) => event.stopPropagation()} style={{ width: 'min(560px,92vw)', maxHeight: '78dvh', display: 'grid', gridTemplateRows: 'auto minmax(0,1fr)', overflow: 'hidden', border: '1px solid rgba(200,168,80,.42)', background: '#0b0908', color: '#e9dfcf', boxShadow: '0 28px 80px rgba(0,0,0,.6)' }}>
+            <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 18px', borderBottom: '1px solid rgba(200,168,80,.18)' }}><span style={{ display: 'grid' }}><strong style={{ color: '#e3c86d', font: '16px "Noto Serif SC",serif' }}>系统记忆 · {memories.length}</strong><small style={{ marginTop: 4, color: '#786f63', font: '9px "Noto Serif SC",serif' }}>本局对话、确认事实、推演经历与模式认识分层显示；不使用示例填充</small></span><button type="button" onClick={() => setMemoryOpen(false)} style={{ width: 34, height: 34, border: '1px solid rgba(200,168,80,.2)', background: 'transparent', color: '#9d927e' }}>×</button></header>
+            <div style={{ overflowY: 'auto', padding: 14 }}>{memories.length > 0 ? memories.map((memory) => <article key={memory.id} style={{ padding: '11px 12px', borderBottom: '1px solid rgba(200,168,80,.12)' }}><span style={{ color: '#a99153', fontSize: 9 }}>{memory.group}{Number.isFinite(memory.confidence) ? ` · 置信 ${Math.round(memory.confidence * 100)}%` : ''}</span><p style={{ margin: '6px 0 0', color: '#d8d0c2', font: '11px/1.7 "Noto Serif SC",serif' }}>{memory.text}</p></article>) : <div style={{ padding: '54px 20px', textAlign: 'center', color: '#766e62', font: '11px/1.8 "Noto Serif SC",serif' }}>尚无已保存的偏好或事实。<br />完成推演后，经过确认的内容才会逐步进入这里。</div>}</div>
+          </section>
+        </div>;
+      })()}
     </div>
   );
 }

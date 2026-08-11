@@ -8,13 +8,20 @@ import {
   deleteCard,
   getCardNotes,
   getCards,
+  getDeliberationUsage,
   getFollowUps,
   scheduleFollowUp,
   shareCard,
   updateCard,
 } from '../services/apiClient';
 import tracker from '../services/tracker';
-import AppNav from '../components/AppNav';
+import DecisionCardIdentity from '../components/cards/DecisionCardIdentity';
+import { decisionUsagePresentation } from '../components/cards/decisionUsagePresentation.js';
+import '../components/cards/decisionCardIdentity.css';
+import { normalizeDecisionCard } from '../game/decisionCardContract.js';
+import { createDestinyCardPresentation } from '../game/destinyCardPresentation.js';
+import { mergeDecisionCards, readLocalDecisionCards, writeLocalDecisionCard } from '../game/decisionCollectionStore.js';
+import './collectionDestinyCard.css';
 
 const T = {
   paper: '#F2EDE0',
@@ -49,28 +56,9 @@ const RARITY_CONFIG = {
   legendary: { label: '传说', color: '#C8A850', border: '#F0D890', glow: '#C8A85060' },
 };
 
-function parseStructuredValue(value, fallback) {
-  if (value == null || value === '') return fallback;
-  if (typeof value !== 'string') return value;
-  try { return JSON.parse(value); } catch { return fallback; }
-}
-
-function normalizeDecisionCard(card) {
-  const createdAt = card.created_at || card.createdAt;
-  return {
-    ...card,
-    advisors: parseStructuredValue(card.advisors, []),
-    pillars: parseStructuredValue(card.pillars, {}),
-    reversalConditions: parseStructuredValue(card.reversal_conditions ?? card.reversalConditions, []),
-    nextActions: parseStructuredValue(card.next_actions ?? card.nextActions, []),
-    evidence: parseStructuredValue(card.evidence, []),
-    powerfulQuestion: card.powerfulQuestion || card.powerful_question || '',
-    date: card.date || (createdAt ? String(createdAt).slice(0, 10) : ''),
-  };
-}
-
 /* 卡牌面 - 真实视觉(卦象 + 卦辞 + 四柱 + 终局) */
-function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay, onScheduleFollowUp }) {
+// oxlint-disable-next-line no-unused-vars
+function LegacyFatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay, onScheduleFollowUp }) {
   const [showShare, setShowShare] = useState(false);
   const [noteCount, setNoteCount] = useState(0);
   // 编辑模式：标题 / 个人感悟(summary) / 承诺文字(decision)
@@ -79,8 +67,15 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
   const [editSummary, setEditSummary] = useState(card.summary || '');
   const [editDecision, setEditDecision] = useState(card.decision || '');
   const [followUpDays, setFollowUpDays] = useState(7);
+  const [usageSummary, setUsageSummary] = useState(null);
+  const [usageLoading, setUsageLoading] = useState(false);
   const rarity = card.rarity || 'common';
   const rarityConfig = RARITY_CONFIG[rarity];
+  const cardAccent = isUser ? '#F3D985' : card.color;
+  const cardText = isUser ? '#F7F2E8' : T.paperLight;
+  const cardSoftText = isUser ? '#C9C3B7' : T.paperLight;
+  const cardLine = isUser ? 'rgba(243,217,133,.25)' : `${card.color}40`;
+  const cardPanel = isUser ? 'rgba(255,255,255,.035)' : `${card.color}10`;
 
   useEffect(() => {
     if (!isUser || !card.id) return;
@@ -99,6 +94,18 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
     };
     loadNoteCount();
   }, [card.id, isUser]);
+
+  useEffect(() => {
+    const sessionId = card.sourceSessionId || card.source_session_id;
+    if (!isUser || !isSelected || !sessionId) return;
+    let active = true;
+    setUsageLoading(true);
+    getDeliberationUsage(sessionId)
+      .then((result) => { if (active) setUsageSummary(result?.summary || null); })
+      .catch(() => { if (active) setUsageSummary(null); })
+      .finally(() => { if (active) setUsageLoading(false); });
+    return () => { active = false; };
+  }, [card.sourceSessionId, card.source_session_id, isSelected, isUser]);
 
   // 进入编辑
   const handleStartEdit = () => {
@@ -225,12 +232,14 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
       whileHover={{ y: -6, transition: { duration: 0.4, ease: EASE } }}
       className="relative overflow-hidden cursor-pointer group"
       style={{
-        borderRadius: 6,
-        backgroundColor: isUser ? T.paperLight : '#0E0A06',
-        border: `2px solid ${isSelected ? T.accent : (isUser ? rarityConfig.border : card.color + '60')}`,
+        borderRadius: 18,
+        background: isUser
+          ? 'radial-gradient(circle at 50% -10%, rgba(239,222,168,.17), transparent 35%), linear-gradient(155deg, rgba(18,22,22,.98), rgba(5,8,9,.98))'
+          : '#0E0A06',
+        border: `1px solid ${isSelected ? '#F3D985' : (isUser ? 'rgba(243,217,133,.38)' : card.color + '60')}`,
         boxShadow: isSelected 
-          ? `0 0 0 4px ${T.accent}20, 0 4px 20px ${T.accent}30` 
-          : (isUser ? '0 2px 12px rgba(0,0,0,0.04)' : `0 4px 20px ${card.color}30`),
+          ? '0 0 0 1px rgba(243,217,133,.46), 0 0 42px rgba(222,190,98,.2)'
+          : (isUser ? '0 18px 55px rgba(0,0,0,.34), inset 0 1px rgba(255,255,255,.05)' : `0 4px 20px ${card.color}30`),
       }}
     >
       {/* 选中标记 */}
@@ -266,47 +275,11 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
       {/* 卡顶: 卦象 + 标题 + 日期 */}
       <div className="relative p-5 pb-4" style={{
         background: isUser
-          ? `linear-gradient(180deg, ${T.paper} 0%, ${T.paperLight} 100%)`
+          ? 'linear-gradient(180deg, rgba(243,217,133,.09) 0%, rgba(255,255,255,.018) 100%)'
           : `linear-gradient(180deg, ${card.color}15 0%, transparent 100%)`,
       }}>
-        <div className="flex items-start justify-between mb-3">
-          {/* 卦象大字 */}
-          <div
-            className="text-4xl font-serif font-bold leading-none"
-            style={{
-              color: isUser ? T.ink : card.color,
-              textShadow: !isUser ? `0 0 20px ${card.color}80` : 'none',
-            }}
-          >
-            {card.trigram}
-          </div>
-          <div className="text-right">
-            <div className="text-[9px] font-mono tracking-wider" style={{ color: T.muted }}>
-              {card.date}
-            </div>
-            <div
-              className="text-[9px] font-mono mt-0.5 px-1.5 py-0.5"
-              style={{
-                color: isUser ? T.accent : card.color,
-                backgroundColor: isUser ? `${T.accent}12` : `${card.color}20`,
-                border: `1px solid ${isUser ? T.accent : card.color}50`,
-                borderRadius: 2,
-              }}
-            >
-              {card.style}
-            </div>
-          </div>
-        </div>
-
-        {/* 卦名 + 五行 */}
-        <div className="flex items-baseline gap-2 mb-2">
-          <h3 className="text-lg font-serif font-bold" style={{ color: isUser ? T.ink : T.goldLight }}>
-            {card.gua}
-          </h3>
-          <span className="text-[10px] font-mono" style={{ color: T.muted }}>·</span>
-          <span className="text-[10px] font-mono" style={{ color: T.muted }}>
-            五行属 {card.element}
-          </span>
+        <div style={{ color: cardText, '--decision-card-accent': cardAccent }}>
+          <DecisionCardIdentity card={{ ...card, title: '' }} />
         </div>
 
         {/* 决策名（编辑模式下变为 input） */}
@@ -318,7 +291,7 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
             onChange={(e) => setEditTitle(e.target.value)}
           />
         ) : (
-          <div className="text-[12px] font-medium" style={{ color: isUser ? T.inkSoft : T.paperLight }}>
+          <div className="text-[12px] font-medium" style={{ color: cardSoftText }}>
             {card.title}
           </div>
         )}
@@ -326,13 +299,13 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
 
       {/* 卡中: 问题 + 卦辞 */}
       <div className="px-5 py-3" style={{
-        borderTop: `1px dashed ${isUser ? T.border : card.color + '30'}`,
-        borderBottom: `1px dashed ${isUser ? T.border : card.color + '30'}`,
+        borderTop: `1px solid ${cardLine}`,
+        borderBottom: `1px solid ${cardLine}`,
       }}>
         <div className="text-[10px] font-mono tracking-wider mb-1" style={{ color: T.muted }}>
           所问
         </div>
-        <div className="text-[12px] leading-relaxed mb-3" style={{ color: isUser ? T.inkSoft : T.paperLight }}>
+        <div className="text-[12px] leading-relaxed mb-3" style={{ color: cardSoftText }}>
           {card.question}
         </div>
 
@@ -341,7 +314,7 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
         </div>
         <div
           className="text-[11px] font-serif leading-relaxed italic"
-          style={{ color: isUser ? T.ink : T.goldLight, opacity: 0.9 }}
+          style={{ color: cardText, opacity: 0.92 }}
         >
           {card.verse}
         </div>
@@ -360,7 +333,7 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
                 <div className="text-[9px] font-mono" style={{ color: T.muted }}>{label}柱</div>
                 <div
                   className="text-[12px] font-serif font-semibold mt-0.5"
-                  style={{ color: isUser ? T.ink : T.goldLight }}
+                  style={{ color: cardText }}
                 >
                   {card.pillars[key]}
                 </div>
@@ -378,10 +351,10 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
               key={a}
               className="text-[9px] font-mono px-1.5 py-0.5"
               style={{
-                color: isUser ? T.ink : card.color,
-                border: `1px solid ${isUser ? T.border : card.color + '40'}`,
-                borderRadius: 2,
-                backgroundColor: isUser ? T.paper : `${card.color}10`,
+                color: isUser ? '#E6D59A' : card.color,
+                border: `1px solid ${cardLine}`,
+                borderRadius: 999,
+                backgroundColor: cardPanel,
               }}
             >
               {a}
@@ -394,18 +367,18 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
             className="mb-3 p-2.5"
             style={{
               borderRadius: 3,
-              border: `1px dashed ${isUser ? T.accent + '40' : card.color + '40'}`,
-              backgroundColor: isUser ? `${T.accent}06` : `${card.color}08`,
+              border: `1px solid ${cardLine}`,
+              backgroundColor: cardPanel,
             }}
           >
             {card.powerfulQuestion && (
               <div className="mb-1.5">
-                <div className="text-[9px] font-mono tracking-wider mb-0.5" style={{ color: isUser ? T.accent : card.color }}>
+                <div className="text-[9px] font-mono tracking-wider mb-0.5" style={{ color: cardAccent }}>
                   一句反问
                 </div>
                 <div
                   className="text-[11px] font-serif leading-relaxed"
-                  style={{ color: isUser ? T.ink : T.goldLight, fontStyle: 'italic' }}
+                  style={{ color: cardText, fontStyle: 'italic' }}
                 >
                   {card.powerfulQuestion}
                 </div>
@@ -413,16 +386,38 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
             )}
             {card.framework && (
               <div>
-                <div className="text-[9px] font-mono tracking-wider mb-0.5" style={{ color: isUser ? T.accent : card.color }}>
+                <div className="text-[9px] font-mono tracking-wider mb-0.5" style={{ color: cardAccent }}>
                   决策框架
                 </div>
                 <div
                   className="text-[10px] font-serif leading-relaxed"
-                  style={{ color: isUser ? T.inkSoft : T.paperLight, opacity: 0.85 }}
+                  style={{ color: cardSoftText, opacity: 0.9 }}
                 >
                   {card.framework}
                 </div>
               </div>
+            )}
+          </div>
+        )}
+
+        {isUser && isSelected && (card.sourceSessionId || card.source_session_id) && (
+          <div className="mb-3 p-2.5" style={{ borderRadius: 3, border: `1px solid ${cardLine}`, backgroundColor: cardPanel }}>
+            <div className="text-[9px] font-mono tracking-wider mb-1" style={{ color: cardAccent }}>本局模型用量</div>
+            {usageLoading ? (
+              <div className="text-[10px]" style={{ color: cardSoftText }}>正在核对供应商用量…</div>
+            ) : usageSummary ? (() => {
+              const usage = decisionUsagePresentation(usageSummary);
+              return usage.measured ? (
+                <div className="text-[10px] font-mono leading-relaxed" style={{ color: cardSoftText }}>
+                  <strong style={{ color: cardText }}>{usage.total} tokens</strong>
+                  <span> · 输入 {usage.input} · 输出 {usage.output}</span><br />
+                  <span>{usage.calls} · {usage.cost}</span>
+                </div>
+              ) : (
+                <div className="text-[10px]" style={{ color: cardSoftText }}>供应商未返回精确 usage，未计入正式实耗。</div>
+              );
+            })() : (
+              <div className="text-[10px]" style={{ color: cardSoftText }}>此命签生成于用量账本启用前，暂无可核对明细。</div>
             )}
           </div>
         )}
@@ -440,7 +435,7 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
         ) : (
           <div
             className="text-[12px] font-serif leading-relaxed"
-            style={{ color: isUser ? T.ink : T.paperLight }}
+            style={{ color: cardText }}
           >
             {card.summary}
           </div>
@@ -451,8 +446,8 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
       <div
         className="px-5 py-2 flex items-center justify-between flex-wrap gap-2"
         style={{
-          backgroundColor: isUser ? T.paper : `${card.color}20`,
-          borderTop: `1px solid ${isUser ? T.border : card.color + '40'}`,
+          backgroundColor: isUser ? 'rgba(243,217,133,.045)' : `${card.color}20`,
+          borderTop: `1px solid ${cardLine}`,
         }}
       >
         <span className="text-[9px] font-mono" style={{ color: T.muted }}>
@@ -491,7 +486,7 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
             <>
               <span
                 className="text-[11px] font-serif font-semibold"
-                style={{ color: isUser ? T.accent : T.goldLight }}
+                style={{ color: cardAccent }}
               >
                 择 {card.decision} →
               </span>
@@ -503,7 +498,7 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
                     onChange={(e) => setFollowUpDays(Number(e.target.value))}
                     aria-label="选择回访时间"
                     className="text-[10px] font-mono px-2 min-h-11"
-                    style={{ color: T.ink, border: `1px solid ${T.border}`, borderRadius: 2, backgroundColor: T.paperLight }}
+                    style={{ color: cardText, border: `1px solid ${cardLine}`, borderRadius: 6, backgroundColor: '#101313' }}
                   >
                     {[3, 7, 30, 90].map((days) => <option key={days} value={days}>{days}天</option>)}
                   </select>
@@ -643,9 +638,224 @@ function FatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, 
   );
 }
 
+function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 2) {
+  const chars = Array.from(String(text || ''));
+  const lines = [];
+  let line = '';
+  chars.forEach((char) => {
+    const next = line + char;
+    if (ctx.measureText(next).width > maxWidth && line) {
+      lines.push(line);
+      line = char;
+    } else {
+      line = next;
+    }
+  });
+  if (line) lines.push(line);
+  lines.slice(0, maxLines).forEach((item, index) => {
+    const clipped = index === maxLines - 1 && lines.length > maxLines ? `${item.slice(0, -1)}…` : item;
+    ctx.fillText(clipped, x, y + index * lineHeight);
+  });
+}
+
+function FatedCard({ card: rawCard, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay, onScheduleFollowUp }) {
+  const card = useMemo(() => normalizeDecisionCard(rawCard), [rawCard]);
+  const [showTools, setShowTools] = useState(false);
+  const [followUpDays, setFollowUpDays] = useState(7);
+  const [usageSummary, setUsageSummary] = useState(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(card.title || '');
+  const [editSummary, setEditSummary] = useState(card.summary || '');
+
+  const presentation = useMemo(() => createDestinyCardPresentation({
+    ticketId: card.ticketId || card.sourceSessionId || card.source_session_id || card.id,
+    timestamp: card.created_at || card.createdAt || card.date,
+    question: card.question,
+    summary: card.summary,
+    oracleText: card.verse,
+    hexagram: { primary: card.gua },
+    path: {
+      label: card.decision || card.title,
+      keyPoints: card.nextActions,
+      reversalConditions: card.reversalConditions,
+    },
+    cardCopy: card.cardCopy || {
+      source: card.copySource === 'generated' ? 'generated' : 'structured',
+      verse: card.verse,
+      verdict: card.summary,
+      insight: card.powerfulQuestion || card.summary,
+      nextAction: card.nextActions?.[0],
+      guardrail: card.reversalConditions?.[0],
+    },
+    artwork: card.artwork,
+  }), [card]);
+
+  const artworkStack = presentation.artworkSource === 'seedream'
+    ? `url("${presentation.artworkUrl}"), url("/assets/generated/xuanmo/destiny-card-archive-v1.png")`
+    : `url("${presentation.artworkUrl}")`;
+
+  useEffect(() => {
+    const sessionId = card.sourceSessionId || card.source_session_id;
+    if (!isUser || !isSelected || !sessionId) return undefined;
+    let active = true;
+    setUsageLoading(true);
+    getDeliberationUsage(sessionId)
+      .then((result) => { if (active) setUsageSummary(result?.summary || null); })
+      .catch(() => { if (active) setUsageSummary(null); })
+      .finally(() => { if (active) setUsageLoading(false); });
+    return () => { active = false; };
+  }, [card.sourceSessionId, card.source_session_id, isSelected, isUser]);
+
+  const handleSave = () => {
+    onSave?.({ ...card, title: editTitle.trim() || card.title, summary: editSummary.trim() || card.summary });
+    setIsEditing(false);
+  };
+
+  const generateShareImage = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1200;
+    canvas.height = 1600;
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 1200, 1600);
+    gradient.addColorStop(0, '#18130b');
+    gradient.addColorStop(0.55, '#090806');
+    gradient.addColorStop(1, '#020302');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 1200, 1600);
+    ctx.strokeStyle = 'rgba(229,196,113,.7)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(46, 46, 1108, 1508);
+    ctx.strokeStyle = 'rgba(229,196,113,.22)';
+    ctx.strokeRect(66, 66, 1068, 1468);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#bfa765';
+    ctx.font = '22px serif';
+    ctx.fillText(`演策命牌 · ${presentation.archiveId}`, 600, 125);
+    ctx.font = '72px "Ma Shan Zheng", serif';
+    ctx.fillStyle = '#f2dfa7';
+    ctx.fillText(presentation.sealTitle, 600, 330);
+    ctx.font = '30px "Noto Serif SC", serif';
+    ctx.fillStyle = '#d8c9a5';
+    wrapCanvasText(ctx, presentation.verse, 600, 390, 800, 44, 2);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#a88d53';
+    ctx.font = '20px "Noto Serif SC", serif';
+    ctx.fillText('所问', 160, 600);
+    ctx.fillStyle = '#ece3d0';
+    ctx.font = '28px "Noto Serif SC", serif';
+    wrapCanvasText(ctx, presentation.question, 270, 600, 760, 43, 2);
+    ctx.fillStyle = '#a88d53';
+    ctx.font = '20px "Noto Serif SC", serif';
+    ctx.fillText('所择', 160, 750);
+    ctx.fillStyle = '#ece3d0';
+    ctx.font = '28px "Noto Serif SC", serif';
+    wrapCanvasText(ctx, presentation.decision, 270, 750, 760, 43, 2);
+    ctx.fillStyle = '#a88d53';
+    ctx.font = '20px "Noto Serif SC", serif';
+    ctx.fillText('本局断语', 160, 900);
+    ctx.fillStyle = '#ece3d0';
+    ctx.font = '28px "Noto Serif SC", serif';
+    wrapCanvasText(ctx, presentation.verdict, 300, 900, 730, 43, 3);
+    presentation.anchors.forEach((anchor, anchorIndex) => {
+      const x = 155 + anchorIndex * 310;
+      ctx.strokeStyle = 'rgba(218,179,82,.35)';
+      ctx.strokeRect(x, 1110, 270, 190);
+      ctx.fillStyle = '#c95d45';
+      ctx.font = '40px "Ma Shan Zheng", serif';
+      ctx.fillText(anchor.label, x + 24, 1165);
+      ctx.fillStyle = '#cfc2a8';
+      ctx.font = '23px "Noto Serif SC", serif';
+      wrapCanvasText(ctx, anchor.text, x + 24, 1225, 220, 34, 2);
+    });
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#8c8069';
+    ctx.font = '18px monospace';
+    ctx.fillText(`${presentation.hexagram} · ${presentation.date} · ${presentation.copySource}`, 600, 1470);
+    const link = document.createElement('a');
+    link.download = `演策命牌-${presentation.archiveId}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    onShare?.(card.id);
+  };
+
+  const usage = usageSummary ? decisionUsagePresentation(usageSummary) : null;
+
+  return (
+    <motion.article
+      initial={{ opacity: 0, y: 24 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.05, duration: 0.55, ease: EASE }}
+      className={`collection-destiny-card${isSelected ? ' is-selected' : ''}`}
+    >
+      <div className="collection-destiny-card__face" style={{ '--collection-artwork': artworkStack }}>
+        <div className="collection-destiny-card__art" aria-hidden="true" />
+        <div className="collection-destiny-card__wash" aria-hidden="true" />
+        <header>
+          <small>YANCE · DECISION ARCHIVE</small>
+          <span>{presentation.archiveId}</span>
+        </header>
+        <div className="collection-destiny-card__seal" aria-hidden="true">演</div>
+        <section className="collection-destiny-card__title">
+          <span>{presentation.hexagram}</span>
+          {isEditing ? (
+            <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} aria-label="命牌标题" />
+          ) : (
+            <h2>{presentation.sealTitle}</h2>
+          )}
+          <p>{presentation.verse}</p>
+        </section>
+        <dl>
+          <div><dt>所问</dt><dd>{presentation.question}</dd></div>
+          <div><dt>所择</dt><dd>{presentation.decision}</dd></div>
+          <div>
+            <dt>断语</dt>
+            <dd>{isEditing ? <textarea value={editSummary} onChange={(event) => setEditSummary(event.target.value)} aria-label="命牌断语" /> : presentation.verdict}</dd>
+          </div>
+        </dl>
+        <div className="collection-destiny-card__anchors">
+          {presentation.anchors.map((anchor) => <div key={anchor.label}><b>{anchor.label}</b><span>{anchor.text}</span></div>)}
+        </div>
+        <footer>
+          <span>{presentation.date}</span>
+          <span>{presentation.copySource}</span>
+        </footer>
+        {isSelected && <i className="collection-destiny-card__selected" aria-label="已选中">✓</i>}
+      </div>
+
+      <div className="collection-destiny-card__toolbar" onClick={(event) => event.stopPropagation()}>
+        <button type="button" onClick={() => setShowTools((open) => !open)}>{showTools ? '收起工具' : '命牌工具'}</button>
+        {isEditing ? (
+          <><button type="button" onClick={handleSave}>保存</button><button type="button" onClick={() => setIsEditing(false)}>取消</button></>
+        ) : null}
+      </div>
+
+      <AnimatePresence>
+        {showTools && (
+          <motion.div className="collection-destiny-card__tools" onClick={(event) => event.stopPropagation()} initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
+            {isUser && <button type="button" onClick={() => setIsEditing(true)}>编辑题名</button>}
+            {isUser && <button type="button" onClick={() => onOpenNotes?.(card)}>笔记</button>}
+            {(card.yanSummary || card.agentNotes?.length > 0) && <button type="button" onClick={() => onReplay?.(card)}>回看推演</button>}
+            <button type="button" onClick={generateShareImage}>保存分享图</button>
+            {isUser && <select value={followUpDays} onChange={(event) => setFollowUpDays(Number(event.target.value))} aria-label="回访时间">{[3, 7, 30, 90].map((days) => <option key={days} value={days}>{days}天回访</option>)}</select>}
+            {isUser && <button type="button" onClick={() => onScheduleFollowUp?.(card, followUpDays)}>设回访</button>}
+            {isUser && <button type="button" className="is-danger" onClick={() => onDelete?.(card.id)}>删除</button>}
+            {isUser && isSelected && (
+              <p className="collection-destiny-card__usage">
+                {usageLoading ? '正在核对模型用量…' : usage?.measured ? `${usage.total} tokens · ${usage.calls} · ${usage.cost}` : '此局暂无可核对的供应商用量'}
+              </p>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.article>
+  );
+}
+
 export default function Collection() {
   const navigate = useNavigate();
   const [userCards, setUserCards] = useState([]);
+  const [collectionFilter, setCollectionFilter] = useState('all');
   const [achievements, setAchievements] = useState({});
   const [selectedCards, setSelectedCards] = useState([]);
   const [showCompare, setShowCompare] = useState(false);
@@ -673,12 +883,14 @@ export default function Collection() {
   }, []);
 
   const loadCards = useCallback(async () => {
+    const local = readLocalDecisionCards();
+    setUserCards(local);
     try {
       const remote = await getCards();
-      setUserCards(Array.isArray(remote) ? remote.map(normalizeDecisionCard) : []);
+      setUserCards(mergeDecisionCards(Array.isArray(remote) ? remote : [], local));
     } catch (e) {
-      setUserCards([]);
-      setFollowUpMessage(`决策账本暂未载入：${e.message}`);
+      setUserCards(local);
+      setFollowUpMessage(local.length > 0 ? '云端账本暂未连接，正在显示本机保存的命牌。' : `决策账本暂未载入：${e.message}`);
     }
   }, []);
 
@@ -736,6 +948,7 @@ export default function Collection() {
   }, [loadFollowUps]);
 
   const handleSaveCard = useCallback(async (updatedCard) => {
+    writeLocalDecisionCard(updatedCard);
     try {
       await updateCard(updatedCard.id, updatedCard);
       setUserCards(prev => prev.map(c => (c.id === updatedCard.id ? { ...c, ...updatedCard } : c)));
@@ -789,6 +1002,12 @@ export default function Collection() {
     () => userCards.map((card) => ({ ...card, isUser: true })),
     [userCards],
   );
+  const verifiedCardIds = useMemo(() => new Set(completedFollowUps.map((item) => item.card_id || item.cardId).filter(Boolean)), [completedFollowUps]);
+  const filteredCards = useMemo(() => allCards.filter((card) => {
+    if (collectionFilter === 'verified') return verifiedCardIds.has(card.id);
+    if (collectionFilter === 'pending') return !verifiedCardIds.has(card.id);
+    return true;
+  }), [allCards, collectionFilter, verifiedCardIds]);
 
   // 按五行统计
   const elementCount = useMemo(() => {
@@ -800,8 +1019,7 @@ export default function Collection() {
   }, [allCards]);
 
   return (
-    <div className="min-h-screen overflow-x-hidden" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}>
-      <AppNav variant="light" />
+    <div className="xm-paper-page min-h-screen overflow-x-hidden" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}>
       {/* 顶部细条 */}
       <div className="text-center py-2 px-4" style={{ backgroundColor: T.ink }}>
         <span className="text-[10px] font-mono tracking-wide">
@@ -1116,17 +1334,14 @@ export default function Collection() {
                 只展示你真实完成并保存的决策，不混入示例命签
               </p>
             </div>
-            <button
-              onClick={() => navigate('/sandbox')}
-              className="text-[11px] font-mono px-3 py-1.5"
-              style={{ color: T.accent, border: `1px solid ${T.accent}40`, borderRadius: 2 }}
-            >
-              推演新局 →
-            </button>
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {[['all','全部'],['pending','待复盘'],['verified','已验证']].map(([id,label]) => <button key={id} type="button" onClick={() => setCollectionFilter(id)} className="text-[10px] font-mono px-3 py-2" style={{ color: collectionFilter === id ? T.paperLight : T.muted, background: collectionFilter === id ? T.ink : 'transparent', border: `1px solid ${collectionFilter === id ? T.ink : T.border}`, borderRadius: 2 }}>{label}</button>)}
+              <button onClick={() => navigate('/sandbox')} className="text-[11px] font-mono px-3 py-2" style={{ color: T.accent, border: `1px solid ${T.accent}40`, borderRadius: 2 }}>推演新局 →</button>
+            </div>
           </motion.div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {allCards.map((card, i) => (
+            {filteredCards.map((card, i) => (
               <motion.div
                 key={card.id}
                 onClick={() => toggleCardSelect(card)}
@@ -1149,6 +1364,14 @@ export default function Collection() {
               </motion.div>
             ))}
           </div>
+
+          {allCards.length > 0 && filteredCards.length === 0 && (
+            <div className="px-6 py-14 text-center" style={{ border: `1px dashed ${T.border}`, backgroundColor: T.paperLight }}>
+              <div className="text-3xl mb-3" style={{ color: T.gold }}>□</div>
+              <h3 className="text-lg font-serif mb-2">这个分组暂时为空</h3>
+              <p className="text-[12px]" style={{ color: T.muted }}>{collectionFilter === 'verified' ? '完成一次行动回访后，命牌会进入“已验证”。' : '所有命牌都已经完成回访。'}</p>
+            </div>
+          )}
 
           {allCards.length === 0 && (
             <div className="px-6 py-16 text-center" style={{ border: `1px dashed ${T.border}`, borderRadius: 6, backgroundColor: T.paperLight }}>

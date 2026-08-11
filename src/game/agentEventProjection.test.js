@@ -86,6 +86,19 @@ test('advisor speech enters the readable activity trail as a public contribution
   assert.equal(state.agents.health.status, 'running');
 });
 
+test('advisor speech keeps its structured finding for the record drawer', () => {
+  const payload = {
+    agentId: 'baby', agentName: '宝宝', content: '完整发言',
+    claim: '先试住两周', reasoning: '预算和通勤尚可承受',
+    assumptions: ['预算口径准确'], reversalConditions: ['通勤超过一小时'],
+    confidence: 0.74,
+    toolResults: [{ tool: 'web_search', status: 'accepted', summary: '核验了租金区间' }],
+  };
+  const state = applyAgentEvent(createArenaProjection(), event(1, 'ADVISOR_SPEAK', payload));
+
+  assert.deepEqual(state.agents.baby.finding, payload);
+});
+
 test('round review exposes the user gate and preserves advisor contributions', () => {
   let state = createArenaProjection();
   state = applyAgentEvent(state, event(1, 'ADVISOR_SPEAK', {

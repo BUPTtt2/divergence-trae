@@ -36,22 +36,36 @@ import * as memoryService from '../services/memoryService.js';
 import * as customAdvisorService from '../services/customAdvisorService.js';
 import eventBus from '../services/eventBus.js';
 import { enqueueCommand } from '../services/deliberationCommandService.js';
+import { routeConversationHybrid } from '../services/conversationRouter.js';
+import { callLLM, isLLMAvailable } from '../services/llmRouter.js';
+import { contextLedgerIndex, selectContextEntries } from '../services/contextLedger.js';
+import { getSessionUsage } from '../services/llmUsageService.js';
+import { withLLMUsageContext } from '../services/llmUsageContext.js';
+import { generateDestinyArtwork } from '../services/destinyArtworkService.js';
 import {
   normalizeExecuteResponse,
   parseExecuteRequest,
-} from '../../../shared/deliberationContract.js';
+} from '../contracts/deliberationContract.js';
 
 const router = Router();
 
 // 固定路由保留字（不可被当作 sessionId 匹配）
 const RESERVED_KEYWORDS = new Set([
-  'health', 'start', 'memories', 'advisors',
+  'health', 'route', 'start', 'memories', 'advisors',
   'plan', 'answer', 'execute', 'commit', 'pause', 'resume',
-  'snapshot', 'events', 'confirm-case', 'interject',
+  'snapshot', 'events', 'usage', 'confirm-case', 'interject',
 ]);
 
 function isReservedSegment(seg) {
   return typeof seg === 'string' && RESERVED_KEYWORDS.has(seg.toLowerCase());
+}
+
+function runWithSessionUsage(req, stage, operation) {
+  return withLLMUsageContext({
+    sessionId: req.params.sessionId,
+    userId: req.principal.userId,
+    stage,
+  }, operation);
 }
 
 /* ============================================================
@@ -69,6 +83,38 @@ router.get('/health', asyncHandler(async (req, res) => {
     timestamp: new Date().toISOString(),
   });
 }));
+
+router.post(
+  '/route',
+  requirePrincipal,
+  asyncHandler(async (req, res) => {
+    const { question } = req.body || {};
+    if (!question || typeof question !== 'string') {
+      return res.status(400).json({ error: '缺少 question 参数' });
+    }
+    if (question.length > 500) {
+      return res.status(400).json({ error: '问题过长，请控制在500字以内' });
+    }
+    const route = await routeConversationHybrid(question, {
+      classify: isLLMAvailable() ? async ({ question: normalizedQuestion }) => {
+        const content = await callLLM([
+          {
+            role: 'system',
+            content: '你是决策入口路由器。只输出 JSON，不要补充文字：{"lane":"direct|lightweight|lookup|deep","complexity":0,"domain":"behavior_change|education|housing|travel|career|finance|relationship|everyday_meal|general","horizon":"immediate|short_term|long_term|unknown","stakes":"low|medium|high","reversibility":"high|medium|low|unknown","realtimeNeed":false,"participants":[],"goal":"用户真正要解决的目标","constraints":[],"ambiguity":[],"confidence":0.0,"reason":"一句话"}。简单事实或闲聊用 direct；明确即时、低成本且可逆的日常选择才用 lightweight；必须依赖当前数据用 lookup；长期行为改变、多目标、多约束、高投入或高后果取舍用 deep。“要不要”只是句式，不能单独决定 lightweight。不得诊断，不得把推测写成事实。',
+          },
+          { role: 'user', content: normalizedQuestion },
+        ], { maxTokens: 120, temperature: 0, timeout: 6000 });
+        if (!content) return null;
+        const json = content.match(/\{[\s\S]*\}/)?.[0];
+        return json ? JSON.parse(json) : null;
+      } : undefined,
+    });
+    return res.json({
+      ...route,
+      nextAction: route.requiresSession ? 'start_deliberation' : 'complete',
+    });
+  }),
+);
 
 /**
  * GET /api/deliberation/memories?userId=xxx
@@ -155,7 +201,7 @@ router.post(
   '/start',
   requirePrincipal,
   asyncHandler(async (req, res) => {
-    const { question, deferPlanning } = req.body || {};
+    const { question, deferPlanning, intentFrame } = req.body || {};
 
     if (!question || typeof question !== 'string') {
       return res.status(400).json({ error: '缺少 question 参数' });
@@ -164,10 +210,10 @@ router.post(
       return res.status(400).json({ error: '问题过长，请控制在500字以内' });
     }
     if (deferPlanning === true) {
-      const result = await deliberationEngine.createSession(question, req.principal.userId);
+      const result = await deliberationEngine.createSession(question, req.principal.userId, { intentFrame });
       return res.status(202).json(result);
     }
-    const result = await deliberationEngine.start(question, req.principal.userId);
+    const result = await deliberationEngine.start(question, req.principal.userId, { intentFrame });
     return res.json(result);
   })
 );
@@ -225,10 +271,59 @@ router.post(
   requirePrincipal,
   requireOwnedDeliberation,
   asyncHandler(async (req, res) => {
-    const result = await deliberationEngine.plan(req.params.sessionId, {
-      userId: req.principal.userId,
-    });
+    const result = await runWithSessionUsage(req, 'plan', () => deliberationEngine.plan(
+      req.params.sessionId,
+      { userId: req.principal.userId },
+    ));
     res.json(result);
+  }),
+);
+
+router.get(
+  '/:sessionId/context',
+  requirePrincipal,
+  requireOwnedDeliberation,
+  asyncHandler(async (req, res, next) => {
+    const { sessionId } = req.params;
+    if (isReservedSegment(sessionId)) return next('route');
+    const session = await deliberationEngine.getState(sessionId, { userId: req.principal.userId });
+    const filters = {
+      id: req.query.id,
+      round: req.query.round,
+      action: req.query.action,
+      participantId: req.query.participantId,
+      limit: req.query.limit,
+    };
+    const detailRequested = Object.values(filters).some(Boolean) || req.query.detail === 'full';
+    res.json(detailRequested
+      ? { entries: selectContextEntries(session.plan || {}, filters) }
+      : { index: contextLedgerIndex(session.plan || {}) });
+  }),
+);
+
+router.get(
+  '/:sessionId/usage',
+  requirePrincipal,
+  requireOwnedDeliberation,
+  asyncHandler(async (req, res, next) => {
+    const { sessionId } = req.params;
+    if (isReservedSegment(sessionId)) return next('route');
+    res.json(await getSessionUsage(sessionId));
+  }),
+);
+
+router.post(
+  '/:sessionId/destiny-art',
+  requirePrincipal,
+  requireOwnedDeliberation,
+  asyncHandler(async (req, res, next) => {
+    const { sessionId } = req.params;
+    if (isReservedSegment(sessionId)) return next('route');
+    const session = await deliberationEngine.getState(sessionId, { userId: req.principal.userId });
+    const ticket = session?.commitResult?.fateTicket || session?.commit_result?.fateTicket;
+    if (!ticket?.ticketId) return res.status(409).json({ available: false, reason: 'fate_ticket_not_ready' });
+    const artwork = await runWithSessionUsage(req, 'destiny_art', () => generateDestinyArtwork(ticket));
+    res.status(artwork.available ? 200 : 202).json(artwork);
   }),
 );
 
@@ -298,9 +393,11 @@ router.post(
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
     const { answers } = req.body || {};
-    const result = await deliberationEngine.answer(sessionId, answers || [], {
-      userId: req.principal.userId,
-    });
+    const result = await runWithSessionUsage(req, 'answer', () => deliberationEngine.answer(
+      sessionId,
+      answers || [],
+      { userId: req.principal.userId },
+    ));
     res.json(result);
   })
 );
@@ -312,9 +409,11 @@ router.post(
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) return next('route');
-    const result = await deliberationEngine.confirmCase(sessionId, req.body || {}, {
-      userId: req.principal.userId,
-    });
+    const result = await runWithSessionUsage(req, 'confirm_case', () => deliberationEngine.confirmCase(
+      sessionId,
+      req.body || {},
+      { userId: req.principal.userId },
+    ));
     res.json(result);
   }),
 );
@@ -360,10 +459,14 @@ router.post(
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
-    const result = await deliberationEngine.execute(sessionId, command.agentIds, {
-      actionId: command.actionId,
-      userId: req.principal.userId,
-    });
+    const result = await runWithSessionUsage(req, 'execute', () => deliberationEngine.execute(
+      sessionId,
+      command.agentIds,
+      {
+        actionId: command.actionId,
+        userId: req.principal.userId,
+      },
+    ));
     res.json(normalizeExecuteResponse(result));
   })
 );
@@ -380,12 +483,18 @@ router.post(
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
-    const { choice, feedback, actionId } = req.body || {};
+    const { choice, feedback, actionId, memoryConsent } = req.body || {};
     if (!choice) return res.status(400).json({ error: '缺少 choice 参数' });
-    const result = await deliberationEngine.commit(sessionId, choice, feedback || '', {
-      userId: req.principal.userId,
-      actionId,
-    });
+    const result = await runWithSessionUsage(req, 'commit', () => deliberationEngine.commit(
+      sessionId,
+      choice,
+      feedback || '',
+      {
+        userId: req.principal.userId,
+        actionId,
+        memoryConsent: memoryConsent === true,
+      },
+    ));
     res.json(result);
   })
 );

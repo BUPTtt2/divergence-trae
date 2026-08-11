@@ -1,7 +1,7 @@
 {
   "version": 2,
   "framework": null,
-  "buildCommand": "echo 'No build required for serverless API'",
+  "buildCommand": "npm run build",
   "outputDirectory": ".",
   "installCommand": "npm install",
   "rewrites": [

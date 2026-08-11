@@ -259,7 +259,7 @@ export default function Daily() {
   if (!dailyData) return null;
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: F.regular }}>
+    <div className="xm-paper-page min-h-screen" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: F.regular }}>
 
       {/* Main Content */}
       <div className="pt-14 max-w-[800px] mx-auto px-6 py-12">
@@ -288,7 +288,7 @@ export default function Daily() {
                 <h2 className="text-lg font-serif mb-1">有 {dueFollowUps.length} 个决策到了回访时间</h2>
                 <p className="text-[11px]" style={{ color: T.muted }}>日签只提供仪式感；你的行动结果才会形成下一次推演可用的记忆。</p>
               </div>
-              <button onClick={() => navigate('/collection')} className="min-h-11 px-4 text-[11px]" style={{ color: T.paperLight, backgroundColor: T.accent, borderRadius: 3 }}>去填写结果</button>
+              <button onClick={() => navigate('/cards')} className="min-h-11 px-4 text-[11px]" style={{ color: T.paperLight, backgroundColor: T.accent, borderRadius: 3 }}>去填写结果</button>
             </div>
           </motion.section>
         )}

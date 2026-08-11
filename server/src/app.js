@@ -2,8 +2,10 @@ import express from 'express';
 import corsMiddleware from './middleware/cors.js';
 import rateLimit from './middleware/rateLimit.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
-import { initDB, ensureSchema } from './services/db.js';
+import { initDB } from './services/db.js';
 import { isLLMAvailable } from './services/llmRouter.js';
+import { providerRuntime } from './services/providerRuntime.js';
+import { persistUsageEntry } from './services/llmUsageService.js';
 import { info, logRequest, logResponse } from './services/logger.js';
 
 // 路由
@@ -27,8 +29,7 @@ import { startErrorMonitor } from './middleware/errorMonitor.js';
 
 // 初始化数据库（内存模式时安全，PostgreSQL时连接池）
 initDB();
-// PostgreSQL 模式下自动建表（异步，不阻塞启动）
-ensureSchema().catch((e) => console.warn('[DB] Schema 初始化异常:', e.message));
+providerRuntime.setSink(persistUsageEntry);
 
 const app = express();
 

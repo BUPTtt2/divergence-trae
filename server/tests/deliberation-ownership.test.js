@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import app from '../src/app.js';
 import * as memoryService from '../src/services/memoryService.js';
 import { query } from '../src/services/db.js';
+import { persistUsageEntry } from '../src/services/llmUsageService.js';
 
 async function withServer(run) {
   const server = app.listen(0);
@@ -119,6 +120,41 @@ test('non-owner cannot read or mutate another principal deliberation', async () 
     });
     assert.equal(ownerRead.status, 200);
     assert.equal(ownerRead.body.session.sessionId, sid);
+  });
+});
+
+test('session usage is readable by its owner and hidden from other principals', async () => {
+  await withServer(async (base) => {
+    const owner = await createAnonymous(base);
+    const intruder = await createAnonymous(base);
+    const session = await memoryService.saveSession({
+      user_id: owner.user.id,
+      question: '统计本局模型用量',
+      state: 'WAIT',
+      round: 1,
+    });
+    await persistUsageEntry({
+      provider: 'doubao',
+      model: 'doubao-1.5-pro-32k',
+      status: 'success',
+      sessionId: session.id,
+      userId: owner.user.id,
+      stage: 'advisor',
+      usage: { prompt_tokens: 4200, completion_tokens: 800, total_tokens: 5000 },
+    });
+
+    const owned = await jsonRequest(base, `/api/deliberation/${session.id}/usage`, {
+      token: owner.accessToken,
+    });
+    assert.equal(owned.status, 200);
+    assert.equal(owned.body.summary.tokens.total, 5000);
+    assert.equal(owned.body.entries[0].stage, 'advisor');
+
+    const foreign = await jsonRequest(base, `/api/deliberation/${session.id}/usage`, {
+      token: intruder.accessToken,
+    });
+    assert.equal(foreign.status, 404);
+    assert.equal(foreign.body.error, 'SESSION_NOT_FOUND');
   });
 });
 

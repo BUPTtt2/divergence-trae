@@ -1,7 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildDecisionCase, confirmDecisionCase } from '../src/services/decisionCaseService.js';
+import { acceptedCaseContext, buildDecisionCase, confirmDecisionCase } from '../src/services/decisionCaseService.js';
+
+test('explicit context in the original question enters the case file before clarification', () => {
+  const decisionCase = buildDecisionCase({
+    session: {
+      question: '我和女朋友都在北京实习，预算两千，要不要先租房，通勤和转正都不确定',
+      answers: [],
+    },
+    plan: { informationFields: [], askUser: [] },
+    depthRoute: { depth: 'deep', reason: '多约束居住选择' },
+  });
+
+  assert.deepEqual(decisionCase.facts.map((fact) => fact.value), [
+    '我和女朋友都在北京实习',
+    '预算两千',
+    '通勤和转正都不确定',
+  ]);
+  assert.equal(decisionCase.facts.every((fact) => fact.source === 'user-question'), true);
+});
 
 test('decision case keeps every user answer as a confirmed fact instead of overwriting earlier rounds', () => {
   const decisionCase = buildDecisionCase({
@@ -64,6 +82,8 @@ test('open questions stay visible as unknowns and are never promoted to facts', 
     question: '最大能承受多少亏损？',
     reason: '决定风险边界',
     status: 'open',
+    blocking: true,
+    tier: 'blocking',
   }]);
   assert.equal(decisionCase.readiness.status, 'collecting');
 });
@@ -135,6 +155,8 @@ test('explicitly skipped fields stay visible as authorized unknowns without bloc
     question: '上一餐是什么时候？',
     reason: '用户选择暂不提供；结论必须保留条件，不得把它当成事实。',
     status: 'skipped',
+    blocking: true,
+    tier: 'blocking',
   }]);
   assert.equal(decisionCase.readiness.status, 'review');
   assert.equal(decisionCase.readiness.openUnknownCount, 0);
@@ -167,4 +189,80 @@ test('decision case question budget expands to the actual adaptive field set', (
   });
 
   assert.equal(decisionCase.readiness.maxQuestions, 6);
+});
+
+test('confidence unknowns remain visible without blocking case review', () => {
+  const decisionCase = buildDecisionCase({
+    session: {
+      question: '要不要北京租房',
+      answers: [{ fieldId: 'shared_intent', answer: '我们已经决定一起租' }],
+    },
+    plan: {
+      informationFields: [
+        { id: 'shared_intent', prompt: '双方是否同意？', required: true, blocking: true, unknownTier: 'blocking' },
+        { id: 'district', prompt: '偏好哪个区域？', required: true, blocking: false, unknownTier: 'confidence' },
+      ],
+      askUser: [],
+    },
+    depthRoute: { depth: 'standard', reason: '租房决策' },
+  });
+
+  assert.equal(decisionCase.readiness.status, 'review');
+  assert.equal(decisionCase.readiness.openBlockingUnknownCount, 0);
+  assert.equal(decisionCase.readiness.retainedUnknownCount, 1);
+  assert.equal(decisionCase.unknowns[0].blocking, false);
+  assert.doesNotThrow(() => confirmDecisionCase(decisionCase, {}));
+});
+
+test('analyst unknowns do not repeat a topic the user already answered', () => {
+  const decisionCase = buildDecisionCase({
+    session: {
+      question: '要不要北京租房',
+      answers: [{ fieldId: 'budget', question: '租房预算是多少？', answer: '1500 到 2300 元' }],
+      case_unknown_labels: [
+        '用户对北京租房的具体预算范围是什么？',
+        '用户对租房地点和区域有何要求？',
+      ],
+    },
+    plan: {
+      informationFields: [
+        { id: 'budget', prompt: '租房预算是多少？', required: true, blocking: true },
+      ],
+      askUser: [],
+    },
+    depthRoute: { depth: 'standard', reason: '租房决策' },
+  });
+
+  assert.equal(decisionCase.unknowns.some((unknown) => /预算/.test(unknown.question)), false);
+  assert.equal(decisionCase.unknowns.some((unknown) => /地点和区域/.test(unknown.question)), true);
+});
+
+test('blocking unknowns require an explicit continue-with-unknown authorization', () => {
+  const decisionCase = buildDecisionCase({
+    session: { question: '要不要北京租房', answers: [] },
+    plan: {
+      informationFields: [
+        { id: 'shared_intent', prompt: '双方是否同意？', required: true, blocking: true, unknownTier: 'blocking' },
+      ],
+      askUser: [],
+    },
+    depthRoute: { depth: 'standard', reason: '租房决策' },
+  });
+
+  assert.equal(decisionCase.readiness.status, 'collecting');
+  assert.throws(() => confirmDecisionCase(decisionCase, {}), { code: 'CASE_NOT_READY' });
+  const confirmed = confirmDecisionCase(decisionCase, { authorizeUnknownIds: ['shared_intent'] });
+  assert.equal(confirmed.confirmedByUser, true);
+  assert.equal(confirmed.unknowns[0].status, 'authorized');
+});
+
+test('advisors receive retained unknowns as explicit non-facts', () => {
+  const context = acceptedCaseContext({
+    facts: [{ value: '用户希望提升薪资' }],
+    unknowns: [{ question: '家庭是否支持长期备考？', status: 'authorized' }],
+  });
+
+  assert.equal(context[0], '用户希望提升薪资');
+  assert.match(context[1], /未确认信息（不得当作事实）/);
+  assert.match(context[1], /家庭是否支持长期备考/);
 });

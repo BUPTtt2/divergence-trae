@@ -1,3 +1,6 @@
+import { providerRuntime } from './providerRuntime.js';
+import { getLLMUsageContext } from './llmUsageContext.js';
+
 /**
  * LLM 多提供商路由
  * 按优先级调用：
@@ -19,17 +22,28 @@ const DEFAULT_TIMEOUT_MS = 30000;
 function getProviders() {
   const providers = [];
 
-  // 1. 智谱 AI（免费主力）
+  // 1. 火山方舟 / 豆包（赛事资源；配置后优先）
+  if (process.env.ARK_API_KEY && (process.env.ARK_ENDPOINT_ID || process.env.DOUBAO_MODEL)) {
+    const baseUrl = (process.env.ARK_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/$/, '');
+    providers.push({
+      name: 'doubao',
+      endpoint: `${baseUrl}/chat/completions`,
+      apiKey: process.env.ARK_API_KEY,
+      model: process.env.ARK_ENDPOINT_ID || process.env.DOUBAO_MODEL,
+    });
+  }
+
+  // 2. 智谱 AI（未配置赛事资源时的当前主力）
   if (process.env.ZHIPU_API_KEY) {
     providers.push({
       name: 'zhipu',
       endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
       apiKey: process.env.ZHIPU_API_KEY,
-      model: process.env.ZHIPU_MODEL || 'glm-4-flash',
+      model: process.env.ZHIPU_MODEL || 'glm-4-flash-250414',
     });
   }
 
-  // 2. 魔搭 ModelScope
+  // 3. 魔搭 ModelScope
   if (process.env.MODELSCOPE_API_KEY) {
     const baseUrl = (process.env.MODELSCOPE_BASE_URL || 'https://api-inference.modelscope.cn/v1').replace(/\/$/, '');
     providers.push({
@@ -40,13 +54,13 @@ function getProviders() {
     });
   }
 
-  // 3. DeepSeek
+  // 4. DeepSeek
   if (process.env.DEEPSEEK_API_KEY) {
     providers.push({
       name: 'deepseek',
       endpoint: 'https://api.deepseek.com/v1/chat/completions',
       apiKey: process.env.DEEPSEEK_API_KEY,
-      model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+      model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
     });
   }
 
@@ -60,6 +74,23 @@ export function isLLMAvailable() {
   return getProviders().length > 0;
 }
 
+function canAttemptProvider(provider, providers) {
+  // 只有一个模型时不能因为进程级熔断直接跳过整次请求：
+  // 串行请求本身就是受控的恢复探测，成功后会立即关闭熔断。
+  return providers.length === 1 || providerRuntime.canAttempt(provider.name);
+}
+
+function usageContext(options = {}, attempt = 1) {
+  const active = getLLMUsageContext();
+  return {
+    sessionId: options.sessionId || active.sessionId || null,
+    userId: options.userId || active.userId || null,
+    agentId: options.agentId || active.agentId || null,
+    stage: options.stage || active.stage || active.actionId || 'llm',
+    attempt,
+  };
+}
+
 /**
  * 带超时的 fetch
  */
@@ -70,6 +101,16 @@ function fetchWithTimeout(url, options, timeoutMs = DEFAULT_TIMEOUT_MS) {
     .finally(() => clearTimeout(timer));
 }
 
+async function providerResponseError(provider, resp) {
+  await resp.text().catch(() => '');
+  const retryAfterSeconds = Number(resp.headers.get('retry-after'));
+  return Object.assign(new Error(`${provider.name} 暂时不可用`), {
+    code: 'PROVIDER_UNAVAILABLE',
+    status: resp.status,
+    retryAfterMs: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : 0,
+  });
+}
+
 export function buildProviderRequestBody(provider, messages, options = {}) {
   const {
     maxTokens = 400,
@@ -77,6 +118,7 @@ export function buildProviderRequestBody(provider, messages, options = {}) {
     tools,
     tool_choice,
     stream = false,
+    thinking = false,
   } = options;
   const body = {
     model: provider.model,
@@ -85,14 +127,22 @@ export function buildProviderRequestBody(provider, messages, options = {}) {
     temperature,
   };
 
-  if (provider.name === 'zhipu' && provider.model === 'glm-4.7-flash') {
+  if (provider.name === 'zhipu' && provider.model.includes('flash')) {
     body.thinking = { type: 'disabled' };
+  }
+  if (provider.name === 'deepseek' && provider.model.startsWith('deepseek-v4')) {
+    body.thinking = { type: thinking ? 'enabled' : 'disabled' };
   }
   if (tools && tools.length > 0) {
     body.tools = tools;
     body.tool_choice = tool_choice || 'auto';
   }
-  if (stream) body.stream = true;
+  if (stream) {
+    body.stream = true;
+    if (provider.name === 'doubao') {
+      body.stream_options = { include_usage: true };
+    }
+  }
   return body;
 }
 
@@ -111,6 +161,7 @@ async function callProvider(provider, messages, options = {}) {
     tools,
     tool_choice,
     returnRaw = false,
+    thinking = false,
   } = options;
 
   const body = buildProviderRequestBody(provider, messages, {
@@ -118,6 +169,7 @@ async function callProvider(provider, messages, options = {}) {
     temperature,
     tools,
     tool_choice,
+    thinking,
   });
 
   const resp = await fetchWithTimeout(provider.endpoint, {
@@ -130,8 +182,7 @@ async function callProvider(provider, messages, options = {}) {
   }, timeout);
 
   if (!resp.ok) {
-    const errText = await resp.text().catch(() => '');
-    throw new Error(`${provider.name} 调用失败 ${resp.status}: ${errText.slice(0, 200)}`);
+    throw await providerResponseError(provider, resp);
   }
 
   const data = await resp.json();
@@ -141,9 +192,11 @@ async function callProvider(provider, messages, options = {}) {
       content: (msg.content || '').trim(),
       tool_calls: msg.tool_calls || null,
       finish_reason: data.choices?.[0]?.finish_reason || null,
+      usage: data.usage || null,
+      model: data.model || provider.model,
     };
   }
-  return (msg.content || '').trim();
+  return { content: (msg.content || '').trim(), usage: data.usage || null, model: data.model || provider.model };
 }
 
 /**
@@ -156,16 +209,31 @@ async function callProvider(provider, messages, options = {}) {
  */
 export async function callLLM(messages, options = {}) {
   const providers = getProviders();
+  let attempt = 0;
 
   for (const provider of providers) {
+    if (!canAttemptProvider(provider, providers)) continue;
+    attempt += 1;
+    const startedAt = Date.now();
     try {
-      const text = await callProvider(provider, messages, options);
-      if (text) {
+      const result = await callProvider(provider, messages, options);
+      if (result.content) {
+        providerRuntime.recordSuccess(provider.name, {
+          model: result.model || provider.model,
+          latencyMs: Date.now() - startedAt,
+          usage: result.usage,
+          ...usageContext(options, attempt),
+        });
         console.log(`[LLM] ${provider.name} 调用成功`);
-        return text;
+        return result.content;
       }
     } catch (e) {
-      console.warn(`[LLM] ${provider.name} 调用失败，切换下一个:`, e.message);
+      providerRuntime.recordFailure(provider.name, e, {
+        model: provider.model,
+        latencyMs: Date.now() - startedAt,
+        ...usageContext(options, attempt),
+      });
+      console.warn(`[LLM] ${provider.name} 暂时不可用，切换备用模型`);
     }
   }
 
@@ -187,13 +255,21 @@ export async function callLLMWithTools({
   maxTokens = 200,
   temperature = 0.85,
   timeout = 10000,
+  sessionId,
+  userId,
+  agentId,
+  stage,
 }) {
   const providers = getProviders();
   if (providers.length === 0) {
     return { content: '', tool_calls: null, provider: null, error: 'no_provider' };
   }
 
+  let attempt = 0;
   for (const provider of providers) {
+    if (!canAttemptProvider(provider, providers)) continue;
+    attempt += 1;
+    const startedAt = Date.now();
     try {
       const result = await callProvider(provider, messages, {
         maxTokens,
@@ -203,10 +279,21 @@ export async function callLLMWithTools({
         tool_choice,
         returnRaw: true,
       });
+      providerRuntime.recordSuccess(provider.name, {
+        model: result.model || provider.model,
+        latencyMs: Date.now() - startedAt,
+        usage: result.usage,
+        ...usageContext({ sessionId, userId, agentId, stage }, attempt),
+      });
       console.log(`[LLM][tools] ${provider.name} 调用成功, tool_calls=${!!result.tool_calls}`);
       return { ...result, provider: provider.name };
     } catch (e) {
-      console.warn(`[LLM][tools] ${provider.name} 调用失败:`, e.message);
+      providerRuntime.recordFailure(provider.name, e, {
+        model: provider.model,
+        latencyMs: Date.now() - startedAt,
+        ...usageContext({ sessionId, userId, agentId, stage }, attempt),
+      });
+      console.warn(`[LLM][tools] ${provider.name} 暂时不可用，切换备用模型`);
     }
   }
 
@@ -243,7 +330,11 @@ export async function callLLMStream(messages, options = {}, res) {
     res.write(`event: start\ndata: ${JSON.stringify({ ok: true })}\n\n`);
   }
 
+  let attempt = 0;
   for (const provider of providers) {
+    if (!canAttemptProvider(provider, providers)) continue;
+    attempt += 1;
+    const startedAt = Date.now();
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
@@ -266,8 +357,7 @@ export async function callLLMStream(messages, options = {}, res) {
       clearTimeout(timer);
 
       if (!resp.ok) {
-        const errText = await resp.text().catch(() => '');
-        throw new Error(`${provider.name} 流式调用失败 ${resp.status}: ${errText.slice(0, 200)}`);
+        throw await providerResponseError(provider, resp);
       }
 
       // 检查是否真的是流式响应
@@ -277,6 +367,12 @@ export async function callLLMStream(messages, options = {}, res) {
         const data = await resp.json();
         const text = data.choices?.[0]?.message?.content?.trim() || '';
         if (text) {
+          providerRuntime.recordSuccess(provider.name, {
+            model: data.model || provider.model,
+            latencyMs: Date.now() - startedAt,
+            usage: data.usage || null,
+            ...usageContext(options, attempt),
+          });
           // 逐字推送（模拟流式效果）
           for (const char of text) {
             res.write(`data: ${JSON.stringify({ content: char })}\n\n`);
@@ -295,6 +391,8 @@ export async function callLLMStream(messages, options = {}, res) {
       const decoder = new TextDecoder();
       let buffer = '';
       let fullText = '';
+      let usage = null;
+      let actualModel = provider.model;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -314,6 +412,8 @@ export async function callLLMStream(messages, options = {}, res) {
 
           try {
             const parsed = JSON.parse(data);
+            if (parsed.usage) usage = parsed.usage;
+            if (parsed.model) actualModel = parsed.model;
             const delta = parsed.choices?.[0]?.delta?.content || '';
             if (delta) {
               fullText += delta;
@@ -326,6 +426,12 @@ export async function callLLMStream(messages, options = {}, res) {
       }
 
       if (fullText) {
+        providerRuntime.recordSuccess(provider.name, {
+          model: actualModel,
+          latencyMs: Date.now() - startedAt,
+          usage,
+          ...usageContext(options, attempt),
+        });
         res.write(`event: done\ndata: ${JSON.stringify({ full: fullText })}\n\n`);
         res.end();
         console.log(`[LLM] ${provider.name} 流式调用成功`);
@@ -334,9 +440,14 @@ export async function callLLMStream(messages, options = {}, res) {
 
       throw new Error(`${provider.name} 流式响应为空`);
     } catch (e) {
-      console.warn(`[LLM] ${provider.name} 流式调用失败:`, e.message);
+      providerRuntime.recordFailure(provider.name, e, {
+        model: provider.model,
+        latencyMs: Date.now() - startedAt,
+        ...usageContext(options, attempt),
+      });
+      console.warn(`[LLM] ${provider.name} 流式调用失败，切换备用模型`);
       // 通知前端切换提供商
-      res.write(`event: fallback\ndata: ${JSON.stringify({ provider: provider.name, error: e.message.slice(0, 100) })}\n\n`);
+      res.write(`event: fallback\ndata: ${JSON.stringify({ provider: provider.name, code: 'provider_unavailable' })}\n\n`);
     }
   }
 

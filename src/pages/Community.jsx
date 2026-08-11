@@ -2,7 +2,6 @@ import { motion } from 'framer-motion';
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
-import AppNav from '../components/AppNav';
 import { AGENT_MAP } from '../data/agents';
 import {
   listAdvisorAssets,
@@ -233,17 +232,16 @@ export default function Community() {
 
   return (
     <div
-      className="min-h-screen overflow-x-hidden"
+      className="xm-paper-page min-h-screen overflow-x-hidden"
       style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}
     >
-      <AppNav variant="light" />
 
       <div className="text-center py-2 px-4 pt-16" style={{ backgroundColor: T.ink }}>
         <span className="text-[10px] font-mono tracking-wide">
           <span style={{ color: '#999' }}>社区 / COMMUNITY</span>
           <span className="mx-3" style={{ color: '#444' }}>|</span>
           {offline ? (
-            <span style={{ color: '#E8B880' }}>预设模式 · 数据仅本机可见</span>
+            <span style={{ color: '#E8B880' }}>本机模式 · 数据仅本机可见</span>
           ) : status === 'anonymous' ? (
             <span style={{ color: '#50A070' }}>匿名访问 · 数据已同步</span>
           ) : status === 'registered' ? (

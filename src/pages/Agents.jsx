@@ -112,7 +112,7 @@ export default function Agents() {
   const allAgents = [...customAgents, ...subscribedAgents, ...presetAgents];
 
   return (
-    <div style={{
+    <div className="xm-paper-page" style={{
       minHeight: '100dvh',
       backgroundColor: COLORS.bg,
       fontFamily: '"Noto Serif SC", "Ma Shan Zheng", serif',
@@ -219,7 +219,7 @@ export default function Agents() {
             智囊阁
           </h1>
           <p style={{ fontSize: '12px', color: COLORS.muted, letterSpacing: '0.1em' }}>
-            预设智囊 · 自定义铸造 · 演策甄选
+            常驻智囊 · 自定义铸造 · 演策甄选
           </p>
         </motion.div>
 

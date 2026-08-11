@@ -3,6 +3,10 @@ function createUuid() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+export function deliberationActionKey(round, intent = 'execute') {
+  return `${intent === 'summary' ? 'summary' : 'execute'}-r${round}`;
+}
+
 export function createPendingActionRegistry(idFactory = createUuid) {
   const pending = new Map();
   const keyFor = (sessionId, kind) => `${sessionId}:${kind}`;

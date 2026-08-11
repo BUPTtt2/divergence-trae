@@ -6,6 +6,7 @@ import {
   mapDeliberationPhase,
   mapServerStateToInternalPhase,
   mapSessionToInternalPhase,
+  sessionIsPaused,
   selectedAdvisorIdsForSession,
   adaptFateTicket,
 } from './sandboxRuntime.js';
@@ -35,6 +36,13 @@ test('commit event cannot reset the Agent flow to idle before completion', () =>
   assert.equal(mapServerStateToInternalPhase('COMPLETE'), 'done');
   assert.equal(mapServerStateToInternalPhase('ROUND_REVIEW'), 'debate');
   assert.equal(mapServerStateToInternalPhase('DELIBERATION_BLOCKED'), 'debate');
+});
+
+test('paused session stays in the debate workspace so the resume control remains reachable', () => {
+  assert.equal(mapDeliberationPhase('PAUSED'), 'agent_debate');
+  assert.equal(mapServerStateToInternalPhase('PAUSED'), 'debate');
+  assert.equal(sessionIsPaused({ state: 'PAUSED' }), true);
+  assert.equal(sessionIsPaused({ state: 'ROUND_REVIEW' }), false);
 });
 
 test('a confirmed case pauses at council selection until the user confirms the lineup', () => {
@@ -149,4 +157,77 @@ test('planning starts from the pending Session and never waits for the SSE trans
     inFlightSessionId: 'sess_1',
     transportConnected: false,
   }), false);
+});
+
+test('a lightweight concern continues into one deliberation instead of routing in a loop', () => {
+  assert.deepEqual(sandboxRuntime.resolveDirectChoice({
+    question: '要不要去游乐园',
+    choice: '预算时间',
+  }), {
+    action: 'start_session',
+    question: '要不要去游乐园。补充关注点：预算时间。',
+  });
+});
+
+test('expired session errors are recoverable and are not retried against the dead id', () => {
+  assert.equal(sandboxRuntime.classifySessionFailure({ status: 404, message: 'SESSION_NOT_FOUND' }), 'expired');
+  assert.equal(sandboxRuntime.classifySessionFailure({ status: 401 }), 'expired');
+  assert.equal(sandboxRuntime.classifySessionFailure({ status: 429 }), 'retryable');
+});
+
+test('missing restore payload is treated as an expired session instead of a valid empty snapshot', () => {
+  assert.deepEqual(sandboxRuntime.resolveSessionRestore({
+    savedSessionId: 'dead_session',
+    response: { error: 'SESSION_NOT_FOUND' },
+  }), {
+    kind: 'expired',
+    message: '原推演会话已失效，已回到新问题入口。',
+  });
+});
+
+test('expired session cleanup removes every resume pointer and preserves unrelated state', () => {
+  const sessionValues = new Map([
+    ['yance_active_deliberation_session', 'dead_session'],
+    ['resume_session_id', 'dead_session'],
+    ['unrelated', 'keep'],
+  ]);
+  const localValues = new Map([
+    ['yance_active_deliberation_session', 'dead_session'],
+    ['resume_session_id', 'dead_session'],
+    ['unrelated', 'keep'],
+  ]);
+  const createStorage = (values) => ({
+    removeItem(key) { values.delete(key); },
+  });
+
+  const nextUrl = sandboxRuntime.clearExpiredSessionRecovery({
+    sessionStorage: createStorage(sessionValues),
+    localStorage: createStorage(localValues),
+    currentUrl: 'http://localhost:54108/sandbox?resume=dead_session&seat=risk#stage',
+  });
+
+  assert.equal(nextUrl, '/sandbox?seat=risk#stage');
+  assert.deepEqual([...sessionValues.entries()], [['unrelated', 'keep']]);
+  assert.deepEqual([...localValues.entries()], [['unrelated', 'keep']]);
+});
+
+test('backend outage during restore reports a recoverable service state without inventing a case file', () => {
+  assert.deepEqual(sandboxRuntime.resolveSessionRestore({
+    savedSessionId: 'session_1',
+    error: { status: 0, message: 'Failed to fetch' },
+  }), {
+    kind: 'unavailable',
+    message: '服务暂不可用，可重新开始；不会使用未验证的旧案卷。',
+  });
+});
+
+test('resume URL is authoritative over stale storage and can bootstrap recovery by itself', () => {
+  assert.equal(sandboxRuntime.restorableSessionId({
+    currentUrl: 'http://localhost:54108/sandbox?resume=url_session',
+    storedSessionId: 'stored_session',
+  }), 'url_session');
+  assert.equal(sandboxRuntime.restorableSessionId({
+    currentUrl: 'http://localhost:54108/sandbox',
+    storedSessionId: 'stored_session',
+  }), 'stored_session');
 });

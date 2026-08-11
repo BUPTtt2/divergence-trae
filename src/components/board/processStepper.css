@@ -1,0 +1,17 @@
+.process-stepper { position:absolute; z-index:20; top:16px; left:50%; width:min(920px,calc(100% - 48px)); min-height:58px; display:grid; grid-template-columns:150px minmax(0,1fr) 72px; align-items:center; transform:translateX(-50%); border:1px solid rgb(213 177 88 / 24%); background:linear-gradient(90deg,rgb(10 8 7 / 92%),rgb(16 12 9 / 84%),rgb(10 8 7 / 92%)); box-shadow:0 18px 46px rgb(0 0 0 / 24%),inset 0 1px rgb(255 255 255 / 2%); backdrop-filter:blur(16px); }
+.process-stepper__brand { display:grid; padding-left:18px; border-right:1px solid rgb(213 177 88 / 14%); }
+.process-stepper__brand b { color:#e9d495; font:19px/1.25 "Ma Shan Zheng",serif; letter-spacing:.14em; }
+.process-stepper__brand small { color:#625c52; font:7px/1.4 monospace; letter-spacing:.14em; }
+.process-stepper ol { height:100%; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); margin:0; padding:0 14px; list-style:none; }
+.process-stepper li { position:relative; display:flex; align-items:center; justify-content:center; gap:8px; color:#5f594f; font:10px/1 "Noto Serif SC",serif; letter-spacing:.1em; }
+.process-stepper li:not(:last-child)::after { content:""; position:absolute; right:-8px; width:16px; height:1px; background:rgb(213 177 88 / 16%); }
+.process-stepper li i { width:24px; height:24px; display:grid; place-items:center; border:1px solid rgb(213 177 88 / 18%); border-radius:50%; font:normal 8px/1 monospace; }
+.process-stepper li[data-state="done"] { color:#958970; }
+.process-stepper li[data-state="done"] i { color:#769883; border-color:rgb(115 155 131 / 50%); }
+.process-stepper li[data-state="active"] { color:#efd990; }
+.process-stepper li[data-state="active"] i { color:#17110a; border-color:#d5b158; background:#d5b158; box-shadow:0 0 16px rgb(213 177 88 / 22%); }
+.process-stepper li em { position:absolute; right:12px; bottom:0; left:12px; height:2px; background:#d5b158; box-shadow:0 0 12px rgb(213 177 88 / 35%); }
+.process-stepper__status { display:grid; justify-items:end; padding-right:16px; border-left:1px solid rgb(213 177 88 / 14%); }
+.process-stepper__status small { color:#696156; font:8px/1.4 "Noto Serif SC",serif; }
+.process-stepper__status b { color:#d9c582; font:12px/1.5 "Noto Serif SC",serif; }
+@media(max-width:820px){.process-stepper{top:10px;width:calc(100% - 20px);grid-template-columns:1fr 58px}.process-stepper__brand{display:none}.process-stepper ol{padding:0 6px}.process-stepper li span{display:none}.process-stepper li:not(:last-child)::after{right:-5px;width:10px}.process-stepper__status{padding-right:10px}}

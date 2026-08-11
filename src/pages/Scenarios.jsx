@@ -3,7 +3,6 @@ import { useNavigate, Link } from 'react-router-dom';
 import { SCENARIOS } from '../data/scripts';
 import Bagua from '../components/fx/Bagua';
 import SpotlightCard from '../components/fx/Spotlight';
-import AppNav from '../components/AppNav';
 
 const T = {
   paper: '#F2EDE0',
@@ -22,8 +21,7 @@ const SCENARIO_TRIGRAMS = ['☲', '☷', '☱', '☳'];
 export default function Scenarios() {
   const navigate = useNavigate();
   return (
-    <div className="min-h-screen overflow-x-hidden" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}>
-      <AppNav variant="light" />
+    <div className="xm-paper-page min-h-screen overflow-x-hidden" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}>
       {/* 顶部条 */}
       <div className="pt-14 text-center py-2 px-4" style={{ backgroundColor: T.ink }}>
         <span className="text-[10px] font-mono tracking-wide">

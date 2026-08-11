@@ -23,9 +23,10 @@ const COLORS = {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const LOGS_DIR = join(__dirname, '../../logs');
+const FILE_LOGGING_ENABLED = !process.env.VERCEL && process.env.DISABLE_FILE_LOGS !== '1';
 
 // 确保日志目录存在
-if (!existsSync(LOGS_DIR)) {
+if (FILE_LOGGING_ENABLED && !existsSync(LOGS_DIR)) {
   try {
     mkdirSync(LOGS_DIR, { recursive: true });
   } catch (e) {
@@ -45,6 +46,7 @@ function getErrorLogFile() {
 }
 
 function writeToFile(filePath, line) {
+  if (!FILE_LOGGING_ENABLED) return;
   try {
     appendFileSync(filePath, line + '\n', 'utf8');
   } catch (e) {

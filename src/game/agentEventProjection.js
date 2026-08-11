@@ -262,6 +262,7 @@ export function applyAgentEvent(state, event, options = {}) {
           perspective: payload.perspective || state.agents[agentId]?.perspective,
           status: 'running',
           contribution: payload.content || '',
+          finding: { ...payload },
         },
       };
       break;
@@ -395,6 +396,7 @@ export function projectSessionSnapshot(session = {}, options = {}) {
       status: 'completed',
       contribution: finding.claim || finding.content || '',
       findingId: finding.findingId || finding.id,
+      finding: { ...finding },
     };
   }
   projection.revisions = Array.from({ length: Math.min(Number(session.replanCount || 0), 20) }, (_, index) => ({

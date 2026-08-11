@@ -49,3 +49,51 @@ export function sanitizeLLMText(text) {
   s = s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   return s;
 }
+
+/**
+ * 面向用户的决策文本清理。
+ * 除通用包装外，统一把模型/数据层字段名折叠为自然语言，避免命牌、案卷与收藏页泄漏参数名。
+ */
+export function sanitizeDecisionDisplayText(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  let s = sanitizeLLMText(text);
+
+  const aliases = {
+    startercashflow: '钱包守门人',
+    business_evidence: '证据',
+    health_conditions: '基础健康情况',
+    user_gender: '性别信息',
+    exercise_frequency: '运动频率',
+    dietary_habits: '饮食习惯',
+    weight_goal: '目标',
+    current_energy: '精力状态',
+    other_factors: '其他影响因素',
+    travel_party_budget: '同行与预算',
+    travel_party: '同行安排',
+    travel_budget: '旅行预算',
+    trip_duration: '出行天数',
+    accommodation_preference: '住宿偏好',
+    work_handover: '工作交接',
+    leave_policy: '请假政策',
+    leave_pay: '请假薪资',
+    goal_weight: '目标权重',
+    time_horizon: '时间范围',
+    risk_tolerance: '风险承受范围',
+  };
+
+  Object.entries(aliases).forEach(([raw, label]) => {
+    s = s.replace(new RegExp(`[“”"']?\\b${raw}(?:_\\d+)?\\b[“”"']?`, 'gi'), label);
+  });
+
+  s = s
+    .replace(/[“”"']?\b(?:business_evidence|gen|sub|market|pos)_\d+\b[“”"']?/gi, '相关信息')
+    .replace(/[“”"']?\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b[“”"']?\s*[:：]?/gi, '')
+    .replace(/\b(?:field|parameter|slot|schema)\s*[:：]/gi, '')
+    .replace(/\s+([，。；：！？])/g, '$1')
+    .replace(/([：；，])\1+/g, '$1')
+    .replace(/([：；])\s*[：；]/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return s;
+}

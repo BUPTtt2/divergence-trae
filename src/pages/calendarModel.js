@@ -4,6 +4,23 @@ function dateOnly(value) {
   return match ? match[0] : '';
 }
 
+function cardIdentity(card = {}) {
+  return card.source_session_id || card.sourceSessionId || card.ticketId || card.id || null;
+}
+
+function mergeCards(cloudCards = [], localCards = []) {
+  const merged = new Map();
+  for (const card of localCards) {
+    const identity = cardIdentity(card);
+    if (identity) merged.set(identity, card);
+  }
+  for (const card of cloudCards) {
+    const identity = cardIdentity(card);
+    if (identity) merged.set(identity, { ...(merged.get(identity) || {}), ...card });
+  }
+  return [...merged.values()];
+}
+
 export function buildDecisionCalendar(cards = [], followUps = []) {
   const decisions = cards
     .map((card) => ({
@@ -24,4 +41,8 @@ export function buildDecisionCalendar(cards = [], followUps = []) {
   return [...decisions, ...reviews].sort((left, right) => left.date.localeCompare(right.date));
 }
 
-export default { buildDecisionCalendar };
+export function buildRecoverableDecisionCalendar({ cloudCards = [], localCards = [], followUps = [] } = {}) {
+  return buildDecisionCalendar(mergeCards(cloudCards, localCards), followUps);
+}
+
+export default { buildDecisionCalendar, buildRecoverableDecisionCalendar };

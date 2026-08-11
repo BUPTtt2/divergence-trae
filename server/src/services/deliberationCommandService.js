@@ -4,12 +4,22 @@ import { generateUUID } from '../utils/id.js';
 const TABLE = 'deliberation_commands';
 const ALLOWED_TYPES = new Set(['SUPPLEMENT', 'CORRECTION', 'QUESTION', 'PAUSE']);
 
-export async function enqueueCommand(sessionId, userId, input = {}) {
+export function normalizeCommandInput(input = {}) {
   const commandType = String(input.commandType || '').trim().toUpperCase();
   const content = String(input.content || '').trim().slice(0, 1000);
-  const targetAgentId = String(input.targetAgentId || '').trim().slice(0, 100) || null;
+  const targetAgentIds = [...new Set([
+    ...(Array.isArray(input.targetAgentIds) ? input.targetAgentIds : []),
+    input.targetAgentId,
+  ].map((id) => String(id || '').trim()).filter(Boolean))].slice(0, 6);
+  const targetAgentId = targetAgentIds.join(',').slice(0, 600) || null;
   if (!ALLOWED_TYPES.has(commandType)) throw new Error('不支持的交互类型');
   if (commandType !== 'PAUSE' && !content) throw new Error('请输入要补充的内容');
+  if (commandType === 'QUESTION' && targetAgentIds.length === 0) throw new Error('请至少指定一位智囊');
+  return { commandType, content, targetAgentId, targetAgentIds };
+}
+
+export async function enqueueCommand(sessionId, userId, input = {}) {
+  const { commandType, content, targetAgentId } = normalizeCommandInput(input);
 
   const command = {
     id: `cmd_${generateUUID()}`,

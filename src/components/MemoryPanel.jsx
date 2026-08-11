@@ -72,7 +72,7 @@ export default function MemoryPanel({ memories = [], loading = false, onRefresh 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
 
-  const displayMemories = memories.length > 0 ? memories : DEMO_MEMORIES;
+  const displayMemories = Array.isArray(memories) ? memories : [];
 
   const filteredMemories = useMemo(() => {
     let result = displayMemories;

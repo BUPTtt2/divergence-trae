@@ -173,6 +173,8 @@ export async function anonymousLogin() {
  * 后端不可达时返回失败，触发重新匿名登录
  */
 export async function refreshAccessToken() {
+  const sharedRefresh = typeof globalThis !== 'undefined' ? globalThis.__yanceAuthRefreshPromise : null;
+  if (sharedRefresh) return sharedRefresh;
   if (isRefreshing) return refreshPromise;
   isRefreshing = true;
 
@@ -182,7 +184,7 @@ export async function refreshAccessToken() {
     return null;
   }
 
-  refreshPromise = (async () => {
+  const refreshOperation = (async () => {
     try {
       const resp = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
         method: 'POST',
@@ -203,11 +205,17 @@ export async function refreshAccessToken() {
       console.warn('[auth] 刷新 token 失败:', e.message);
       clearAuth();
       return null;
-    } finally {
-      isRefreshing = false;
-      refreshPromise = null;
     }
   })();
+
+  refreshPromise = refreshOperation.finally(() => {
+    isRefreshing = false;
+    if (typeof globalThis !== 'undefined' && globalThis.__yanceAuthRefreshPromise === refreshPromise) {
+      delete globalThis.__yanceAuthRefreshPromise;
+    }
+    refreshPromise = null;
+  });
+  if (typeof globalThis !== 'undefined') globalThis.__yanceAuthRefreshPromise = refreshPromise;
 
   return refreshPromise;
 }

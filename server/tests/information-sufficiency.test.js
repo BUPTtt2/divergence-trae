@@ -19,6 +19,42 @@ test('food quick planning asks for three independent decision fields without ass
   assert.equal(fields.some((field) => /你现在有明显饥饿感/.test(field.prompt)), false);
 });
 
+test('education decisions start with three distinct study-specific questions in one batch', () => {
+  const fields = buildQuickInformationFields('要不要考研');
+  const result = assessInformationSufficiency({
+    question: '要不要考研',
+    answers: [],
+    fields,
+    round: 1,
+  });
+
+  assert.deepEqual(result.questionBatch.map((field) => field.id), [
+    'study_outcome',
+    'study_readiness',
+    'study_tradeoff',
+  ]);
+  assert.equal(new Set(result.questionBatch.map((field) => field.decisionImpact)).size, 3);
+  assert.equal(result.questionBatch.every((field) => /考研|读研|备考|职业/.test(field.prompt)), true);
+});
+
+test('education intake proceeds after blockers while retaining non-blocking unknowns for advisors', () => {
+  const fields = buildQuickInformationFields('要不要考研');
+  const result = assessInformationSufficiency({
+    question: '要不要考研',
+    fields,
+    round: 2,
+    answers: [
+      { fieldId: 'study_outcome', answer: '希望转向人工智能方向，并提高求职上限' },
+      { fieldId: 'study_readiness', answer: '大三，数学基础一般，准备从九月开始系统复习' },
+      { fieldId: 'study_tradeoff', answer: '可以接受一年备考，但不能完全放弃实习' },
+    ],
+  });
+
+  assert.equal(result.complete, true);
+  assert.equal(result.readiness.status, 'review');
+  assert.equal(result.fieldStates.find((field) => field.id === 'study_support').status, 'open');
+});
+
 test('one ambiguous reply does not close every information gap', () => {
   const fields = buildQuickInformationFields('要不要吃饭');
   const result = assessInformationSufficiency({
@@ -44,7 +80,7 @@ test('bare number stays ambiguous when body signal question has no scale', () =>
   assert.equal(result.normalizedValue, '');
 });
 
-test('food intake asks one next question and uses the prior interpretation', () => {
+test('food intake keeps optional context visible but can proceed after its blocker is resolved', () => {
   const fields = buildQuickInformationFields('要不要吃饭');
   const first = assessInformationSufficiency({ question: '要不要吃饭', answers: [], fields, round: 1 });
   assert.equal(first.nextQuestion.id, 'body_signal');
@@ -57,7 +93,8 @@ test('food intake asks one next question and uses the prior interpretation', () 
   });
 
   assert.equal(second.nextQuestion.id, 'meal_context');
-  assert.equal(second.readiness.status, 'collecting');
+  assert.equal(second.readiness.status, 'review');
+  assert.deepEqual(second.questionBatch.map((item) => item.id), ['meal_context', 'current_goal']);
   assert.equal(second.fieldStates.find((field) => field.id === 'body_signal').status, 'answered');
 });
 

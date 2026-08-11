@@ -1183,7 +1183,7 @@ export default function Landing() {
   ];
 
   return (
-    <div className="min-h-screen overflow-x-hidden relative" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: F.regular }}>
+    <div className="xm-paper-page min-h-screen overflow-x-hidden relative" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: F.regular }}>
       {/* 鼠标光斑 - 整站跟随 */}
       <CursorGlow />
 
@@ -1509,7 +1509,7 @@ export default function Landing() {
             <div>
               <p className="text-[10px] font-mono tracking-[0.25em] mb-3" style={{ color: T.muted }}>SCENARIOS</p>
               <h2 className="text-3xl md:text-4xl font-serif font-bold tracking-tight">
-                四局预设，<span style={{ color: T.accent }}>立等开演</span>
+                四局精选，<span style={{ color: T.accent }}>立等开演</span>
               </h2>
             </div>
             <span className="text-[10px] font-mono" style={{ color: T.muted }}>1 / 4 已启</span>
@@ -1858,4 +1858,3 @@ export default function Landing() {
     </div>
   );
 }
-

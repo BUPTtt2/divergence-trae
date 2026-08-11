@@ -13,6 +13,7 @@ import { generateCaseFile, canAdvance as caseFileCanAdvance, gateProgress, nextQ
 import { assembleAgentContext, readMemoryLayers, writeL1Card, writeL2Bio, buildDoNotRepeat } from './context_assembler';
 import { recordCost, checkBudget, maybeDowngrade, routeModelTier, makeCacheKey, getCached, setCached } from './costControl';
 import { sanitizeLLMText } from '../utils/helpers';
+import { persistDecisionCard } from './decisionCollectionStore.js';
 
 /* ============================================================
    B1-B3 生产级系统 Agent 工具：
@@ -2886,8 +2887,11 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
         .filter(a => a.note)
         .slice(0, 6);
 
+      const sourceSessionId = fateContent?.ticketId || `local-${String(userInput || 'decision').slice(0, 24)}-${new Date().toISOString().slice(0, 10)}`;
       const card = {
-        id: `card-${Date.now()}`,
+        id: sourceSessionId,
+        sessionId: sourceSessionId,
+        sourceSessionId,
         gua: guaName,
         trigram,
         element: realGua?.element || fb.element,
@@ -2921,9 +2925,7 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
         })(),
         hasAchievement: false,
       };
-      const saved = JSON.parse(localStorage.getItem('yance_collection') || '[]');
-      saved.unshift(card);
-      localStorage.setItem('yance_collection', JSON.stringify(saved));
+      const persisted = await persistDecisionCard(card);
 
       try {
         writeL1Card(card);
@@ -2955,9 +2957,19 @@ export default function useGameFlow({ DEFAULT_CHOICES }) {
         console.warn('[情景记忆保存] 失败', e);
       }
 
-      showFloatTipBriefly(`命签「${card.gua} · ${card.title}」已入卡牌册`, 2400);
+      showFloatTipBriefly(
+        persisted.mode === 'local'
+          ? `命牌已保存到本机；登录恢复后可同步云端`
+          : persisted.mode === 'existing'
+            ? `这张命牌已经在命牌库中`
+            : `命牌「${card.gua} · ${card.title}」已存入命牌库`,
+        2800,
+      );
+      return persisted;
     } catch (e) {
       console.warn('保存失败', e);
+      showFloatTipBriefly('命牌未能保存，请检查浏览器存储空间后重试', 3200);
+      throw e;
     }
   }, [selectedChoice, userInput, activeAgents, inference, fateContent, currentCommit, showFloatTipBriefly]);
 

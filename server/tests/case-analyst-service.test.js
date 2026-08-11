@@ -62,6 +62,31 @@ test('case analyst keeps a useful model field and fills missing coverage instead
   assert.ok(result.informationFields.some((field) => field.id === 'budget_meaning'));
 });
 
+test('first study intake opens with three independent domain anchors and keeps model questions for later rounds', async () => {
+  const result = await analyzeCaseIntake({ question: '要不要考研' }, {
+    callLLMFn: async () => JSON.stringify({
+      understanding: '用户正在考虑考研，但目标和投入边界还不清楚。',
+      interpretations: [],
+      unknowns: ['目标岗位', '备考基础', '机会成本'],
+      conflicts: [],
+      informationFields: [{
+        id: 'target_school_gap',
+        prompt: '你目前和目标院校的差距主要在哪里？',
+        reason: '用于评估可行性。',
+        decisionImpact: '影响备考强度。',
+        dependsOn: ['study_outcome'],
+        required: true,
+      }],
+    }),
+  });
+
+  assert.deepEqual(result.informationFields.slice(0, 3).map((field) => field.id), [
+    'study_outcome', 'study_readiness', 'study_tradeoff',
+  ]);
+  assert.ok(result.informationFields.slice(0, 3).every((field) => field.dependsOn.length === 0));
+  assert.ok(result.informationFields.some((field) => field.id === 'target_school_gap'));
+});
+
 test('case analyst retains the latest understanding and field contract when a later model call is invalid', async () => {
   const previousFields = fallbackCaseFields('要不要北京租房');
   const result = await analyzeCaseIntake({
@@ -72,6 +97,28 @@ test('case analyst retains the latest understanding and field contract when a la
   }, { callLLMFn: async () => '这不是 JSON' });
 
   assert.equal(result.source, 'retained-analysis-fallback');
-  assert.equal(result.understanding, '两人共同租房，用户实习地点已经确定。');
+  assert.match(result.understanding, /^两人共同租房，用户实习地点已经确定。/);
+  assert.match(result.understanding, /我和女朋友一起住/);
   assert.deepEqual(result.informationFields.map((field) => field.id), previousFields.map((field) => field.id));
+});
+
+test('study intake opens an adaptive second round when the first three answers still leave the decision unresolved', async () => {
+  const previousFields = fallbackCaseFields('要不要考研');
+  const result = await analyzeCaseIntake({
+    question: '要不要考研',
+    answers: [
+      { fieldId: 'study_outcome', answer: '主要想提升薪资。' },
+      { fieldId: 'study_readiness', answer: '现在专心实习，还没有正式备考。' },
+      { fieldId: 'study_tradeoff', answer: '最多投入一年，也想直接工作。' },
+    ],
+    previousFields,
+    previousAnalysis: { understanding: '用户考虑考研，但尚未形成目标岗位与替代路径。' },
+  }, { callLLMFn: async () => '{ invalid json' });
+
+  const ids = result.informationFields.map((field) => field.id);
+  assert.ok(ids.includes('study_target_path'));
+  assert.ok(ids.includes('study_alternative_path'));
+  assert.equal(result.informationFields.find((field) => field.id === 'study_target_path').blocking, true);
+  assert.equal(result.informationFields.find((field) => field.id === 'study_alternative_path').blocking, true);
+  assert.match(result.understanding, /主要想提升薪资/);
 });

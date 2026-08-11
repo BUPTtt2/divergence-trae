@@ -682,7 +682,7 @@ export async function upsertMemory(memory) {
  * Reflect 阶段调用：从会话提炼 L2 摘要 + L3 命格
  * 流程: 加载会话 → LLM 摘要写 L2 → LLM 提取命格写 L3 → 会话状态置 COMMIT
  */
-export async function consolidate(sessionId) {
+export async function consolidate(sessionId, { writeLongTerm = false } = {}) {
   const session = await getSession(sessionId);
   if (!session) {
     logger.warn('consolidate: 会话不存在', { sessionId });
@@ -768,7 +768,7 @@ export async function consolidate(sessionId) {
   // LLM 返回空则不提取（零预设：不降级规则）
 
   let upserted = 0;
-  for (const m of extracted) {
+  for (const m of writeLongTerm ? extracted : []) {
     try {
       await upsertMemory({
         user_id: session.user_id,
@@ -786,7 +786,7 @@ export async function consolidate(sessionId) {
 
   // 会话状态置 COMMIT
   await updateSessionState(sessionId, 'COMMIT');
-  return { summary, summaryId, newMemories: upserted };
+  return { summary, summaryId, newMemories: upserted, memoryCandidates: extracted };
 }
 
 // ============ 自检 ============

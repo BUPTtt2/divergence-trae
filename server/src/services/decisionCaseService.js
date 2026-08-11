@@ -26,6 +26,57 @@ function isSubstantiveToolEvidence(result, value) {
   return hasTraceableSource || hasStructuredPayload || value.length >= 40;
 }
 
+function questionFactLabel(value) {
+  if (/预算|元|收入|工资|房租/.test(value)) return '预算与现金边界';
+  if (/不确定|未定|还没|尚未/.test(value)) return '当前不确定性';
+  if (/女朋友|男朋友|伴侣|父母|家人|同事/.test(value)) return '相关人与处境';
+  if (/实习|工作|学习|在职|待业/.test(value)) return '当前阶段';
+  return '用户已说明';
+}
+
+const INFORMATION_TOPICS = Object.freeze([
+  ['budget', /预算|价格|房租|租金|收入|工资|现金|押付/],
+  ['location', /地点|区域|城区|地段|地址|哪里|哪儿/],
+  ['commute', /通勤|路程|距离|交通/],
+  ['housing', /面积|户型|整租|合租|房型|居住形式/],
+  ['people', /涉及哪些人|同住|室友|伴侣|女朋友|男朋友|家人/],
+  ['timing', /多久|时间|入住|租期|期限/],
+]);
+
+function informationTopics(value) {
+  const text = cleanText(value, 500);
+  return INFORMATION_TOPICS.filter(([, pattern]) => pattern.test(text)).map(([topic]) => topic);
+}
+
+function analystUnknownAlreadyAnswered(question, facts) {
+  const topics = informationTopics(question);
+  if (topics.length === 0) return false;
+  return facts.some((fact) => {
+    const factTopics = new Set(informationTopics(`${fact.question || ''} ${fact.label || ''}`));
+    return topics.some((topic) => factTopics.has(topic));
+  });
+}
+
+function explicitQuestionFacts(question) {
+  const clauses = cleanText(question, 1000)
+    .split(/[，,；;。！？!?]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return clauses.flatMap((value, index) => {
+    if (/(要不要|该不该|是否应该|是否要|怎么办|怎么选|选哪个)/.test(value)) return [];
+    const assertion = /(我|我们|女朋友|男朋友|伴侣|父母|家人|目前|现在|已经|正在|预算|收入|工资|房租|通勤|转正|不确定|未定|还没|尚未|实习|工作|学习|居住)/.test(value);
+    if (!assertion || value.length < 3) return [];
+    return [{
+      id: `question_fact_${index + 1}`,
+      question: questionFactLabel(value),
+      label: questionFactLabel(value),
+      value,
+      source: 'user-question',
+      status: 'confirmed',
+    }];
+  });
+}
+
 export function buildDecisionCase({ session = {}, plan = {}, memories = [], depthRoute = {} } = {}) {
   const answers = Array.isArray(session.answers) ? session.answers : [];
   const informationFieldList = Array.isArray(plan.informationFields) ? plan.informationFields : [];
@@ -44,7 +95,8 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
     ? informationAssessment.fieldStates
     : [];
   const informationStateById = new Map(informationStates.map((field) => [field.id, field]));
-  const facts = answers.flatMap((answer, index) => {
+  const facts = explicitQuestionFacts(session.question || session.question_context || session.questionContext);
+  facts.push(...answers.flatMap((answer, index) => {
     const value = answerValue(answer);
     if (!value || isSkippedAnswer(value)) return [];
     const fieldId = cleanText(answer?.fieldId || answer?.taskId || answer?.id, 96);
@@ -59,7 +111,7 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
       source: 'user',
       status: 'confirmed',
     }];
-  });
+  }));
 
   for (const [index, result] of (Array.isArray(session.tool_results) ? session.tool_results : []).entries()) {
     if (!result?.ok || result?.evidence?.accepted === false) continue;
@@ -82,6 +134,8 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
         question: cleanText(field.prompt, 300),
         reason: '用户选择暂不提供；结论必须保留条件，不得把它当成事实。',
         status: 'skipped',
+        blocking: field.blocking !== false,
+        tier: cleanText(field.unknownTier || (field.blocking === false ? 'confidence' : 'blocking'), 32),
       }];
     }
     return [{
@@ -89,14 +143,23 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
       question: cleanText(field.followUp || field.prompt, 300),
       reason: cleanText(field.reason, 300),
       status: field.status === 'conflicted' ? 'conflicted' : (field.status === 'ambiguous' ? 'ambiguous' : 'open'),
+      blocking: field.blocking !== false,
+      tier: cleanText(field.unknownTier || (field.blocking === false ? 'confidence' : 'blocking'), 32),
     }];
   });
   const unknownIds = new Set(unknowns.map((unknown) => unknown.id));
   for (const [index, label] of (Array.isArray(session.case_unknown_labels) ? session.case_unknown_labels : []).entries()) {
     const question = cleanText(label, 300);
-    if (!question) continue;
+    if (!question || analystUnknownAlreadyAnswered(question, facts)) continue;
     const id = `analyst_unknown_${index + 1}`;
-    unknowns.push({ id, question, reason: '案卷分析 Agent 标记的延伸未知；不会在未经确认时冒充事实。', status: 'noted' });
+    unknowns.push({
+      id,
+      question,
+      reason: '案卷分析 Agent 标记的延伸未知；不会在未经确认时冒充事实。',
+      status: 'noted',
+      blocking: false,
+      tier: 'optional',
+    });
     unknownIds.add(id);
   }
   for (const [index, unknown] of (Array.isArray(plan.askUser) ? plan.askUser : []).entries()) {
@@ -110,6 +173,8 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
       question,
       reason: cleanText(item?.reason, 300),
       status: 'open',
+      blocking: item?.blocking !== false && item?.required !== false,
+      tier: cleanText(item?.unknownTier || (item?.blocking === false || item?.required === false ? 'optional' : 'blocking'), 32),
     });
     unknownIds.add(id);
   }
@@ -123,6 +188,8 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
       question: cleanText(field?.prompt || answer?.question || '用户暂未提供的信息', 300),
       reason: '用户选择暂不提供；结论必须保留条件，不得把它当成事实。',
       status: 'skipped',
+      blocking: field?.blocking !== false,
+      tier: cleanText(field?.unknownTier || (field?.blocking === false ? 'confidence' : 'blocking'), 32),
     });
     unknownIds.add(fieldId);
   }
@@ -158,7 +225,7 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
       }];
     });
   const conflicts = informationStates
-    .filter((field) => field.status === 'conflicted')
+    .filter((field) => field.status === 'conflicted' && field.blocking !== false)
     .map((field) => ({
       id: field.id,
       question: cleanText(field.prompt, 300),
@@ -166,8 +233,10 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
       reason: cleanText(field.reason, 300),
       status: 'open',
     }));
-  const openUnknownCount = unknowns.filter((unknown) => ['open', 'ambiguous', 'conflicted'].includes(unknown.status)).length;
-  const readinessStatus = conflicts.length > 0 || openUnknownCount > 0 ? 'collecting' : 'review';
+  const openUnknowns = unknowns.filter((unknown) => ['open', 'ambiguous', 'conflicted'].includes(unknown.status));
+  const openBlockingUnknowns = openUnknowns.filter((unknown) => unknown.blocking !== false);
+  const retainedUnknowns = unknowns.filter((unknown) => unknown.blocking === false || ['noted', 'skipped'].includes(unknown.status));
+  const readinessStatus = conflicts.length > 0 || openBlockingUnknowns.length > 0 ? 'collecting' : 'review';
   const baseReadiness = informationAssessment?.readiness || {};
   return {
     version: 1,
@@ -183,16 +252,18 @@ export function buildDecisionCase({ session = {}, plan = {}, memories = [], dept
     conflicts,
     readiness: {
       status: readinessStatus,
-      answeredCount: facts.filter((fact) => fact.source === 'user').length,
+      answeredCount: facts.filter((fact) => fact.source === 'user' || fact.source === 'user-question').length,
       maxQuestions,
-      openUnknownCount,
-      coverage: Number(baseReadiness.coverage ?? (openUnknownCount === 0 ? 1 : 0)),
-      unresolvedAmbiguities: unknowns.filter((unknown) => unknown.status === 'ambiguous').map((unknown) => unknown.id),
+      openUnknownCount: openUnknowns.length,
+      openBlockingUnknownCount: openBlockingUnknowns.length,
+      retainedUnknownCount: retainedUnknowns.length,
+      coverage: Number(baseReadiness.coverage ?? (openBlockingUnknowns.length === 0 ? 1 : 0)),
+      unresolvedAmbiguities: unknowns.filter((unknown) => unknown.blocking !== false && unknown.status === 'ambiguous').map((unknown) => unknown.id),
       unresolvedConflicts: conflicts.map((conflict) => conflict.id),
-      openRequiredFields: unknowns.filter((unknown) => unknown.status === 'open').map((unknown) => unknown.id),
+      openRequiredFields: openBlockingUnknowns.filter((unknown) => unknown.status === 'open').map((unknown) => unknown.id),
       authorizedUnknowns: unknowns.filter((unknown) => unknown.status === 'skipped').map((unknown) => unknown.id),
       reason: readinessStatus === 'review'
-        ? '案卷没有未处理的歧义或冲突，可以交由用户复核。'
+        ? '会改变推演路径的关键信息已经收敛；其余未知会作为条件保留。'
         : '案卷仍有歧义、冲突或关键未知，不能把它们当作事实。',
     },
     confirmedByUser: false,
@@ -211,7 +282,7 @@ export function confirmDecisionCase(draft = {}, command = {}, confirmedAt = new 
     throw error;
   }
   const unresolvedUnknowns = (Array.isArray(draft.unknowns) ? draft.unknowns : [])
-    .filter((unknown) => ['open', 'ambiguous', 'conflicted'].includes(unknown.status));
+    .filter((unknown) => unknown.blocking !== false && ['open', 'ambiguous', 'conflicted'].includes(unknown.status));
   const unauthorizedUnknowns = unresolvedUnknowns.filter((unknown) => !authorizedUnknownIds.has(String(unknown.id)));
   if (draft.readiness?.status !== 'review' && unauthorizedUnknowns.length > 0) {
     const error = new Error('案卷仍有关键未知；请继续补充，或明确选择带着这些未知继续。');
@@ -261,7 +332,11 @@ export function acceptedCaseContext(decisionCase = {}) {
     .filter((memory) => memory.status === 'accepted')
     .map((memory) => cleanText(memory.content, 300))
     .filter(Boolean);
-  return [...facts, ...memories];
+  const unknowns = (Array.isArray(decisionCase.unknowns) ? decisionCase.unknowns : [])
+    .filter((unknown) => unknown.status !== 'answered')
+    .map((unknown) => cleanText(`未确认信息（不得当作事实）：${unknown.question || unknown.reason}`, 500))
+    .filter(Boolean);
+  return [...facts, ...memories, ...unknowns];
 }
 
 export default { buildDecisionCase, confirmDecisionCase, acceptedCaseContext };

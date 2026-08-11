@@ -448,6 +448,8 @@ test('mapToHexagram 不会把立场强度当作知识真假', () => {
     oracle.lineMeta.slice(0, 3).map((line) => line.knowledgeState),
     ['verified', 'unknown', 'unknown'],
   );
+  assert.deepEqual(oracle.opposite.lines, oracle.primary.lines.map((line) => line === 1 ? 0 : 1));
+  assert.equal(oracle.mirrorDisclaimer, '认知镜面用于换角度审视，不替代事实和用户决定。');
 });
 
 test('Session 投影和 execute 响应保留 Lens 结果，完整持久化包含 tool_results', async () => {

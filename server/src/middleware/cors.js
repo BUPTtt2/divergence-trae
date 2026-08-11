@@ -49,7 +49,7 @@ export default function corsMiddleware(req, res, next) {
     res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Content-Type, Authorization, X-User-Id, X-Requested-With, Accept, Origin'
+      'Content-Type, Authorization, X-User-Id, X-Requested-With, Accept, Origin, Last-Event-ID'
     );
     res.setHeader('Access-Control-Max-Age', '600'); // 10 分钟（别 86400 太长，改了要等一天才刷新）
     if (req.method === 'OPTIONS') {

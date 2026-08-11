@@ -67,6 +67,7 @@ export async function createAdvisor(userId, data) {
       style: data.style || '周易古风',
       element: data.element || null,
       trigram: data.trigram || null,
+      avatar: data.avatar || null,
       ...contract,
     },
   });
@@ -84,6 +85,7 @@ export async function updateAdvisor(advisorId, userId, data) {
   if (data.style !== undefined) updateData.style = data.style;
   if (data.element !== undefined) updateData.element = data.element;
   if (data.trigram !== undefined) updateData.trigram = data.trigram;
+  if (data.avatar !== undefined) updateData.avatar = data.avatar;
   const contractFields = ['contract_version', 'objective', 'methodology', 'deliverable', 'tool_policy', 'evidence_policy', 'completion_criteria', 'safety_boundaries', 'budget', 'eval_summary'];
   for (const field of contractFields) {
     const camelField = field.replace(/_([a-z])/g, (_, char) => char.toUpperCase());
@@ -123,6 +125,7 @@ export function formatAdvisorForAgentPool(advisor) {
     style: advisor.style,
     element: advisor.element,
     trigram: advisor.trigram,
+    avatar: advisor.avatar,
     isCustom: true,
     objective: contract.objective,
     methodology: contract.methodology,

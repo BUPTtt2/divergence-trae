@@ -224,7 +224,7 @@ export function checkCoverage(dimensions, findings) {
  * @param {Object} aggregated aggregateFindings 的结果
  * @param {Array} dimensions plan.dimensions
  * @param {Object} knowledgeContext conflicts/gaps
- * @returns {Object} { primary: {lines, trigrams}, changed: {...}, mutual: {...}, dynamics: [动爻位] }
+ * @returns {Object} { primary, changed, mutual, opposite, dynamics, lineMeta, mirrorDisclaimer }
  */
 export function mapToHexagram(aggregated, dimensions, knowledgeContext = {}) {
   const safeDims = Array.isArray(dimensions) ? dimensions.slice(0, 6) : [];
@@ -268,10 +268,14 @@ export function mapToHexagram(aggregated, dimensions, knowledgeContext = {}) {
   const mutualLines = [lines[1], lines[2], lines[3], lines[2], lines[3], lines[4]];
   const mutual = buildHexagramFromLines(mutualLines);
 
+  // 对卦：每一爻阴阳反转，用于主动检查与当前结构相反的盲区。
+  const opposite = buildHexagramFromLines(lines.map((line) => line === 1 ? 0 : 1));
+
   logger.info('[Reflector] 立卦完成', {
     primary: primary.lines.join(''),
     changed: changed.lines.join(''),
     mutual: mutual.lines.join(''),
+    opposite: opposite.lines.join(''),
     dynamics,
     lineMeta: lineMeta.map((m) => `${m.perspective}:${m.knowledgeState}(${m.isYang ? '阳' : '阴'}${m.isDynamic ? '动' : ''})`),
   });
@@ -280,8 +284,10 @@ export function mapToHexagram(aggregated, dimensions, knowledgeContext = {}) {
     primary,
     changed,
     mutual,
+    opposite,
     dynamics,
     lineMeta,
+    mirrorDisclaimer: '认知镜面用于换角度审视，不替代事实和用户决定。',
   };
 }
 

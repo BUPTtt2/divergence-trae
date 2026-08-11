@@ -228,7 +228,7 @@ export async function startDeliberation(question, options = {}) {
   const resp = await _deliberationFetch('/api/deliberation/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, deferPlanning: options.deferPlanning === true }),
+    body: JSON.stringify({ question, deferPlanning: options.deferPlanning === true, intentFrame: options.intentFrame || null }),
   });
   const data = await resp.json().catch(() => ({}));
   // LOCAL_FULL：如果返回内容是空 mock，就补一个明确的 state 给调用方识别
@@ -236,6 +236,29 @@ export async function startDeliberation(question, options = {}) {
     data.state = 'LOCAL_FULL';
     data.sessionId = data.sessionId || ('ls_' + Date.now().toString(36));
   }
+  return data;
+}
+
+export async function routeConversation(question) {
+  const resp = await _deliberationFetch('/api/deliberation/route', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `问题分流失败: ${resp.status}`);
+  return data;
+}
+
+export async function getDeliberationContext(sessionId, filters = {}) {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+  });
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const resp = await _deliberationFetch(`/api/deliberation/${sessionId}/context${suffix}`);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `上下文档案读取失败: ${resp.status}`);
   return data;
 }
 
@@ -271,6 +294,7 @@ export async function confirmCaseDeliberation(sessionId, command = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       acceptedMemoryIds: Array.isArray(command.acceptedMemoryIds) ? command.acceptedMemoryIds : [],
+      authorizeUnknownIds: Array.isArray(command.authorizeUnknownIds) ? command.authorizeUnknownIds : [],
       additionalContext: String(command.additionalContext || ''),
     }),
   });
@@ -304,7 +328,8 @@ export async function interjectDeliberation(sessionId, command = {}) {
     body: JSON.stringify({
       commandType: String(command.commandType || 'SUPPLEMENT').toUpperCase(),
       content: String(command.content || ''),
-      targetAgentId: command.targetAgentId || null,
+      targetAgentId: command.targetAgentId || command.targetAgentIds?.[0] || null,
+      targetAgentIds: Array.isArray(command.targetAgentIds) ? command.targetAgentIds : [],
     }),
   });
   const data = await resp.json().catch(() => ({}));
@@ -336,7 +361,8 @@ export async function commitDeliberation(sessionId, command) {
  */
 export async function getDeliberation(sessionId) {
   const resp = await _deliberationFetch(`/api/deliberation/${sessionId}`, {}, { throwOnError: false });
-  return resp.json ? resp.json().catch(() => ({})) : {};
+  const body = resp.json ? await resp.json().catch(() => ({})) : {};
+  return resp.ok ? body : { ...body, status: resp.status };
 }
 
 /**

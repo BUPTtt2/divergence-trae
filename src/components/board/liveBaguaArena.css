@@ -1,0 +1,232 @@
+.arena-hud {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  color: #eee7d8;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+}
+
+.arena-hud__statusline {
+  position: absolute;
+  top: clamp(112px, 16vh, 146px);
+  left: 50%;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 12px;
+  width: min(560px, calc(100% - 40px));
+  transform: translateX(-50%);
+  padding: 11px 14px 10px;
+  background:
+    linear-gradient(90deg, rgba(232,198,112,.5), rgba(232,198,112,.06)) top / 100% 1px no-repeat,
+    linear-gradient(90deg, rgba(232,198,112,.12), transparent) bottom / 100% 1px no-repeat,
+    rgba(11, 8, 7, .84);
+  box-shadow: 0 18px 44px rgba(0,0,0,.3);
+  backdrop-filter: blur(14px);
+}
+
+.arena-hud__statusline-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  color: #f2d685;
+  border: 1px solid rgba(232,198,112,.62);
+  background: rgba(232,198,112,.06);
+  font: 500 22px/1 "Ma Shan Zheng", "STKaiti", serif;
+  text-shadow: 0 0 16px rgba(232,198,112,.6);
+}
+
+.arena-hud__statusline-copy small,
+.arena-hud__statusline-copy strong { display: block; }
+.arena-hud__statusline-copy small { color: #9f8955; font: 9px/1.3 sans-serif; letter-spacing: .14em; }
+.arena-hud__statusline-copy strong { margin-top: 4px; color: #f0e5cd; font-size: 14px; font-weight: 500; letter-spacing: .08em; }
+.arena-hud__statusline-rail { grid-column: 2; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.arena-hud__statusline-rail i { height: 2px; background: rgba(232,198,112,.12); }
+.arena-hud__statusline-rail i[data-active="true"] { background: linear-gradient(90deg, #9d7b32, #efd477); box-shadow: 0 0 9px rgba(232,198,112,.28); }
+
+.arena-hud__direct {
+  pointer-events: auto;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(560px, calc(100vw - 40px));
+  transform: translate(-50%, -50%);
+  padding: 24px 28px;
+  background: rgba(12, 9, 8, .9);
+  border-top: 1px solid rgba(232, 198, 112, .72);
+  border-bottom: 1px solid rgba(232, 198, 112, .26);
+  box-shadow: 0 22px 80px rgba(0, 0, 0, .46);
+  text-align: center;
+}
+
+.arena-hud__direct small { color: #bca76e; font-size: 10px; letter-spacing: .24em; }
+.arena-hud__route-summary { display: block; margin-top: 10px; color: #d8c995; font: 500 12px/1.6 "Noto Serif SC", serif; letter-spacing: .08em; }
+.arena-hud__direct p { margin: 12px 0 0; font-size: clamp(18px, 2.2vw, 30px); line-height: 1.7; }
+.arena-hud__direct div { display: flex; justify-content: center; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+.arena-hud__direct button {
+  padding: 7px 10px;
+  color: #c9c0ae;
+  background: rgba(232, 198, 112, .03);
+  border: 1px solid rgba(232, 198, 112, .24);
+  font: 10px/1.3 "Noto Serif SC", serif;
+  cursor: pointer;
+}
+.arena-hud__direct button:hover,
+.arena-hud__direct button:focus-visible { color: #f2e4ac; border-color: rgba(232, 198, 112, .7); outline: none; }
+
+.living-bagua__facet {
+  min-width: 64px;
+  padding: 5px 8px;
+  color: #b9ad94;
+  background: rgba(10, 8, 7, .82);
+  border-left: 1px solid rgba(232, 198, 112, .38);
+  text-align: left;
+  white-space: nowrap;
+  backdrop-filter: blur(7px);
+}
+.living-bagua__facet strong { display: inline-block; margin-right: 5px; color: #eee1bd; font: 500 10px/1.3 "Noto Serif SC", serif; }
+.living-bagua__facet small { color: #8f8778; font: 8px/1.3 sans-serif; }
+.living-bagua__facet[data-active="true"] { border-left-color: #f2d685; box-shadow: 0 0 18px rgba(232,198,112,.12); }
+
+.living-bagua__core {
+  width: min(410px, 58vw);
+  text-align: center;
+  color: #f1e8d4;
+  text-shadow: 0 0 18px rgba(232,198,112,.3);
+  pointer-events: none;
+}
+.living-bagua__core strong { display: block; font: 500 30px/1 "Ma Shan Zheng", "STKaiti", serif; }
+.living-bagua__core small { display: block; margin-top: 7px; color: #9c927f; font: 8px/1.45 sans-serif; letter-spacing: .08em; }
+.living-bagua__core em { display: block; margin-top: 5px; color: #c7b991; font: 8px/1.45 sans-serif; font-style: normal; }
+.living-bagua__core span { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 9px; margin-top: 6px; }
+.living-bagua__core b { color: #8f8778; font: 500 7px/1.4 sans-serif; }
+
+.sandbox-stage.is-presentation .arena-presentation-mode { opacity: .44; filter: brightness(.58) saturate(.72); transition: opacity .25s ease, filter .25s ease; }
+.sandbox-stage.is-presentation { pointer-events: auto; }
+.sandbox-stage::after { content:""; position:absolute; z-index:3; inset:0; pointer-events:none; background:url('/assets/generated/fate-archive-texture-v2.png') center/cover no-repeat; mix-blend-mode:soft-light; opacity:.055; }
+.sandbox-stage.is-presentation::after { opacity:.035; }
+
+.agent-ghost-sigil {
+  position: relative;
+  width: 118px;
+  height: 106px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  padding: 0;
+  color: var(--agent-glow);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  user-select: none;
+  isolation: isolate;
+  transition: transform .22s ease, opacity .3s ease;
+}
+.agent-ghost-sigil::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 5px 12px 23px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--agent-color) 28%, transparent), transparent 68%);
+  filter: blur(7px);
+  opacity: .82;
+}
+.agent-ghost-sigil::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 25px;
+  width: 56px;
+  height: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--agent-glow) 62%, transparent), transparent);
+}
+.agent-ghost-sigil:hover,.agent-ghost-sigil:focus-visible,.agent-ghost-sigil[data-active="true"] { transform: translateY(-4px) scale(1.05); outline: none; }
+.agent-ghost-sigil__glyph { font: 500 52px/.9 "Ma Shan Zheng","STKaiti",serif; text-shadow: 0 0 10px var(--agent-color),0 0 28px var(--agent-color); }
+.agent-ghost-sigil__name { max-width: 112px; overflow: hidden; margin-top: 8px; color: #eee4d0; font: 600 11px/1.4 "Noto Serif SC",serif; letter-spacing: .08em; text-overflow: ellipsis; white-space: nowrap; }
+.agent-ghost-sigil small { margin-top: 2px; color: #8d8477; font: 8px/1.4 "Noto Serif SC",serif; white-space: nowrap; }
+.agent-ghost-sigil i { position: absolute; right: 21px; top: 18px; width: 5px; height: 5px; border-radius: 50%; background: var(--agent-glow); box-shadow: 0 0 10px var(--agent-glow); opacity: .55; }
+.agent-ghost-sigil[data-active="true"] i { opacity: 1; animation: agent-status-pulse 1.25s ease-in-out infinite; }
+.agent-ghost-sigil[data-spoken="true"] small { color: #74bf9e; }
+@keyframes agent-status-pulse { 50% { transform: scale(1.8); opacity: .35; } }
+
+.arena-hud__inspector {
+  pointer-events: auto;
+  position: absolute;
+  left: 26px;
+  bottom: 82px;
+  width: min(330px, calc(100vw - 52px));
+  padding: 16px 18px;
+  background: rgba(11, 8, 7, .92);
+  border: 1px solid rgba(232, 198, 112, .28);
+  border-left-color: rgba(232, 198, 112, .78);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, .42);
+}
+
+.arena-hud__inspector > button { position: absolute; top: 8px; right: 10px; color: #817a6d; background: none; border: 0; cursor: pointer; }
+.arena-hud__inspector small { color: #b89b58; font-size: 9px; letter-spacing: .18em; }
+.arena-hud__inspector h3 { margin: 7px 24px 6px 0; font-size: 17px; font-weight: 500; }
+.arena-hud__inspector p { margin: 0; color: #bdb5a6; font-size: 12px; line-height: 1.75; }
+.arena-hud__inspector footer { display: flex; justify-content: space-between; margin-top: 12px; color: #777065; font-size: 9px; }
+.arena-hud__inspector em { color: #69c7a2; font-style: normal; }
+
+.live-bagua-node {
+  position: relative;
+  width: 124px;
+  min-height: 46px;
+  padding: 9px 11px;
+  color: #eee5d5;
+  background: rgba(12, 9, 8, .92);
+  border: 0;
+  border-left: 1px solid currentColor;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .32);
+  backdrop-filter: blur(12px);
+  transition: opacity .2s ease, transform .2s ease, background .2s ease;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 7px 100%, 0 calc(100% - 7px));
+}
+
+.live-bagua-node::after {
+  content: "";
+  position: absolute;
+  right: 7px;
+  top: 7px;
+  width: 4px;
+  height: 4px;
+  background: currentColor;
+  box-shadow: 0 0 9px currentColor;
+  opacity: .7;
+}
+
+.live-bagua-node:hover,
+.live-bagua-node:focus-visible,
+.live-bagua-node[data-active="true"] { transform: translateY(-2px); background: rgba(25, 19, 14, .94); outline: none; }
+.live-bagua-node span,
+.live-bagua-node small { display: block; }
+.live-bagua-node span { overflow: hidden; font: 600 11px/1.4 "Noto Serif SC", serif; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; }
+.live-bagua-node small { margin-top: 3px; color: #9b9284; font: 8px/1.35 sans-serif; }
+.live-bagua-node[data-kind="unknown"] { color: #b6aed6; opacity: .95; border-left-style: dashed; }
+.live-bagua-node[data-kind="evidence"] { color: #75d2ad; }
+.live-bagua-node[data-kind="interjection"] { color: #d9a36c; }
+.live-bagua-node[data-kind="advisor"] { color: #e4d7b2; }
+.live-bagua-node[data-status="completed"],.live-bagua-node[data-status="accepted"] { opacity: .62; }
+.live-bagua-node[data-status="running"],.live-bagua-node[data-active="true"] { opacity: 1; box-shadow: 0 12px 34px rgba(0,0,0,.38), 0 0 18px rgba(232,198,112,.08); }
+
+@media (max-width: 1024px) {
+  .arena-hud__inspector { left: 14px; bottom: 96px; width: min(360px, calc(100vw - 28px)); }
+  .arena-hud__direct { top: 45%; padding: 20px; }
+  .arena-hud__statusline { top: 132px; width: min(500px, calc(100% - 32px)); }
+}
+
+@media (max-width: 700px) {
+  .arena-hud__statusline { top: 104px; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; padding: 10px 11px; }
+  .arena-hud__statusline-mark { width: 32px; height: 32px; font-size: 18px; }
+  .arena-hud__statusline-copy strong { font-size: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-bagua-node { transition: none; }
+}

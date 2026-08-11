@@ -4,19 +4,23 @@ export function companionLayoutForViewport({ width, height } = {}) {
   const portraitOrNarrow = viewportHeight > viewportWidth || viewportWidth < 900;
   if (portraitOrNarrow) {
     return {
-      mode: 'bottom-sheet',
+      mode: 'full-drawer',
       width: Math.max(0, viewportWidth - 16),
-      maxHeight: Math.min(430, Math.floor(viewportHeight * 0.42)),
+      maxHeight: Math.max(0, viewportHeight - 16),
       stageInset: 0,
     };
   }
-  const sidecarWidth = viewportWidth >= 1120 ? 380 : Math.max(280, Math.floor(viewportWidth * 0.31));
   return {
-    mode: 'sidecar',
-    width: sidecarWidth,
+    mode: 'overlay-sheet',
+    width: 420,
     maxHeight: Math.max(0, viewportHeight - 36),
-    stageInset: sidecarWidth + 24,
+    stageInset: 0,
   };
 }
 
-export default { companionLayoutForViewport };
+export function companionDockStyle(width) {
+  const safeWidth = Math.min(420, Math.max(360, Number(width) || 420));
+  return { '--companion-dock-width': `${safeWidth}px` };
+}
+
+export default { companionLayoutForViewport, companionDockStyle };

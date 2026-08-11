@@ -169,7 +169,6 @@ export async function fetchAgentPersonas() {
       for (const p of data.personas) {
         _remotePersonas[p.id] = p;
       }
-      console.log(`[persona] 已从后端加载 ${Object.keys(_remotePersonas).length} 个智囊 persona`);
     }
   } catch (e) {
     // 后端 persona 获取失败是正常降级路径（本地缓存兜底）→ 不刷红日志，只打 debug

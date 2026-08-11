@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import AppNav from '../components/AppNav';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 
@@ -94,7 +93,7 @@ export default function Dictionary() {
     : GUA_DICTIONARY.filter(g => g.element === filterElement);
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}>
+    <div className="xm-paper-page min-h-screen" style={{ backgroundColor: T.paper, color: T.ink, fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", serif' }}>
 
       <div className="pt-14 max-w-[1000px] mx-auto px-6 py-12">
         <motion.div

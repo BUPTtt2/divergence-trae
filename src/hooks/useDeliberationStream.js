@@ -67,10 +67,10 @@ export function useDeliberationStream(sessionId, callbacks = {}) {
           cb.onReplayComplete?.(evt);
           break;
         case 'THOUGHT':
-          cb.onThought?.(data || {});
+          cb.onThought?.({ ...(data || {}), __eventId: evt.eventId, __sequence: evt.sequence });
           break;
         case 'ADVISOR_SPEAK':
-          cb.onAdvisorSpeak?.(data || {});
+          cb.onAdvisorSpeak?.({ ...(data || {}), __eventId: evt.eventId, __sequence: evt.sequence });
           break;
         case 'STATE_CHANGE':
           // 自动跟踪 PAUSED 状态
@@ -79,7 +79,7 @@ export function useDeliberationStream(sessionId, callbacks = {}) {
           cb.onStateChange?.(data || {});
           break;
         case 'OBSERVATION':
-          cb.onObservation?.(data || {});
+          cb.onObservation?.({ ...(data || {}), __eventId: evt.eventId, __sequence: evt.sequence });
           break;
         case 'ERROR':
           cb.onError?.(data || {});

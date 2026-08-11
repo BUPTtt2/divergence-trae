@@ -55,6 +55,27 @@ export function buildSelectionDimensions({
   }));
 }
 
+function buildRecommendationDetails({ agentIds = [], allAgentMap = {}, dimensions = [], modelRecommendations = [] } = {}) {
+  const modelById = new Map((Array.isArray(modelRecommendations) ? modelRecommendations : [])
+    .filter((item) => item?.agentId)
+    .map((item) => [String(item.agentId), item]));
+  return agentIds.map((agentId, index) => {
+    const agent = allAgentMap[agentId] || {};
+    const modelItem = modelById.get(agentId) || {};
+    const matchedDimensions = dimensions
+      .filter((dimension) => (dimension.agents || dimension.agentIds || []).includes(agentId))
+      .map((dimension) => dimension.name)
+      .filter(Boolean);
+    return {
+      agentId,
+      score: Math.max(55, Math.min(98, Number(modelItem.score) || (92 - index * 7))),
+      reason: String(modelItem.reason || `负责${matchedDimensions.join('、') || agent.stance || agent.name || '补充判断'}，与其他席位形成独立校验。`).slice(0, 160),
+      matchedDimensions,
+      source: 'model',
+    };
+  });
+}
+
 /**
  * 分析用户问题，选择最适合的 Agent（数量由问题复杂度决定）
  *
@@ -123,7 +144,8 @@ ${agentList}
   "agentIds": ["id1", "id2", ...],
   "analysis": "对问题的深度分析和拆解，说明为什么需要这些视角",
   "reasoning": "挑选每个Agent的理由，每个Agent一句话",
-  "dimensions": [{"name":"本题具体判断维度","perspective":"risk","agentIds":["id1"],"toolNeeds":[]}]
+  "dimensions": [{"name":"本题具体判断维度","perspective":"risk","agentIds":["id1"],"toolNeeds":[]}],
+  "recommendations": [{"agentId":"id1","score":86,"reason":"该智囊具体命中了案卷里的哪一项目标、未知或约束"}]
 }
 
 【规则】
@@ -170,14 +192,21 @@ ${agentList}
       return fallback;
     }
 
+    const dimensions = buildSelectionDimensions({
+      selectedAgentIds: agentIds,
+      selectedAgents: agentIds.map((id) => allAgentMap[id]).filter(Boolean),
+      modelDimensions: parsed.dimensions,
+    });
     return {
       agentIds,
       reasoning: parsed.reasoning || 'LLM 分析完成',
       analysis: parsed.analysis || '',
-      dimensions: buildSelectionDimensions({
-        selectedAgentIds: agentIds,
-        selectedAgents: agentIds.map((id) => allAgentMap[id]).filter(Boolean),
-        modelDimensions: parsed.dimensions,
+      dimensions,
+      recommendations: buildRecommendationDetails({
+        agentIds,
+        allAgentMap,
+        dimensions,
+        modelRecommendations: parsed.recommendations,
       }),
       fallback: false,
     };
@@ -218,14 +247,21 @@ function _ruleBasedAgents(question, allAgents = [], errorReason = '') {
   const allIds = new Set(allAgents.map(a => a.id));
   const pickedIds = [...core, ...extra].filter(id => allIds.has(id)).slice(0, 6);
   const pickedAgentIds = pickedIds.length >= 2 ? pickedIds : core.filter(id => allIds.has(id));
+  const dimensions = buildSelectionDimensions({
+    selectedAgentIds: pickedAgentIds,
+    selectedAgents: pickedAgentIds.map((id) => allAgents.find((agent) => agent.id === id)).filter(Boolean),
+  });
+  const fallbackMap = Object.fromEntries(allAgents.map((agent) => [agent.id, agent]));
   return {
     agentIds: pickedAgentIds,
     reasoning: '规则兜底：核心四智囊 + 关键词扩展',
     analysis: errorReason ? `（LLM暂不可用：${errorReason.slice(0, 50)}，演已按规则选智囊）` : '（演按问题类型匹配智囊）',
-    dimensions: buildSelectionDimensions({
-      selectedAgentIds: pickedAgentIds,
-      selectedAgents: pickedAgentIds.map((id) => allAgents.find((agent) => agent.id === id)).filter(Boolean),
-    }),
+    dimensions,
+    recommendations: buildRecommendationDetails({
+      agentIds: pickedAgentIds,
+      allAgentMap: fallbackMap,
+      dimensions,
+    }).map((item) => ({ ...item, source: 'controlled-fallback' })),
     fallback: true,
   };
 }
@@ -295,12 +331,13 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
   const findingInstruction = options.mode === 'finding' ? `
 
 【本轮交付格式】
-案卷已经由用户确认，本轮不要继续采访用户。你必须给出一项独立、可反驳的判断，并严格按四段输出：
+案卷已经由用户确认，本轮不要继续采访用户。你必须给出一项独立、可反驳的判断，并严格按五段输出：
 【主张】一句明确但有条件的判断
 【依据】只使用用户已确认信息、给定证据和明确推理，不虚构事实
 【假设】用分号分隔尚未验证的前提；没有则写“无”
 【反转条件】用分号分隔会使主张失效或需要改路的信号
-不要输出上述四段以外的内容。` : '';
+【置信度】0%到100%，根据信息完整度与证据强度给出
+不要输出上述五段以外的内容。` : '';
 
   const interactionRules = options.mode === 'finding' ? `
 【案卷判断规则】
@@ -309,9 +346,11 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
 3. 主张必须有条件、可反驳；依据要完整解释为什么，不得只写一句口号。
 4. 只履行自己的角色合同，不代替其他智囊，也不替用户做最终决定。` : `
 【对话规则】
-1. 信息不足时先指出具体缺口，再问 1 个最能改变判断的问题。
-2. 复述你真正理解到的现状，不能补写用户没说过的背景。
-3. 数字必须有来源；没有来源就明确写成待验证变量。`;
+1. 先用一句话说明你基于案卷更倾向什么，再给出与用户已确认事实相连的理由；信息不足时只问 1 个最能改变判断的问题。
+2. 语气冷静、协作、条件化，优先使用“如果…那么…”“我更倾向…”；禁止羞辱、命令式裁决和“否则就是失败/负资产”一类绝对化措辞。
+3. 复述你真正理解到的现状，不能补写用户没说过的背景。
+4. 数字必须来自用户或已接受证据；没有来源就写成待验证变量，禁止为了显得专业而编造比例、概率和成本。
+5. 回答至少包含：当前倾向、两条理由、一个未知或反转条件、一个可逆下一步。`;
 
   const systemPrompt = `${basePrompt}${memoryContextInjection}${interactionRules}
 

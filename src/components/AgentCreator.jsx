@@ -28,12 +28,21 @@ import { buildForgeReturnUrl } from '../game/councilModel';
 const EASE = [0.16, 1, 0.3, 1];
 
 const STEP_LABELS = ['赐名', '定关系', '演审问', '封印', '入营'];
+const AVATAR_PRESETS = [
+  { id: 'moon', glyph: '◐', label: '月镜' },
+  { id: 'mountain', glyph: '山', label: '远山' },
+  { id: 'water', glyph: '水', label: '深水' },
+  { id: 'fire', glyph: '火', label: '明火' },
+  { id: 'wind', glyph: '风', label: '长风' },
+  { id: 'star', glyph: '✦', label: '星图' },
+];
 
 export default function AgentCreator({ onClose, onSaved, existingAgents = [], returnContext = null }) {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
+  const [avatar, setAvatar] = useState('moon');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -240,7 +249,7 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
         source,
       });
       const blessingResult = await generateSealingBlessing(agent, personaResult.conversationId || conversationId);
-      const finalAgent = { ...agent, blessing: blessingResult.blessing };
+      const finalAgent = { ...agent, blessing: blessingResult.blessing, avatar };
       if (blessingResult.conversationId) setConversationId(blessingResult.conversationId);
       setBlessing(blessingResult.blessing);
       setForgedAgent(finalAgent);
@@ -268,6 +277,7 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
         persona: forgedAgent.persona,
         perspective: forgedAgent.stance,
         trigram: forgedAgent.trigram,
+        avatar: forgedAgent.avatar,
         objective: `从${forgedAgent.stance}视角审查用户的真实决策，不替用户作决定`,
         methodology: [
           '先复述已确认事实，并把缺失信息保留为未知',
@@ -383,6 +393,11 @@ export default function AgentCreator({ onClose, onSaved, existingAgents = [], re
                 <textarea value={desc} onChange={(e) => { setDesc(e.target.value); setError(''); }}
                   placeholder="TA看世界的独特角度是什么？" rows={2} maxLength={80}
                   style={{ ...inputStyle, resize: 'none' }} />
+              </Field>
+              <Field label="选择头像">
+                <div className="agent-avatar-presets" style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 6 }}>
+                  {AVATAR_PRESETS.map((preset) => <button key={preset.id} type="button" aria-label={preset.label} aria-pressed={avatar === preset.id} onClick={() => setAvatar(preset.id)} style={{ minHeight: 48, display: 'grid', placeItems: 'center', color: avatar === preset.id ? '#17120c' : '#d8c792', background: avatar === preset.id ? '#d8b85b' : 'rgba(200,168,80,.05)', border: `1px solid ${avatar === preset.id ? '#efd584' : 'rgba(200,168,80,.24)'}`, borderRadius: 3, font: '18px "Ma Shan Zheng",serif' }}>{preset.glyph}</button>)}
+                </div>
               </Field>
               {error && <ErrorTip text={error} />}
               <StepButtons onNext={handleStep1Next} nextLabel="演来理解" disabled={!name.trim()} />

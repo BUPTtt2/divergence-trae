@@ -512,26 +512,34 @@ function synthesizeAgents(seedAgents, sharedAgents, generatedAgents, dimensions)
 
 function getFallbackResponse(question = '') {
   logger.info('[AgentRouter][fallback] 返回降级响应', { question: question?.slice(0, 60) });
-  const fallbackAgentIds = ['jingyuan', 'fengyan', 'qiangu'];
+  const fallbackAnalysis = getFallbackAnalysis(question);
+  const fallbackAgentIds = [...new Set([
+    ...fallbackAnalysis.dimensions.flatMap((dimension) => dimension.coveredBy || []),
+    'jingyuan',
+    'fengyan',
+    'zhenxing',
+  ])].filter((id) => AGENT_POOL.some((agent) => agent.id === id)).slice(0, MAX_AGENTS);
   const fallbackAgents = fallbackAgentIds.map(id => {
     const agent = AGENT_POOL.find(a => a.id === id);
     return agent ? formatAgentForOutput(agent) : null;
   }).filter(Boolean);
 
   return {
-    analysis: '问题需要从多视角审视',
-    dimensions: [
-      { name: '反思', perspective: 'reflection', importance: 5, description: '自我审视', coveredBy: ['jingyuan'] },
-      { name: '风险', perspective: 'risk', importance: 4, description: '风险评估', coveredBy: ['fengyan'] },
-      { name: '财务', perspective: 'financial', importance: 3, description: '成本分析', coveredBy: ['qiangu'] },
-    ],
-    reasoning: '使用默认智囊组合',
-    coverage: { covered: 3, total: 3, ratio: 1.0, gaps: [], coveredPerspectives: ['reflection', 'risk', 'financial'] },
+    analysis: fallbackAnalysis.analysis,
+    dimensions: fallbackAnalysis.dimensions,
+    reasoning: `${fallbackAnalysis.reasoning}；阵容根据本题维度生成`,
+    coverage: {
+      covered: fallbackAnalysis.dimensions.filter((dimension) => dimension.coveredBy?.length).length,
+      total: fallbackAnalysis.dimensions.length,
+      ratio: fallbackAnalysis.dimensions.length ? fallbackAnalysis.dimensions.filter((dimension) => dimension.coveredBy?.length).length / fallbackAnalysis.dimensions.length : 0,
+      gaps: fallbackAnalysis.dimensions.filter((dimension) => !dimension.coveredBy?.length).map((dimension) => dimension.perspective),
+      coveredPerspectives: fallbackAnalysis.dimensions.filter((dimension) => dimension.coveredBy?.length).map((dimension) => dimension.perspective),
+    },
     seedAgents: fallbackAgents,
     sharedAgents: [],
     generatedAgents: [],
     recommendedIds: fallbackAgentIds,
-    totalCoverage: 1.0,
+    totalCoverage: fallbackAnalysis.dimensions.length ? fallbackAnalysis.dimensions.filter((dimension) => dimension.coveredBy?.length).length / fallbackAnalysis.dimensions.length : 0,
     cacheHit: false,
     totalAgents: fallbackAgents.length,
     fallback: true,
@@ -549,16 +557,30 @@ function getFallbackAnalysis(question) {
   };
 
   // 简单关键词匹配
-  if (/旅行|旅游|去|出发|西藏|云南|旅行/.test(question)) {
+  if (/请假|休假|年假|病假|事假|调休|实习生.*假/.test(question)) {
+    addDim('流程可行性', 'practical', 5, ['zhenxing']);
+    addDim('工作与交接风险', 'risk', 5, ['fengyan']);
+    addDim('沟通与审批', 'communication', 4, ['duiyan']);
+    addDim('收入与成本', 'financial', 3, ['qiangu']);
+  } else if (/旅行|旅游|出发|西藏|云南|航班|酒店/.test(question)) {
     addDim('风险评估', 'risk', 5, ['fengyan']);
     addDim('体验价值', 'experience', 4, []);
     addDim('身体适应', 'health', 4, ['jiankang']);
     addDim('财务成本', 'financial', 3, ['qiangu']);
-  } else if (/工作|职业|offer|跳槽|涨薪/.test(lowerQ)) {
+  } else if (/工作|职业|offer|跳槽|涨薪|辞职|创业|面试/.test(lowerQ)) {
     addDim('财务回报', 'financial', 5, ['qiangu']);
     addDim('职业发展', 'strategic', 5, ['luxiang']);
     addDim('风险评估', 'risk', 4, ['fengyan']);
-  } else if (/健康|身体|生病|运动/.test(lowerQ)) {
+  } else if (/考研|读研|留学|升学|考试|学习|考证/.test(lowerQ)) {
+    addDim('学习路径', 'education', 5, ['jiaoyu']);
+    addDim('机会成本', 'financial', 4, ['qiangu']);
+    addDim('长期路径', 'strategic', 5, ['luxiang']);
+    addDim('不确定性', 'risk', 4, ['fengyan']);
+  } else if (/租房|买房|搬家|房租|通勤/.test(lowerQ)) {
+    addDim('现金流', 'financial', 5, ['qiangu']);
+    addDim('居住与通勤', 'living', 5, ['luxiang']);
+    addDim('合同与退出风险', 'risk', 4, ['fengyan']);
+  } else if (/健康|身体|生病|运动|减肥|减脂|睡眠/.test(lowerQ)) {
     addDim('身体风险', 'risk', 5, ['fengyan']);
     addDim('健康管理', 'health', 5, ['jiankang']);
     addDim('生活质量', 'emotional', 4, ['xinhe']);
@@ -569,7 +591,8 @@ function getFallbackAnalysis(question) {
   } else {
     addDim('自我反思', 'reflection', 5, ['jingyuan']);
     addDim('风险评估', 'risk', 4, ['fengyan']);
-    addDim('行动可行性', 'practical', 3, ['zhenxing']);
+    addDim('行动可行性', 'practical', 4, ['zhenxing']);
+    addDim('沟通协同', 'communication', 3, ['duiyan']);
   }
 
   return {

@@ -1,0 +1,165 @@
+:root {
+  --xm-ink-0: #070605;
+  --xm-ink-1: #0d0b09;
+  --xm-ink-2: #15110d;
+  --xm-paper: #eee5d2;
+  --xm-paper-muted: #aa9f8c;
+  --xm-gold: #d7b965;
+  --xm-gold-soft: #9d8245;
+  --xm-cinnabar: #a94732;
+  --xm-jade: #7fa58d;
+  --xm-panel: rgb(10 8 7 / 91%);
+  --xm-panel-soft: rgb(18 14 11 / 78%);
+  --xm-line: rgb(215 185 101 / 20%);
+  --xm-line-strong: rgb(215 185 101 / 48%);
+  --xm-shadow: 0 28px 90px rgb(0 0 0 / 48%);
+  --xm-motion-fast: 180ms;
+  --xm-motion-slow: 480ms;
+  --xm-ease: cubic-bezier(.22, .8, .24, 1);
+  --xm-arena-image: url('/assets/generated/xuanmo/arena-celestial-v3.jpg');
+  --xm-page-image: url('/assets/generated/xuanmo/page-wash-v3.jpg');
+}
+
+html {
+  color-scheme: dark;
+  background: var(--xm-ink-0);
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  color: var(--xm-paper);
+  background:
+    radial-gradient(circle at 48% 10%, rgb(117 87 42 / 8%), transparent 42%),
+    var(--xm-ink-0);
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  color: #120e09;
+  background: var(--xm-gold);
+}
+
+.xm-page {
+  position: relative;
+  isolation: isolate;
+  min-height: 100dvh;
+  color: var(--xm-paper);
+  background:
+    linear-gradient(rgb(7 6 5 / 82%), rgb(7 6 5 / 94%)),
+    var(--xm-page-image) center / cover fixed,
+    var(--xm-ink-0);
+}
+
+.xm-page::before {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  opacity: .22;
+  background-image: radial-gradient(rgb(240 216 145 / 10%) .7px, transparent .8px);
+  background-size: 43px 43px;
+  mask-image: linear-gradient(to bottom, black, transparent 76%);
+}
+
+.xm-paper-page {
+  position: relative;
+  isolation: isolate;
+  background-color: #f0eadc !important;
+  background-image:
+    linear-gradient(rgb(242 237 224 / 94%), rgb(242 237 224 / 97%)),
+    var(--xm-page-image) !important;
+  background-position: center !important;
+  background-size: cover !important;
+  background-attachment: fixed !important;
+}
+
+.xm-paper-page::after {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  background:
+    linear-gradient(90deg, rgb(169 71 50 / 4%), transparent 18%, transparent 82%, rgb(169 71 50 / 4%)),
+    repeating-linear-gradient(0deg, transparent 0 31px, rgb(26 20 16 / 1.6%) 32px);
+}
+
+.xm-paper-page :is(button, a, input, textarea) {
+  transition: border-color var(--xm-motion-fast) var(--xm-ease), color var(--xm-motion-fast) var(--xm-ease), background-color var(--xm-motion-fast) var(--xm-ease), transform var(--xm-motion-fast) var(--xm-ease);
+}
+
+.xm-surface {
+  border: 1px solid var(--xm-line);
+  background:
+    linear-gradient(145deg, rgb(255 244 214 / 3%), transparent 30%),
+    var(--xm-panel);
+  box-shadow: inset 0 1px rgb(255 255 255 / 3%), var(--xm-shadow);
+  backdrop-filter: blur(18px) saturate(.82);
+}
+
+.xm-kicker {
+  color: var(--xm-gold-soft);
+  font: 500 10px/1.4 "Noto Serif SC", serif;
+  letter-spacing: .2em;
+}
+
+.xm-title {
+  color: var(--xm-paper);
+  font-family: "Ma Shan Zheng", "STKaiti", serif;
+  text-wrap: balance;
+  text-shadow: 0 0 24px rgb(215 185 101 / 16%);
+}
+
+.xm-focus-ring:focus-visible,
+.xm-page button:focus-visible,
+.xm-page a:focus-visible,
+.xm-page input:focus-visible,
+.xm-page textarea:focus-visible {
+  outline: 1px solid var(--xm-gold);
+  outline-offset: 3px;
+}
+
+.xm-source-mark {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid rgb(215 185 101 / 44%);
+  color: var(--xm-gold);
+  background: rgb(9 7 5 / 76%);
+  font: 11px/1 "Ma Shan Zheng", serif;
+}
+
+.game-root {
+  background:
+    linear-gradient(90deg, rgb(5 4 3 / 12%), rgb(5 4 3 / 48%)),
+    var(--xm-arena-image) center / cover,
+    var(--xm-ink-0) !important;
+}
+
+.sandbox-stage {
+  isolation: isolate;
+}
+
+.sandbox-stage::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  background:
+    radial-gradient(circle at 50% 65%, rgb(215 185 101 / 10%), transparent 34%),
+    linear-gradient(to right, transparent 70%, rgb(5 4 3 / 34%));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

@@ -40,10 +40,12 @@ import {
   reflectionDomainEvents,
 } from './agentEventSemantics.js';
 import { executeLensReviewTasks } from './cognitivePerturbationService.js';
-import { normalizeExecuteResponse } from '../../../shared/deliberationContract.js';
+import { normalizeExecuteResponse, validateInitialCouncilSelection } from '../contracts/deliberationContract.js';
 import { acceptedCaseContext, buildDecisionCase, confirmDecisionCase } from './decisionCaseService.js';
 import { routeDeliberationDepth } from './deliberationDepthRouter.js';
 import { validateDeliberationContribution } from './deliberationContribution.js';
+import { appendContextEntry, contextLedgerIndex } from './contextLedger.js';
+import { createDestinyCardCopy } from './destinyCardCopyService.js';
 // 系统级 Agent（生产级 4 Agent）
 import AuditAgentSingleton from '../agents/system/AuditAgent.js';
 const _auditAttached = (() => { try { AuditAgentSingleton.ensureAttached(); } catch (e) { logger.warn('[DeliberationEngine] audit attach fail', e.message); } return true; })();
@@ -65,7 +67,9 @@ export const STATES = {
   FAILED: 'FAILED',
 };
 
-const MAX_ROUND = 8;
+const MAX_ROUND = 4;
+const MIN_INTAKE_ROUND_BEFORE_REVIEW = 3;
+const MAX_INTAKE_QUESTIONS = 4;
 const PAUSE_TIMEOUT_MS = 30 * 60 * 1000; // 30 分钟内可 resume
 const commitFlights = new Map();
 const executeFlights = new Map();
@@ -159,6 +163,33 @@ function enforceCaseConfirmationGate(result) {
     depthRoute,
   });
   session.plan = plan;
+  const explicitlySkipped = (Array.isArray(session.answers) ? session.answers : []).some((answer) => (
+    /用户选择跳过|暂不回答|不愿回答|按现有信息继续/.test(String(answer?.answer || answer?.text || answer?.content || answer || ''))
+  ));
+  const answeredIntakeCount = (Array.isArray(session.answers) ? session.answers : []).filter((answer) => {
+    const value = String(answer?.answer || answer?.text || answer?.content || answer || '').trim();
+    return value && !/用户选择跳过|暂不回答|不愿回答|按现有信息继续/.test(value);
+  }).length;
+  const currentRound = Number(result.round || session.round || plan.round || 1);
+  if (session.state === STATES.EXECUTE && currentRound < MIN_INTAKE_ROUND_BEFORE_REVIEW && !explicitlySkipped) {
+    const followUps = (plan.caseFile.unknowns || [])
+      .filter((unknown) => unknown?.question && !['skipped', 'answered'].includes(unknown.status))
+      .slice(0, Math.max(0, Math.min(2, MAX_INTAKE_QUESTIONS - answeredIntakeCount)))
+      .map((unknown, index) => ({
+        id: unknown.id || `progressive_${currentRound}_${index + 1}`,
+        fieldId: unknown.id || `progressive_${currentRound}_${index + 1}`,
+        question: unknown.question,
+        reason: unknown.reason || '这项信息能改变判断边界或反转条件。',
+        blocking: unknown.blocking !== false,
+        source: 'case-progressive-intake',
+      }));
+    if (followUps.length > 0) {
+      session.state = STATES.WAIT;
+      session.askUser = followUps;
+      plan.askUser = followUps;
+      result.askUser = followUps;
+    }
+  }
   if (session.state === STATES.EXECUTE && !plan.caseFile.confirmedByUser) {
     session.state = STATES.READY;
     session.askUser = [];
@@ -417,7 +448,7 @@ export async function persistClarifyExecute(sessionId, session, questions, execu
  * @param {string} userId 用户ID
  * @returns {Promise<{sessionId, state, askUser, plan, round, maxRound, openingLine, memory}>}
  */
-export async function createSession(question, userId) {
+export async function createSession(question, userId, options = {}) {
   if (!question || typeof question !== 'string' || question.trim().length === 0) {
     throw new Error('缺少 question 参数');
   }
@@ -434,6 +465,7 @@ export async function createSession(question, userId) {
     state: STATES.PLAN,
     replan_count: 0,
     round: 1,
+    ...(options.intentFrame && typeof options.intentFrame === 'object' ? { plan: { intentFrame: options.intentFrame } } : {}),
   };
   // 先持久化拿到确定 id
   try {
@@ -462,7 +494,13 @@ export async function createSession(question, userId) {
 
 export async function plan(sessionId, executionCtx = {}, dependencies = {}) {
   const session = await assertSessionOwner(sessionId, executionCtx.userId);
-  if (session.state !== STATES.PLAN || session.plan) {
+  const materialPlan = session.plan && (
+    Array.isArray(session.plan.dimensions)
+    || Array.isArray(session.plan.informationFields)
+    || session.plan.caseAnalysis
+    || session.plan.caseFile
+  );
+  if (session.state !== STATES.PLAN || materialPlan) {
     return buildResponse(
       session,
       session.plan || {},
@@ -484,6 +522,19 @@ export async function plan(sessionId, executionCtx = {}, dependencies = {}) {
     ? await dependencies.planSessionFn(session)
     : await planSessionWithFallback(session, dependencies.planFn || planner.plan);
   const result = enforceCaseConfirmationGate(rawResult);
+  result.plan = { ...(session.plan || {}), ...(result.plan || {}) };
+  result.session.plan = result.plan;
+  if (!Array.isArray(result.plan?.contextLedger) || result.plan.contextLedger.length === 0) {
+    result.plan = appendContextEntry(result.plan || {}, {
+      round: result.round || 1,
+      action: 'intake',
+      goal: result.session.question || session.question,
+      result: result.plan?.caseAnalysis?.understanding || result.plan?.analysis || '已建立本局案卷并识别首轮信息缺口。',
+      status: result.session.state === STATES.WAIT ? 'clarifying' : 'ready',
+      scope: 'case',
+    });
+    result.session.plan = result.plan;
+  }
   await memoryService.saveSession(result.session);
 
   // 确保 sessionId 一致（兜底时可能用的是内存态对象）
@@ -557,9 +608,9 @@ export async function plan(sessionId, executionCtx = {}, dependencies = {}) {
   return resp;
 }
 
-export async function start(question, userId) {
+export async function start(question, userId, options = {}) {
   logger.info('[Deliberation] start 开始', { question: (question || '').slice(0, 60), userId });
-  const created = await createSession(question, userId);
+  const created = await createSession(question, userId, options);
   return plan(created.sessionId, { userId });
 }
 
@@ -587,26 +638,43 @@ function _fallbackPlanResult(session, errorMsg = '') {
     add('内心诉求', 'emotional');
   }
 
-  // 启发式 agent（风眼/钱谷/路向/镜渊 四核心）
-  const defaultFallbackAgents = [
-    { id: 'fengyan', name: '风眼', stance: '风险视角', role: 'dynamic', trigram: '☵', color: '#A84848', glow: '#E88080' },
-    { id: 'qiangu', name: '钱谷', stance: '财务视角', role: 'dynamic', trigram: '☰', color: '#C88848', glow: '#E8B880' },
-    { id: 'luxiang', name: '路向', stance: '职业/趋势视角', role: 'dynamic', trigram: '☴', color: '#508870', glow: '#80C8A8' },
-    { id: 'jingyuan', name: '镜渊', stance: '反思视角', role: 'dynamic', trigram: '☷', color: '#706088', glow: '#A890C8' },
+  // 规则降级也按题目动态组阁，避免模型不可用时永远落到同一组四人。
+  const fallbackCouncilRoutes = [
+    { match: /(吃饭|进食|饿|嘴馋|减脂|减肥|体重|运动|睡眠|身体|健康|疾病|就医)/, ids: ['jiankang', 'xinhe', 'jingyuan', 'zhenxing'] },
+    { match: /(旅行|旅游|出行|机票|酒店|住宿|比赛|演唱会|度假|请假)/, ids: ['fengyan', 'qiangu', 'yuntu', 'zhenxing'] },
+    { match: /(offer|工作|跳槽|创业|辞职|转行|升职|职业|实习|公司)/, ids: ['luxiang', 'fengyan', 'qiangu', 'zhenxing'] },
+    { match: /(投资|股票|基金|理财|贷款|汇率|借钱|还钱|预算|现金流)/, ids: ['qiangu', 'fengyan', 'jingyuan', 'zhenxing'] },
+    { match: /(感情|恋爱|结婚|分手|对象|伴侣|老公|老婆|父母|家人|沟通)/, ids: ['xinhe', 'duiyan', 'jingyuan', 'fengyan'] },
+    { match: /(学习|考试|考研|留学|学校|专业|课程|论文)/, ids: ['jiaoyu', 'luxiang', 'jingyuan', 'zhenxing'] },
+    { match: /(技术|开发|产品|系统|代码|软件|硬件|ai|人工智能)/, ids: ['jishu', 'fengyan', 'qiangu', 'zhenxing'] },
+    { match: /(租房|买房|换城市|城市|房租|房源|通勤)/, ids: ['yuntu', 'qiangu', 'fengyan', 'luxiang'] },
   ];
-  const fallbackAgents = isFoodContext ? [
-    { id: 'jiankang', name: '养生', stance: '健康视角', perspective: 'health', role: 'dynamic', reason: '核对身体信号、进食间隔和即时健康边界', trigram: '☵', color: '#508870', glow: '#80C8A8' },
-    { id: 'xinhe', name: '心禾', stance: '情感视角', perspective: 'emotional', role: 'dynamic', reason: '区分饥饿、进食冲动与情绪性需求', trigram: '☲', color: '#A87898', glow: '#D8A8C8' },
-    { id: 'jingyuan', name: '镜渊', stance: '反思视角', perspective: 'strategic', role: 'dynamic', reason: '检查体重目标是否可持续，并识别过度限制风险', trigram: '☷', color: '#706088', glow: '#A890C8' },
-  ] : defaultFallbackAgents.map((agent) => ({
-    ...agent,
-    reason: `${agent.stance}负责独立检查当前信息，再由演汇总分歧。`,
-  }));
+  const fallbackIds = fallbackCouncilRoutes.find((route) => route.match.test(q))?.ids
+    || ['fengyan', 'jingyuan', 'qiangu', 'zhenxing'];
+  const fallbackAgents = fallbackIds
+    .map((id) => AGENT_POOL.find((agent) => agent.id === id))
+    .filter(Boolean)
+    .map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      stance: agent.stance,
+      perspective: agent.perspective,
+      role: 'dynamic',
+      reason: `${agent.desc}；与本题的其他视角形成交叉核验。`,
+      trigram: agent.symbol,
+      symbol: agent.symbol,
+      color: agent.color,
+      glow: agent.glow,
+    }));
 
   const round = Math.max(1, Number(session.round) || 1);
-  const shouldClarify = round < MAX_ROUND;
+  const answeredCount = (Array.isArray(session.answers) ? session.answers : []).filter((answer) => {
+    const value = String(answer?.answer || answer?.text || answer?.content || answer || '').trim();
+    return value && !/用户选择跳过|暂不回答|不愿回答|按现有信息继续/.test(value);
+  }).length;
+  const shouldClarify = round < MAX_ROUND && answeredCount < MAX_INTAKE_QUESTIONS;
 
-  // 启发式追问只暴露一个下一最佳问题；轮次数不再等价于信息充分度。
+  // 规则降级仍一次给出一组互补问题，避免每次只问一项造成重复往返。
   const askUser = [];
   if (shouldClarify && /(租房|买房|换城市|城市|房租|房源)/.test(q)) {
     askUser.push({ question: '能接受的月预算大概是多少？', reason: '预算决定筛选范围', source: 'P0-FB' });
@@ -625,7 +693,10 @@ function _fallbackPlanResult(session, errorMsg = '') {
     askUser.push({ question: '这件事的时间限制是什么？多久之内必须决定？', reason: '时间决定信息获取深度', source: 'P0-FB' });
     askUser.push({ question: '最坏情况是什么？你能接受吗？', reason: '先判底线再谈收益', source: 'P0-FB' });
   }
-  if (askUser.length > 1) askUser.splice(1);
+  askUser.splice(Math.max(0, Math.min(
+    MAX_INTAKE_QUESTIONS - answeredCount,
+    Math.min(3, Math.max(2, depthRoute.maxQuestions || 3)),
+  )));
 
   session.state = shouldClarify ? STATES.WAIT : STATES.READY;
   session.round = round;
@@ -642,7 +713,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     minFindings: 2,
     round,
     openingLine: `关于「${(session.question || '').slice(0, 30)}」，演已按现有信息重新安排推演视角。`,
-    analysis: `（LLM 暂不可用：${String(errorMsg || '').slice(0, 40)}，演已按规则生成维度与追问）`,
+    analysis: '模型响应未通过结构校验，演已使用本地案卷规则继续整理。',
   };
   session.plan = plan;
   plan.caseFile = buildDecisionCase({ session, plan, memories: [], depthRoute });
@@ -656,7 +727,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     maxRound: MAX_ROUND,
     memory: [],
     fallback: true,
-    fallbackReason: String(errorMsg || 'planner.plan failed').slice(0, 80),
+    fallbackReason: 'MODEL_RESPONSE_INVALID',
   };
 }
 
@@ -732,6 +803,19 @@ export async function answer(sessionId, answers, executionCtx = {}, dependencies
         : await planSessionWithFallback(session, dependencies.planFn || planner.plan, { saveSessionFn });
     }
     const result = enforceCaseConfirmationGate(rawResult);
+    const answerSummary = currentAnswers
+      .map((item) => String(item?.answer || item?.text || item?.content || item || '').trim())
+      .filter(Boolean)
+      .join('；');
+    result.plan = appendContextEntry(result.plan || {}, {
+      round: result.round || session.round,
+      action: 'answer',
+      goal: `补齐第 ${result.round || session.round} 轮案卷信息`,
+      result: answerSummary || '用户按现有信息继续。',
+      status: result.session.state === STATES.WAIT ? 'clarifying' : 'case_updated',
+      scope: 'case',
+    });
+    result.session.plan = result.plan;
     try {
       await answerTransition(sessionId, result.session, {
         mode: 'complete',
@@ -861,11 +945,31 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
     }
   }
 
+  const selectionGate = validateInitialCouncilSelection({
+    councilStatus: session.plan?.councilStatus,
+    agentIds: advisorPool.map((advisor) => advisor.id),
+  });
+  if (!selectionGate.allowed) {
+    const error = new Error(`本轮至少需要 ${selectionGate.minimum} 位独立智囊`);
+    error.code = 'INSUFFICIENT_COUNCIL_SELECTION';
+    error.status = 422;
+    throw error;
+  }
+
   session.plan = {
     ...(session.plan || {}),
     councilStatus: 'confirmed',
     selectedAgentIds: advisorPool.map((advisor) => advisor.id),
   };
+  session.plan = appendContextEntry(session.plan, {
+    round: session.plan?.deliberationRound || 1,
+    action: 'membership',
+    goal: '确认本轮参与判断的智囊',
+    result: advisorPool.map((advisor) => advisor.name || advisor.id).join('、'),
+    status: 'confirmed',
+    scope: 'group',
+    participantIds: advisorPool.map((advisor) => advisor.id),
+  });
   await persistClaimedExecuteSession(sessionId, session, executionCtx);
   await emit(sessionId, {
     type: 'COUNCIL_CONFIRMED',
@@ -892,6 +996,9 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
     llmCallCount: 0,
     actionId,
     roundReviewConfirmed: session.state === STATES.ROUND_REVIEW,
+    caseConfirmed: session.plan?.caseFile?.confirmedByUser === true,
+    postConfirmationGaps: (session.plan?.caseFile?.unknowns || [])
+      .filter((unknown) => unknown?.source === 'yan-deliberation'),
   };
 
   // 3. emit 进入 DELIBERATE（Event Sourcing：事件追加为真相）
@@ -905,6 +1012,8 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
   session.tool_results = reactState.toolResults || [];
   session.question_context = reactState.questionContext;
   session.questionContext = reactState.questionContext;
+  session.answers = reactState.answers || session.answers || [];
+  session.plan = reactState.plan || session.plan;
 
   const contributionGate = validateDeliberationContribution({
     ...session,
@@ -937,9 +1046,9 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
     const command = reactResult.command || {};
     const correctedContext = reactState.questionContext;
     const plan = {
-      ...(session.plan || {}),
-      ...(reactResult.state === 'READY' && session.plan?.caseFile
-        ? { caseFile: { ...session.plan.caseFile, confirmedByUser: false } }
+      ...(reactState.plan || session.plan || {}),
+      ...(reactResult.state === 'READY' && reactState.plan?.caseFile
+        ? { caseFile: { ...reactState.plan.caseFile, confirmedByUser: false } }
         : {}),
     };
     const completeExecute = dependencies.completeExecuteFn || memoryService.completeExecute;
@@ -952,6 +1061,7 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
         findings: session.findings,
         tool_results: session.tool_results,
         plan,
+        answers: session.answers,
       },
     });
     await emit(sessionId, {
@@ -966,6 +1076,8 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
       state: reactResult.state,
       findings: session.findings,
       interruption: { commandType: command.command_type, content: command.content },
+      affectedAdvisorIds: reactResult.affectedAdvisorIds || plan.pendingAdvisorIds || [],
+      plan,
       caseConfirmationRequired: reactResult.state === 'READY',
       caseReanalysisRequired: reactResult.state === 'READY',
       caseFile: plan.caseFile || null,
@@ -1015,8 +1127,9 @@ export async function performExecute(sessionId, agentIds, executionCtx, session,
       conflicts: [],
       gaps: [],
       replanned: false,
-      reason: '本轮智囊已完成独立判断，等待用户确认是否进入汇总',
+      reason: '本轮智囊已完成独立判断，等待用户明确选择下一步；不会自动生成汇总',
       contributionGate: reactResult.contributionGate,
+      advisorFailures: reactResult.advisorFailures || [],
     };
     await persistExecuteResult(sessionId, reviewResult, {
       actionId,
@@ -1231,12 +1344,22 @@ export async function confirmCase(sessionId, command = {}, executionCtx = {}) {
     throw error;
   }
   const caseFile = confirmDecisionCase(session.plan.caseFile, command);
-  const plan = { ...session.plan, caseFile, askUser: [], councilStatus: 'draft' };
+  const revision = session.plan?.councilStatus === 'revision';
+  let plan = { ...session.plan, caseFile, askUser: [], councilStatus: revision ? 'revision' : 'draft' };
   const acceptedMemories = (caseFile.memoryCandidates || [])
     .filter((memory) => memory.status === 'accepted')
     .map((memory) => ({ id: memory.id, content: memory.content, memory_type: memory.type }));
   const context = acceptedCaseContext(caseFile);
   const questionContext = context.length > 0 ? `${session.question}\n用户已确认案卷：\n- ${context.join('\n- ')}` : session.question;
+  plan = appendContextEntry(plan, {
+    round: session.round || plan.round || 1,
+    action: 'intake',
+    goal: '确认本局案卷事实、理解与保留条件',
+    result: `${caseFile.facts.length} 项事实已确认，${caseFile.unknowns?.length || 0} 项未知或保留条件继续随案。`,
+    status: 'confirmed',
+    scope: 'case',
+    sourceRefs: caseFile.facts.map((fact) => fact.id).filter(Boolean),
+  });
   await memoryService.updateSessionState(sessionId, STATES.EXECUTE, {
     plan,
     memory_used: acceptedMemories,
@@ -1403,6 +1526,15 @@ async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
     throw error;
   }
   const authoritativeChoice = String(selected.id || selected.label);
+  session.plan = appendContextEntry(session.plan || {}, {
+    round: session.plan?.deliberationRound || 1,
+    action: 'path',
+    goal: '确认最终执行路径并生成命牌',
+    result: selected.label || authoritativeChoice,
+    status: 'committed',
+    scope: 'session',
+    sourceRefs: [selected.id].filter(Boolean),
+  });
 
   const [decisionEvent, completedEvent] = commitDomainEvents({
     choice: authoritativeChoice,
@@ -1418,6 +1550,7 @@ async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
     await memoryService.updateSessionState(sessionId, STATES.COMMIT, {
       oracle: session.oracle || null,
       findings: session.findings || [],
+      plan: session.plan || {},
       // choice 存到 findings 末尾便于 consolidate 读取（Step 6 会单独建列）
     });
   } catch (e) {
@@ -1426,9 +1559,11 @@ async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
 
   // 调 consolidate 固化记忆（L1→L2 摘要 + L3 命格提取）
   let memoryUpdated = false;
+  let memoryCandidates = [];
   try {
-    const result = await memoryService.consolidate(sessionId);
+    const result = await memoryService.consolidate(sessionId, { writeLongTerm: false });
     memoryUpdated = !!result;
+    memoryCandidates = Array.isArray(result?.memoryCandidates) ? result.memoryCandidates : [];
     logger.info('[Deliberation] commit 记忆固化完成', {
       sessionId,
       summaryId: result?.summaryId,
@@ -1440,7 +1575,7 @@ async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
 
   // ===== P5：推演结束 LLM 提取用户画像，写入 user_memory =====
   const userId = session.user_id;
-  try {
+  if (executionCtx.memoryConsent === true) try {
     // 组装 qaHistory（从 session 的 answers/plan.askUser 中取）
     const qaHistory = [];
     const askUserArr = Array.isArray(session.plan?.askUser) ? session.plan.askUser : [];
@@ -1489,18 +1624,20 @@ async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
   }
 
   // Step 6: 生成命签（fateTicket）
-  const fateTicket = generateFateTicket(session, authoritativeChoice, feedback);
+  const fateTicket = await generateFateTicket(session, selected, feedback);
   const commitResult = {
     sessionId,
     state: STATES.COMPLETE,
     actionId,
     fateTicket,
     memoryUpdated,
+    memoryCandidates,
   };
 
   await memoryService.updateSessionState(sessionId, STATES.COMPLETE, {
     oracle: session.oracle || null,
     findings: session.findings || [],
+    plan: session.plan || {},
     commit_result: commitResult,
   });
   await eventBus.emit(sessionId, { type: 'STATE_CHANGE', data: { from: 'COMMIT', to: 'COMPLETE' }, actor: 'yan', correlationId: actionId, visibility: 'public' });
@@ -1528,7 +1665,7 @@ async function performCommit(sessionId, choice, feedback, executionCtx = {}) {
  * - 汇聚用户问题、抉择、卦象、智囊关键观点
  * - 用于前端展示、收藏、分享
  */
-function generateFateTicket(session, choice, feedback) {
+async function generateFateTicket(session, choice, feedback) {
   const question = session.question_context || session.questionContext || session.question || '';
   const oracle = session.oracle || {};
   const findings = Array.isArray(session.findings) ? session.findings : [];
@@ -1548,20 +1685,53 @@ function generateFateTicket(session, choice, feedback) {
         changed: oracle.changed
           ? `${oracle.changed.lower?.name || ''}${oracle.changed.upper?.name || ''}`
           : '',
+        mutual: oracle.mutual || null,
+        opposite: oracle.opposite || null,
+        lines: Array.isArray(oracle.lineMeta) ? oracle.lineMeta : [],
         dynamics: Array.isArray(oracle.dynamics) ? oracle.dynamics : [],
       }
     : null;
 
-  return {
+  const paths = Array.isArray(session.dynamic_choices) ? session.dynamic_choices : (Array.isArray(session.dynamicChoices) ? session.dynamicChoices : []);
+  const selectedPath = choice && typeof choice === 'object'
+    ? choice
+    : paths.find((path) => String(path.id) === String(choice)) || paths.find((path) => path.label === choice) || null;
+  const acceptedEvidence = (Array.isArray(session.tool_results) ? session.tool_results : [])
+    .filter((item) => item?.evidence?.accepted === true)
+    .map((item) => item.evidence)
+    .slice(0, 12);
+  const ticket = {
     ticketId: `ft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     question,
-    choice: choice || '',
+    choice: selectedPath?.id || selectedPath?.label || choice || '',
+    path: selectedPath ? {
+      id: selectedPath.id,
+      label: selectedPath.label,
+      keyPoints: selectedPath.keyPoints || [],
+      benefit: selectedPath.benefit || '',
+      risk: selectedPath.risk || '',
+      reversalConditions: selectedPath.reversalConditions || [],
+    } : null,
     feedback: feedback || '',
     hexagram,
     oracleText: oracle.text || '',
+    summary: session.master_summary || session.masterSummary || '',
+    nextActions: selectedPath?.keyPoints || [],
+    reversalConditions: selectedPath?.reversalConditions || session.plan?.reversalConditions || [],
+    evidence: acceptedEvidence,
+    contextIndex: contextLedgerIndex(session.plan || {}),
     keyFindings,
     timestamp: Date.now(),
   };
+  ticket.cardCopy = await createDestinyCardCopy({
+    question: ticket.question,
+    decision: selectedPath?.label || ticket.choice,
+    summary: ticket.summary,
+    actions: ticket.nextActions,
+    reversals: ticket.reversalConditions,
+    hexagram: ticket.hexagram?.primary || '',
+  });
+  return ticket;
 }
 
 /**

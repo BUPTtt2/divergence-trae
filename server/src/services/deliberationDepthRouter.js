@@ -29,12 +29,12 @@ export function buildQuickPlan(session, orchestrated = null) {
       round: session.round,
     });
   const { informationFields, sufficiency } = orchestration;
-  const askUser = sufficiency.complete || !sufficiency.nextQuestion ? [] : [sufficiency.nextQuestion].map((field) => ({
+  const askUser = sufficiency.complete ? [] : (sufficiency.questionBatch || []).map((field) => ({
     fieldId: field.id,
     taskId: field.id,
     question: field.prompt,
     reason: field.reason,
-    required: field.required,
+    required: field.blocking !== false,
     decisionImpact: field.decisionImpact || '',
     source: field.source || 'quick-depth-router',
     isFollowUp: field.isFollowUp === true,
@@ -102,17 +102,16 @@ export function buildQuickPlan(session, orchestrated = null) {
 
 export function buildIntakePlan(session, orchestration, depthRoute = routeDeliberationDepth(session.question || '')) {
   const { informationFields, sufficiency } = orchestration;
-  const nextField = sufficiency.complete ? null : sufficiency.nextQuestion;
-  const askUser = nextField ? [{
-    fieldId: nextField.id,
-    taskId: nextField.id,
-    question: nextField.prompt,
-    reason: nextField.reason,
-    required: nextField.required,
-    decisionImpact: nextField.decisionImpact || '',
-    source: nextField.source || 'adaptive-intake',
-    isFollowUp: nextField.isFollowUp === true,
-  }] : [];
+  const askUser = sufficiency.complete ? [] : (sufficiency.questionBatch || []).map((field) => ({
+    fieldId: field.id,
+    taskId: field.id,
+    question: field.prompt,
+    reason: field.reason,
+    required: field.blocking !== false,
+    decisionImpact: field.decisionImpact || '',
+    source: field.source || 'adaptive-intake',
+    isFollowUp: field.isFollowUp === true,
+  }));
   const plan = {
     depth: depthRoute.depth,
     depthReason: depthRoute.reason,
@@ -123,7 +122,7 @@ export function buildIntakePlan(session, orchestration, depthRoute = routeDelibe
     askUser,
     minFindings: depthRoute.depth === 'quick' ? 1 : 2,
     round: Number(session.round || 1),
-    openingLine: '演会逐项确认真正会改变判断的信息；每次只问一件事，你也可以明确保留未知。',
+    openingLine: '演会把本轮互不重叠、能共同回答的关键问题一次列出；下一轮只在读完你的新信息后生成。非阻断未知可以保留。',
     analysis: '信息收集尚未完成，系统不会提前选择智囊或生成结论。',
     informationFields,
     informationStates: sufficiency.fieldStates,

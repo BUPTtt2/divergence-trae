@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 export default function Privacy() {
   const navigate = useNavigate();
   return (
-    <div className="min-h-screen" style={{ backgroundColor: '#F2EDE0', color: '#1A1410', fontFamily: '"Noto Serif SC", serif' }}>
+    <div className="xm-paper-page min-h-screen" style={{ backgroundColor: '#F2EDE0', color: '#1A1410', fontFamily: '"Noto Serif SC", serif' }}>
       <div className="max-w-3xl mx-auto px-6 py-16">
         <button onClick={() => navigate('/')} className="text-sm mb-8 hover:underline" style={{ color: '#7A7468' }}>返回首页</button>
         <h1 className="text-3xl font-bold mb-2">隐私政策</h1>

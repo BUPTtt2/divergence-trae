@@ -1311,12 +1311,12 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
     const collabInfo = collaboration && collaboration.msgType !== 'claim' && collaboration.targetName
       ? collabMap[collaboration.msgType]
       : null;
-    // Q2-2 新增：发言来源标识 — LLM真实生成 / 本地预设降级
+    // 发言来源印记：灵为模型实时生成，藏为本机离线推演。
     const dialogueSource = agentCallResults?.[agent.id]?.source;
     const sourceMap = {
-      llm:    { label: '灵 · 真智生成', color: '#80C8A8', tip: '由后端大模型实时生成' },
-      preset: { label: '实 · 本地降级', color: '#C8A850', tip: '后端不可达，使用本地预设模板兜底' },
-      local:  { label: '实 · 本地降级', color: '#C8A850', tip: '后端不可达，使用本地规则生成' },
+      llm:    { label: '灵', color: '#80C8A8', tip: '由后端大模型实时生成' },
+      preset: { label: '藏', color: '#C8A850', tip: '模型暂不可用，当前为本机离线推演' },
+      local:  { label: '藏', color: '#C8A850', tip: '模型暂不可用，当前为本机离线推演' },
     };
     const sourceInfo = dialogueSource ? (sourceMap[dialogueSource] || null) : null;
     // 立场强度：反驳=3强 / 追问=2中 / 补充=1弱，默认 permanent=3 dynamic=2
@@ -1364,7 +1364,7 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
             {collabInfo.label} · {collaboration.targetName}
           </motion.div>
         )}
-        {/* Q2-2 新增：发言来源可视化标识 */}
+        {/* 小印不抢正文位置，完整来源说明由 title 提供。 */}
         {sourceInfo && (
           <motion.div
             initial={{ opacity: 0, y: -6 }}
@@ -1372,18 +1372,19 @@ export default function AgentDialogueOverlay({ phase, question, activeAgentIdx, 
             transition={{ duration: 0.4, delay: 0.1 }}
             title={sourceInfo.tip}
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '3px 12px',
-              marginBottom: '10px',
+              display: 'inline-grid',
+              placeItems: 'center',
+              width: '18px',
+              height: '18px',
+              padding: 0,
+              marginBottom: '8px',
               marginLeft: collabInfo ? '6px' : '0',
               background: `${sourceInfo.color}14`,
-              border: `1px dashed ${sourceInfo.color}66`,
-              borderRadius: '12px',
+              border: `1px solid ${sourceInfo.color}66`,
+              borderRadius: '1px',
               color: sourceInfo.color,
               fontSize: '10px',
-              letterSpacing: '0.12em',
+              lineHeight: 1,
               fontFamily: '"Ma Shan Zheng", "ZCOOL XiaoWei", "Noto Serif SC", "PingFang SC", serif',
               cursor: 'help',
             }}

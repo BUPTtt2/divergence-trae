@@ -12,16 +12,17 @@ import { createGlowTexture } from '../../utils/trigramTextures';
    - 活动时整体上浮 + 字符放大
    - 始终朝向相机 (Billboard)
 ============================================================ */
-function AgentGhost({ agent, index, total, active, spoken, retreating, dialogue, onClick }) {
+function AgentGhost({ agent, index, total, active, spoken, retreating, onClick }) {
   const groupRef = useRef();
   const symbolGroupRef = useRef();
   const glowRef = useRef();
   const { camera } = useThree();
 
-  // 从 layoutConfig 取单字符（钱/路/风/心/镜/云/震/兑）
+  // 从 layoutConfig 取识别符；场景只显示轻量名牌，完整内容进入工作台。
   const colorConfig = COLORS.agent[agent.id] || { main: '#C8A850', glow: '#F0D890' };
   const agentColor = { main: colorConfig.main, glow: colorConfig.glow };
-  const symbol = colorConfig.name || agent.name?.[0] || '·';
+  const symbol = colorConfig.name || agent.trigram || agent.agentName?.[0] || agent.name?.[0] || '·';
+  const displayName = agent.agentName || agent.name || agent.id || '智囊';
 
   const glowTex = useMemo(() => createGlowTexture(agentColor.glow, 256), [agentColor.glow]);
 
@@ -61,92 +62,31 @@ function AgentGhost({ agent, index, total, active, spoken, retreating, dialogue,
         <meshBasicMaterial map={glowTex} color={agentColor.glow} transparent opacity={0.25} depthWrite={false} blending={THREE.AdditiveBlending} />
       </mesh>
 
-      {/* 字符符号 - 通过 Html 实现简单文字风格，单字符不换行 */}
+      {/* 字形本身就是智囊入口：视觉无框，点击热区保留完整尺寸。 */}
       <group ref={symbolGroupRef}>
-        <Html center distanceFactor={7} style={{ pointerEvents: 'auto' }}>
-          <div
+        <Html center distanceFactor={8.5} style={{ pointerEvents: 'auto' }}>
+          <button
+            type="button"
+            className="agent-ghost-sigil"
+            data-active={active ? 'true' : 'false'}
+            data-spoken={spoken ? 'true' : 'false'}
             onClick={(e) => { e.stopPropagation(); onClick?.(agent); }}
             onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
             onPointerOut={() => { document.body.style.cursor = 'default'; }}
             style={{
-              fontFamily: '"Ma Shan Zheng", serif',
-              fontSize: '42px',
-              fontWeight: 600,
-              color: agentColor.glow,
-              textShadow: `0 0 14px ${agentColor.glow}, 0 0 28px ${agentColor.main}, 0 0 4px #000`,
-              letterSpacing: '0.05em',
-              cursor: 'pointer',
-              userSelect: 'none',
+              '--agent-color': agentColor.main,
+              '--agent-glow': agentColor.glow,
               opacity: retreating ? 0.55 : 1,
-              transition: 'opacity 0.5s, transform 0.6s',
-              lineHeight: 1,
-              transform: active ? 'scale(1.2)' : 'scale(1)',
-              whiteSpace: 'nowrap',
-              minWidth: '42px',
-              textAlign: 'center',
             }}
           >
-            {symbol}
-          </div>
+            <span className="agent-ghost-sigil__glyph" aria-hidden="true">{symbol}</span>
+            <span className="agent-ghost-sigil__name">{displayName}</span>
+            <small>{active ? '正在判断' : spoken ? '判断已到 · 点击查看' : '点击查看 / 对话'}</small>
+            <i aria-hidden="true" />
+          </button>
         </Html>
       </group>
 
-      {/* 立场标签 - 水平排版，不换行，与符号保持距离 */}
-      <Html position={[0, -0.85, 0]} center distanceFactor={10} style={{ pointerEvents: 'none' }}>
-        <div
-          style={{
-            textAlign: 'center',
-            color: agentColor.glow,
-            fontFamily: '"Ma Shan Zheng", serif',
-            opacity: retreating ? 0.5 : 1,
-            transition: 'opacity 0.5s',
-            whiteSpace: 'nowrap',
-            lineHeight: 1.4,
-          }}
-        >
-          <div
-            style={{
-              fontSize: '11px',
-              letterSpacing: '0.3em',
-              paddingLeft: '0.3em',
-              textShadow: `0 0 6px ${agentColor.glow}, 0 0 2px #000`,
-              opacity: active ? 1 : 0.75,
-            }}
-          >
-            {agent.stance}
-          </div>
-          {/* 小勾 - 发言完成 */}
-          {spoken && !retreating && (
-            <div
-              style={{
-                fontSize: '9px',
-                color: '#80C8A8',
-                marginTop: '2px',
-                textShadow: '0 0 4px #80C8A8',
-              }}
-            >
-              ✓
-            </div>
-          )}
-        </div>
-      </Html>
-
-      {active && dialogue && !retreating && (
-        <Html position={[0, 1.05, 0]} center distanceFactor={9} style={{ pointerEvents: 'none' }}>
-          <div style={{
-            width: 'min(240px, 38vw)',
-            padding: '9px 11px',
-            border: `1px solid ${agentColor.glow}70`,
-            background: 'rgba(9,7,6,.94)',
-            color: '#e8dfcd',
-            font: '10px/1.65 "Noto Serif SC",serif',
-            boxShadow: `0 8px 28px rgba(0,0,0,.45), 0 0 18px ${agentColor.glow}20`,
-          }}>
-            <strong style={{ display: 'block', marginBottom: 4, color: agentColor.glow, fontWeight: 500 }}>{agent.name} · 正在形成判断</strong>
-            {String(dialogue).replace(/【[^】]+】/g, '').slice(0, 120)}{String(dialogue).length > 120 ? '…' : ''}
-          </div>
-        </Html>
-      )}
     </group>
   );
 }
@@ -158,7 +98,6 @@ export default function AgentGhosts({
   phase,
   activeAgentIdx,
   activeAgents,
-  agentDialogues,
   onAgentClick,
 }) {
   if (!['agent_debate', 'summary', 'branch_select', 'path_reveal', 'final'].includes(phase)) return null;
@@ -178,7 +117,6 @@ export default function AgentGhosts({
           total={agents.length}
           active={phase === 'agent_debate' && activeAgentIdx === index}
           spoken={phase === 'agent_debate' && activeAgentIdx > index}
-          dialogue={agentDialogues?.[agent.id] || ''}
           retreating={retreating}
           onClick={onAgentClick}
         />

@@ -476,7 +476,7 @@ export default function DebatePhase({
                 智囊发言异常
               </div>
               <div style={{ fontSize: '12px', color: '#A0A0A0', fontFamily: '"Noto Serif SC", serif', marginBottom: '16px', lineHeight: 1.8 }}>
-                以下智囊未能连接到AI生成真实回答，使用了预设模板：
+                以下智囊暂未连接模型，当前显示离线推演结果：
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
                 {Object.entries(agentErrors).map(([agentId, error]) => (

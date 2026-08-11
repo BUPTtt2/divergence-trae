@@ -56,6 +56,7 @@ function snapshotPayload(advisor) {
     style: clean(advisor.style) || '周易古风',
     element: clean(advisor.element) || null,
     trigram: clean(advisor.trigram) || null,
+    avatar: clean(advisor.avatar) || null,
     contract_snapshot: contract,
   };
 }
@@ -107,6 +108,7 @@ function ownedAsset(advisor, publishedBySource = new Map()) {
     style: advisor.style,
     element: advisor.element,
     trigram: advisor.trigram,
+    avatar: advisor.avatar,
     subscribed: false,
     owned: true,
     publishable: true,
@@ -134,6 +136,7 @@ function marketAsset(publication, subscribed = false, userId = null) {
     style: publication.style,
     element: publication.element,
     trigram: publication.trigram,
+    avatar: publication.avatar,
     subscribed,
     publishedByMe: Boolean(userId && publication.owner_user_id === userId),
     owned: false,
