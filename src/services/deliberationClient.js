@@ -10,6 +10,8 @@ import { recoverAccessToken } from './authRecovery.js';
 import { API_BASE_URL } from './baseConfig.js';
 import { buildDeliberationBases, shouldTryNextDeliberationBase } from './deliberationBase.js';
 import { probeDeliberationHealth } from './deliberationHealth.js';
+import { emitRuntimeStatus } from './runtimeStatus.js';
+import { pollDelay, resolveDeliberationTransport } from './deliberationTransport.js';
 import {
   advanceSseCursor,
   openAuthenticatedSse,
@@ -38,6 +40,7 @@ const CACHE_KEY = 'deliberation_base_cache';
 const BASE_CANDIDATES = buildDeliberationBases({
   explicitBase: FORCED_BASE,
   apiBase: API_BASE_URL,
+  production: import.meta.env.PROD,
 });
 
 let _cachedBase = (() => {
@@ -98,11 +101,18 @@ export function setRunMode(mode) {
 
 export async function probeBackend(timeoutMs = 3000) {
   if (RUN_MODE === 'LOCAL_FULL') return false;
+  const startedAt = performance.now();
+  emitRuntimeStatus({ type: 'probe:start' });
   const bases = _cachedBase
     ? [_cachedBase, ...BASE_CANDIDATES.filter((base) => base !== _cachedBase)]
     : BASE_CANDIDATES;
   const result = await probeDeliberationHealth({ bases, timeoutMs });
-  if (result.ok) _persistBase(result.base);
+  if (result.ok) {
+    _persistBase(result.base);
+    emitRuntimeStatus({ type: 'probe:ok', latencyMs: performance.now() - startedAt });
+  } else {
+    emitRuntimeStatus({ type: 'probe:error' });
+  }
   return result.ok;
 }
 
@@ -114,6 +124,7 @@ export async function probeBackend(timeoutMs = 3000) {
  */
 async function _deliberationFetch(path, init = {}, opts = {}) {
   const throwOnError = opts.throwOnError !== false;
+  const reportStatus = opts.reportStatus !== false;
 
   // === LOCAL_FULL 模式：不发任何真实请求，直接返回统一的成功空响应 ===
   // 这样后端挂时，所有调用 deliberationClient 的路径都不会 404/500 报错
@@ -150,6 +161,8 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
     const base = candidates[i];
     const url = `${base}${path}`;
     try {
+      const startedAt = performance.now();
+      if (reportStatus) emitRuntimeStatus({ type: 'request:start' });
       CLOG.fetch(authenticatedInit.method || 'GET', path);
       let resp = await fetch(url, authenticatedInit);
       if (resp.status === 401) {
@@ -165,6 +178,7 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
         // 记住第一个可用 base（加速后续请求）
         if (!_cachedBase || _cachedBase !== base) _persistBase(base);
         CLOG.resp(init?.method || 'GET', path, resp.status);
+        if (reportStatus) emitRuntimeStatus({ type: 'request:ok', latencyMs: performance.now() - startedAt });
         return resp;
       }
       errors.push(`[${base || '/'}] HTTP ${resp.status}`);
@@ -186,6 +200,7 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
       }
       return resp;
     } catch (e) {
+      if (reportStatus) emitRuntimeStatus({ type: 'request:error' });
       CLOG.error(authenticatedInit.method, path, e);
       if (e?.status >= 400) throw e;
       // 网络错误 / CORS / 拒绝连接：继续 fallback
@@ -516,6 +531,58 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
   let readyState = 0;
   let lastSequence = Number(handlers.afterSequence || 0);
   try { lastSequence = Math.max(lastSequence, readStoredSseCursor(localStorage, sessionId)); } catch {}
+
+  if (resolveDeliberationTransport({ production: import.meta.env.PROD }) === 'poll') {
+    let pollTimer = null;
+    let abortController = null;
+    let failures = 0;
+    let opened = false;
+
+    const poll = async () => {
+      if (!alive) return;
+      abortController = new AbortController();
+      let idle = true;
+      try {
+        const response = await _deliberationFetch(
+          `/api/deliberation/${sessionId}/events-poll?afterSequence=${lastSequence}`,
+          { signal: abortController.signal },
+          { reportStatus: false },
+        );
+        const payload = await response.json();
+        const events = Array.isArray(payload?.events) ? payload.events : [];
+        idle = events.length === 0;
+        failures = 0;
+        readyState = 1;
+        if (!opened) {
+          opened = true;
+          onOpen?.();
+          dispatch({ type: 'CONNECTED', sessionId, afterSequence: lastSequence });
+        }
+        events.forEach(dispatch);
+        lastSequence = Math.max(lastSequence, Number(payload?.lastSequence || 0));
+        try { writeStoredSseCursor(localStorage, sessionId, lastSequence); } catch {}
+      } catch (error) {
+        if (!alive || error?.name === 'AbortError') return;
+        failures += 1;
+        readyState = 0;
+        onError?.(error);
+      }
+      if (alive) pollTimer = setTimeout(poll, pollDelay({ idle, failures }));
+    };
+
+    poll();
+    return {
+      get readyState() { return readyState; },
+      close() {
+        alive = false;
+        readyState = 2;
+        if (pollTimer) clearTimeout(pollTimer);
+        abortController?.abort();
+        onClose?.();
+      },
+    };
+  }
+
   const base = _cachedBase || BASE_CANDIDATES[0];
   const url = `${base}/api/deliberation/${sessionId}/events`;
 

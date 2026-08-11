@@ -16,6 +16,7 @@ import { sanitizeDecisionDisplayText, sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
 import { initialCompanionOpen, sandboxLayoutClass, shouldMuteArena } from '../game/layoutState';
 import { buildArenaViewModel } from '../game/arenaViewModel';
+import SystemPulse from '../components/layout/SystemPulse';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -252,6 +253,7 @@ export default function Game() {
   return (
     <div className={`game-root ${layoutClass} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)', '--companion-width': `${companionWidth}px` }}>
       <div className="crt-overlay" />
+      <SystemPulse />
       {(backendError || streamError) && (
         <div role="alert" className="runtime-alert">
           <span>Agent Runtime：{backendError || streamError}</span>

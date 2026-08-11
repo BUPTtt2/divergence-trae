@@ -1,5 +1,19 @@
 export const DESTINY_ARCHIVE_ARTWORK = '/assets/generated/xuanmo/destiny-card-archive-v1.png';
 
+function cleanName(value) {
+  return String(value || '').replace(/[_*#`]+/g, '').replace(/\s+/g, '').trim();
+}
+
+export function resolveHexagramName(oracle, fallback = '本卦') {
+  if (typeof oracle?.primary === 'string') return cleanName(oracle.primary).slice(0, 5) || fallback;
+  const explicit = cleanName(oracle?.primary?.name || oracle?.gua || oracle?.name);
+  if (explicit) return explicit.slice(0, 5);
+  const lower = cleanName(oracle?.primary?.lower?.name);
+  const upper = cleanName(oracle?.primary?.upper?.name);
+  if (lower && upper && lower === upper) return lower.slice(0, 5);
+  return cleanName([upper, lower].filter(Boolean).join(''))?.slice(0, 5) || fallback;
+}
+
 const DESTINY_PHASES = new Set(['path_reveal', 'committing', 'final']);
 const TRIGRAMS = ['☰', '☱', '☲', '☳', '☴', '☵', '☶', '☷'];
 

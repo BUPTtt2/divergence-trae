@@ -1,36 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { buildDeliberationBases } from './deliberationBase.js';
 
-import { buildDeliberationBases, shouldTryNextDeliberationBase } from './deliberationBase.js';
-
-test('deliberation shares the configured authentication backend by default', () => {
+test('production API base is the only deliberation candidate', () => {
   assert.deepEqual(buildDeliberationBases({
-    explicitBase: null,
-    apiBase: 'https://api.example.com',
-  }), ['https://api.example.com', '', 'http://localhost:3001']);
+    apiBase: 'https://yance-bagua-engine.vercel.app',
+    production: true,
+  }), ['https://yance-bagua-engine.vercel.app']);
 });
 
-test('an explicit deliberation backend remains authoritative', () => {
+test('explicit deliberation base always wins', () => {
   assert.deepEqual(buildDeliberationBases({
-    explicitBase: 'http://127.0.0.1:3002',
+    explicitBase: 'https://runtime.example.com/',
     apiBase: 'https://api.example.com',
-  }), ['http://127.0.0.1:3002']);
+    production: true,
+  }), ['https://runtime.example.com']);
 });
 
-test('duplicate same-origin candidates are removed without dropping the empty base', () => {
-  assert.deepEqual(buildDeliberationBases({ explicitBase: null, apiBase: '' }), [
-    '',
-    'http://localhost:3001',
-  ]);
-});
-
-test('an authenticated cached backend owns its HTTP errors', () => {
-  assert.equal(shouldTryNextDeliberationBase({ status: 503, cached: true }), false);
-  assert.equal(shouldTryNextDeliberationBase({ status: 404, cached: true, error: '路由不存在' }), false);
-});
-
-test('backend discovery skips unavailable candidate deployments', () => {
-  assert.equal(shouldTryNextDeliberationBase({ status: 503, cached: false }), true);
-  assert.equal(shouldTryNextDeliberationBase({ status: 404, cached: false, error: 'Application not found' }), true);
-  assert.equal(shouldTryNextDeliberationBase({ status: 422, cached: false, error: 'agentIds 格式错误' }), false);
+test('development may use same-origin and localhost fallbacks', () => {
+  assert.deepEqual(buildDeliberationBases({ apiBase: '', production: false }), ['', 'http://localhost:3001']);
 });

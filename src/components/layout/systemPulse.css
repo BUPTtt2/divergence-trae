@@ -1,0 +1,70 @@
+.system-pulse {
+  --pulse-color: #d7a942;
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 120;
+  pointer-events: auto;
+}
+
+.system-pulse--online { --pulse-color: #5ecf8a; }
+.system-pulse--checking { --pulse-color: #d9af4a; }
+.system-pulse--degraded,
+.system-pulse--offline { --pulse-color: #d15f50; }
+
+.system-pulse__trigger {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--pulse-color) 38%, transparent);
+  border-radius: 999px;
+  background: rgba(8, 8, 7, .72);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .025), 0 4px 16px rgba(0, 0, 0, .3);
+}
+
+.system-pulse__dot,
+.system-pulse__mini-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pulse-color);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--pulse-color) 72%, transparent);
+}
+
+.system-pulse--checking .system-pulse__dot { animation: system-pulse-breathe 1.15s ease-in-out infinite; }
+.system-pulse--offline .system-pulse__dot { box-shadow: 0 0 10px rgba(209, 95, 80, .68); }
+
+.system-pulse__panel {
+  position: absolute;
+  top: 25px;
+  left: 0;
+  width: 196px;
+  padding: 13px 14px 12px;
+  color: #d9d1c2;
+  border: 1px solid rgba(213, 181, 103, .22);
+  background: rgba(9, 9, 8, .94);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .42);
+  font: 11px/1.55 "Noto Serif SC", serif;
+}
+
+.system-pulse__panel > div:first-child { display: flex; align-items: center; gap: 8px; color: #f0e6ce; }
+.system-pulse__panel p { margin: 7px 0 10px; color: #8f8778; font-size: 10px; }
+.system-pulse__panel dl { margin: 0; border-top: 1px solid rgba(213, 181, 103, .12); }
+.system-pulse__panel dl div { display: flex; justify-content: space-between; padding-top: 7px; }
+.system-pulse__panel dt { color: #736c61; }
+.system-pulse__panel dd { margin: 0; color: #b9ad93; font-variant-numeric: tabular-nums; }
+.system-pulse__panel button { margin-top: 10px; padding: 0; color: #cdb775; border: 0; background: transparent; font: inherit; cursor: pointer; }
+
+@keyframes system-pulse-breathe {
+  0%, 100% { opacity: .56; transform: scale(.78); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .system-pulse__dot { animation: none !important; }
+}

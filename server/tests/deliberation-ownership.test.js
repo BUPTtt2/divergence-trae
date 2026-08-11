@@ -5,6 +5,7 @@ import app from '../src/app.js';
 import * as memoryService from '../src/services/memoryService.js';
 import { query } from '../src/services/db.js';
 import { persistUsageEntry } from '../src/services/llmUsageService.js';
+import { appendEvent } from '../src/services/eventStore.js';
 
 async function withServer(run) {
   const server = app.listen(0);
@@ -218,6 +219,43 @@ test('event stream authenticates before sending CONNECTED', async () => {
     controller.abort();
     const text = new TextDecoder().decode(first.value);
     assert.match(text, /"type":"CONNECTED"/);
+  });
+});
+
+test('event polling is short-lived, cursor-based, and owner-only', async () => {
+  await withServer(async (base) => {
+    const owner = await createAnonymous(base);
+    const intruder = await createAnonymous(base);
+    const session = await memoryService.saveSession({
+      user_id: owner.user.id,
+      question: '是否换工作',
+      state: 'WAIT',
+      round: 1,
+    });
+    const event = await appendEvent(session.id, 'PLAN_CREATED', { round: 1 }, 'planner', {
+      visibility: 'public',
+    });
+    const path = `/api/deliberation/${session.id}/events-poll?afterSequence=0`;
+
+    const unauthorized = await jsonRequest(base, path);
+    assert.equal(unauthorized.status, 401);
+
+    const foreign = await jsonRequest(base, path, { token: intruder.accessToken });
+    assert.equal(foreign.status, 404);
+
+    const owned = await jsonRequest(base, path, { token: owner.accessToken });
+    assert.equal(owned.status, 200);
+    assert.equal(owned.body.events.length, 1);
+    assert.equal(owned.body.events[0].eventId, event.eventId);
+    assert.equal(owned.body.lastSequence, event.sequence);
+
+    const exhausted = await jsonRequest(
+      base,
+      `/api/deliberation/${session.id}/events-poll?afterSequence=${event.sequence}`,
+      { token: owner.accessToken },
+    );
+    assert.deepEqual(exhausted.body.events, []);
+    assert.equal(exhausted.body.lastSequence, event.sequence);
   });
 });
 

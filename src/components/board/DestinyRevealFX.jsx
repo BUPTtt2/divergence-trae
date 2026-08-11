@@ -4,28 +4,21 @@ import { useReducedMotion } from 'framer-motion';
 import * as THREE from 'three';
 import { buildFateCardPresentation } from '../../game/fateCardPresentation';
 import {
-  createTrigramOrbit,
   DESTINY_ARCHIVE_ARTWORK,
   resolveDestinyArtwork,
+  resolveHexagramName,
   shouldShowDestinyCeremony,
 } from '../../game/destinyCeremonyModel';
 
-const CARD_W = 1.46;
-const CARD_H = 2.19;
+const CARD_W = 1.86;
+const CARD_H = 2.79;
 const GOLD = '#d9b75f';
 const MOON = '#fff8df';
-const JADE = '#dff8eb';
 const CINNABAR = '#b94732';
 
 function shortText(value, length = 20, fallback = '') {
   const text = String(value || '').replace(/[_*#`]+/g, '').replace(/\s+/g, ' ').trim();
   return (text || fallback).slice(0, length);
-}
-
-function hexagramName(oracle, fallback = '本卦') {
-  if (typeof oracle?.primary === 'string') return shortText(oracle.primary, 5, fallback);
-  const name = oracle?.primary?.name || [oracle?.primary?.lower?.name, oracle?.primary?.upper?.name].filter(Boolean).join('');
-  return shortText(oracle?.gua || name, 5, fallback);
 }
 
 function drawGlowText(ctx, text, x, y, font, color = MOON, blur = 12, align = 'center') {
@@ -203,10 +196,12 @@ function createGlyphTexture(glyph, color = '#f6dda0', size = 256) {
   return texture;
 }
 
-function TrigramCrown({ active, reducedMotion }) {
-  const groupRef = useRef();
-  const orbit = useMemo(() => createTrigramOrbit(0.9), []);
-  const glyphTextures = useMemo(() => orbit.map((item) => createGlyphTexture(item.glyph)), [orbit]);
+function DestinyOrbit({ active, reducedMotion }) {
+  const trigramRefs = useRef([]);
+  const ringARef = useRef();
+  const ringBRef = useRef();
+  const glyphs = useMemo(() => ['☰', '☱', '☲', '☳', '☴', '☵', '☶', '☷'], []);
+  const glyphTextures = useMemo(() => glyphs.map((glyph) => createGlyphTexture(glyph)), [glyphs]);
   const yanTexture = useMemo(() => createGlyphTexture('演', '#fff5d3', 384), []);
 
   useEffect(() => () => {
@@ -215,29 +210,40 @@ function TrigramCrown({ active, reducedMotion }) {
   }, [glyphTextures, yanTexture]);
 
   useFrame(({ clock }) => {
-    if (!groupRef.current) return;
     const time = clock.getElapsedTime();
-    groupRef.current.rotation.z = reducedMotion ? 0 : Math.sin(time * 0.14) * 0.055;
-    groupRef.current.children.forEach((child, index) => {
-      if (!child.material) return;
-      const pulse = reducedMotion ? 0 : Math.sin(time * 1.05 - index * 0.48) * 0.08;
-      child.material.opacity = active ? 0.52 + pulse : 0.22;
+    const travel = reducedMotion ? 0 : time * (active ? 0.16 : 0.34);
+    trigramRefs.current.forEach((sprite, index) => {
+      if (!sprite) return;
+      const angle = index / 8 * Math.PI * 2 + travel;
+      const depth = Math.sin(angle) * 0.58;
+      sprite.position.set(Math.cos(angle) * 1.42, 1.22 + Math.sin(angle) * 1.08, depth);
+      const foreground = (depth / 0.58 + 1) / 2;
+      const pulse = reducedMotion ? 0 : Math.sin(time * 1.1 - index * 0.5) * 0.035;
+      const scale = 0.24 + foreground * 0.11 + pulse;
+      sprite.scale.set(scale, scale, 1);
+      sprite.material.opacity = (active ? 0.48 : 0.68) + foreground * 0.22;
     });
+    if (ringARef.current) ringARef.current.rotation.z = travel * 0.52;
+    if (ringBRef.current) ringBRef.current.rotation.z = -travel * 0.34;
   });
 
   return (
-    <group ref={groupRef} position={[0, 2.63, 0.26]}>
-      <sprite scale={[0.56, 0.56, 1]}>
-        <spriteMaterial map={yanTexture} transparent opacity={active ? 0.78 : 0.42} depthWrite={false} blending={THREE.AdditiveBlending} />
+    <group>
+      <sprite position={[0, 2.86, 0.06]} scale={[0.66, 0.66, 1]}>
+        <spriteMaterial map={yanTexture} transparent opacity={active ? 0.68 : 0.86} depthWrite={false} blending={THREE.AdditiveBlending} />
       </sprite>
-      {orbit.map((item, index) => (
-        <sprite key={item.glyph} position={[item.x, item.y, 0]} scale={[0.3, 0.3, 1]}>
-          <spriteMaterial map={glyphTextures[index]} transparent opacity={0.5} depthWrite={false} blending={THREE.AdditiveBlending} />
+      {glyphs.map((glyph, index) => (
+        <sprite key={glyph} ref={(node) => { trigramRefs.current[index] = node; }}>
+          <spriteMaterial map={glyphTextures[index]} transparent opacity={0.6} depthTest depthWrite={false} blending={THREE.AdditiveBlending} />
         </sprite>
       ))}
-      <mesh>
-        <ringGeometry args={[1.08, 1.088, 96]} />
-        <meshBasicMaterial color={GOLD} transparent opacity={active ? 0.2 : 0.08} depthWrite={false} blending={THREE.AdditiveBlending} side={THREE.DoubleSide} />
+      <mesh ref={ringARef} position={[0, 1.22, -0.03]} rotation={[0.56, 0.06, 0]} scale={[1, 0.78, 1]}>
+        <torusGeometry args={[1.42, 0.009, 6, 96]} />
+        <meshBasicMaterial color={GOLD} transparent opacity={active ? 0.26 : 0.36} depthWrite={false} blending={THREE.AdditiveBlending} />
+      </mesh>
+      <mesh ref={ringBRef} position={[0, 1.22, -0.08]} rotation={[0.7, 0.22, 0.12]} scale={[1.12, 0.78, 1]}>
+        <torusGeometry args={[1.44, 0.005, 6, 96]} />
+        <meshBasicMaterial color={MOON} transparent opacity={active ? 0.14 : 0.2} depthWrite={false} blending={THREE.AdditiveBlending} />
       </mesh>
     </group>
   );
@@ -285,86 +291,41 @@ function DestinyCard({ guaName, guaIcon, presentation, lineMeta, revealed, reduc
     if (!groupRef.current) return;
     const delta = Math.min(rawDelta, 0.05);
     stateRef.current.elapsed += delta;
-    stateRef.current.revealElapsed = revealed ? stateRef.current.revealElapsed + delta : 0;
+    const readyForFlip = stateRef.current.elapsed > 0.92;
+    stateRef.current.revealElapsed = revealed && readyForFlip ? stateRef.current.revealElapsed + delta : 0;
     const rise = reducedMotion ? 1 : THREE.MathUtils.smoothstep(stateRef.current.elapsed, 0.08, 1.15);
-    const flip = revealed && reducedMotion ? 1 : THREE.MathUtils.smoothstep(stateRef.current.revealElapsed, 0.08, 0.95);
+    const flip = revealed && reducedMotion ? 1 : THREE.MathUtils.smoothstep(stateRef.current.revealElapsed, 0.12, 1.08);
     const float = !reducedMotion && flip > 0.98 ? Math.sin(stateRef.current.elapsed * 0.72) * 0.026 : 0;
     groupRef.current.position.set(0, -2.8 + rise * 4.02 + float, 0.58);
-    groupRef.current.rotation.set(-0.025, -Math.PI * flip + Math.sin(stateRef.current.elapsed * 0.32) * 0.018, 0.01);
+    const settle = flip > 0.98 ? Math.sin(stateRef.current.elapsed * 0.32) * 0.012 : 0;
+    groupRef.current.rotation.set(-0.035, -Math.PI * flip + settle, 0.012);
     const scale = 0.78 + rise * 0.16;
     groupRef.current.scale.setScalar(scale);
   });
 
   return (
     <group ref={groupRef} position={[0, -2.7, 0.58]}>
-      <mesh position={[0, 0, -0.022]} rotation={[0, Math.PI, 0]}>
+      <mesh position={[0, 0, -0.043]} rotation={[0, Math.PI, 0]}>
         <planeGeometry args={[CARD_W, CARD_H]} />
         <meshBasicMaterial map={surface} color="#d8cba8" transparent opacity={1} side={THREE.DoubleSide} toneMapped={false} />
       </mesh>
-      <mesh position={[0, 0, -0.034]} rotation={[0, Math.PI, 0]}>
+      <mesh position={[0, 0, -0.047]} rotation={[0, Math.PI, 0]}>
         <planeGeometry args={[CARD_W, CARD_H]} />
         <meshBasicMaterial map={front} transparent opacity={1} side={THREE.DoubleSide} toneMapped={false} />
       </mesh>
-      <mesh position={[0, 0, 0.025]}>
+      <mesh position={[0, 0, 0.041]}>
         <planeGeometry args={[CARD_W, CARD_H]} />
         <meshBasicMaterial map={back} transparent opacity={1} side={THREE.DoubleSide} toneMapped={false} />
       </mesh>
       <mesh>
-        <boxGeometry args={[CARD_W + 0.018, CARD_H + 0.018, 0.045]} />
-        <meshBasicMaterial color={GOLD} transparent opacity={0.28} wireframe depthWrite={false} />
+        <boxGeometry args={[CARD_W + 0.025, CARD_H + 0.025, 0.072]} />
+        <meshStandardMaterial color="#17130c" metalness={0.42} roughness={0.5} emissive="#5b441c" emissiveIntensity={0.28} />
+      </mesh>
+      <mesh position={[0, 0, 0.04]}>
+        <boxGeometry args={[CARD_W + 0.055, CARD_H + 0.055, 0.008]} />
+        <meshBasicMaterial color={GOLD} transparent opacity={0.3} wireframe depthWrite={false} />
       </mesh>
       <pointLight position={[0, 0.05, 0.42]} color={revealed ? MOON : '#e8cd83'} intensity={revealed ? 0.8 : 0.45} distance={3.2} decay={2} />
-    </group>
-  );
-}
-
-function YaoIgnition({ active }) {
-  const refs = useRef([]);
-  useFrame(({ clock }) => {
-    const time = clock.getElapsedTime();
-    refs.current.forEach((mesh, index) => {
-      if (!mesh) return;
-      const wave = Math.max(0.12, Math.sin(time * 2.15 - index * 0.52));
-      mesh.material.opacity = active ? 0.18 + wave * 0.72 : 0.08;
-      mesh.scale.x = 0.82 + wave * 0.22;
-    });
-  });
-  return (
-    <group position={[0, 1.2, 0.84]}>
-      {Array.from({ length: 6 }, (_, index) => (
-        <mesh key={index} ref={(node) => { refs.current[index] = node; }} position={[0, -0.29 + index * 0.115, 0]}>
-          <planeGeometry args={[0.76, 0.022]} />
-          <meshBasicMaterial color={index < 3 ? GOLD : MOON} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
-function Halo({ active }) {
-  const outerRef = useRef();
-  const innerRef = useRef();
-  useFrame(({ clock }) => {
-    const time = clock.getElapsedTime();
-    if (outerRef.current) {
-      outerRef.current.rotation.z = time * 0.14;
-      outerRef.current.material.opacity = active ? 0.22 + Math.sin(time) * 0.07 : 0.07;
-    }
-    if (innerRef.current) {
-      innerRef.current.rotation.z = -time * 0.22;
-      innerRef.current.material.opacity = active ? 0.3 + Math.sin(time * 1.3) * 0.08 : 0.08;
-    }
-  });
-  return (
-    <group position={[0, 1.18, 0.4]}>
-      <mesh ref={outerRef}>
-        <ringGeometry args={[0.73, 0.742, 96]} />
-        <meshBasicMaterial color={GOLD} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
-      </mesh>
-      <mesh ref={innerRef}>
-        <ringGeometry args={[0.57, 0.579, 72]} />
-        <meshBasicMaterial color={JADE} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
-      </mesh>
     </group>
   );
 }
@@ -376,7 +337,7 @@ export default function DestinyRevealFX({ phase, oracle = null, dynamicChoices =
     () => selectedChoice || dynamicChoices[0] || {},
     [dynamicChoices, selectedChoice],
   );
-  const guaName = hexagramName(oracle, choice?.gua || '本卦');
+  const guaName = resolveHexagramName(oracle, choice?.gua || '本卦');
   const guaIcon = oracle?.trigram || oracle?.primary?.symbol || choice?.trigram || '☯';
   const presentation = useMemo(() => {
     const base = buildFateCardPresentation({
@@ -399,9 +360,7 @@ export default function DestinyRevealFX({ phase, oracle = null, dynamicChoices =
   if (!active) return null;
   return (
     <group position={[phase === 'final' ? -1.28 : -0.18, 0, 0]}>
-      {!reducedMotion && <YaoIgnition active={!revealed} />}
-      {!reducedMotion && <Halo active={revealed} />}
-      <TrigramCrown active={revealed} reducedMotion={reducedMotion} />
+      <DestinyOrbit active={revealed} reducedMotion={reducedMotion} />
       <DestinyCard guaName={guaName} guaIcon={guaIcon} presentation={presentation} lineMeta={lineMeta} revealed={revealed} reducedMotion={reducedMotion} artworkUrl={artworkUrl} />
     </group>
   );

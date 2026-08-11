@@ -35,6 +35,7 @@ import * as deliberationEngine from '../services/deliberationEngine.js';
 import * as memoryService from '../services/memoryService.js';
 import * as customAdvisorService from '../services/customAdvisorService.js';
 import eventBus from '../services/eventBus.js';
+import { getEvents } from '../services/eventStore.js';
 import { enqueueCommand } from '../services/deliberationCommandService.js';
 import { routeConversationHybrid } from '../services/conversationRouter.js';
 import { callLLM, isLLMAvailable } from '../services/llmRouter.js';
@@ -261,6 +262,33 @@ router.get('/:sessionId/events', requirePrincipal, requireOwnedDeliberation, asy
     try { eventBus.unsubscribe(sessionId, res); } catch {}
   });
 });
+
+/**
+ * GET /api/deliberation/:sessionId/events-poll
+ * Serverless-safe event transport. Each request completes immediately; the
+ * browser advances with an explicit sequence cursor instead of holding SSE.
+ */
+router.get(
+  '/:sessionId/events-poll',
+  requirePrincipal,
+  requireOwnedDeliberation,
+  asyncHandler(async (req, res, next) => {
+    const { sessionId } = req.params;
+    if (isReservedSegment(sessionId)) return next('route');
+    const rawCursor = String(req.query.afterSequence || '0');
+    const afterSequence = /^\d+$/.test(rawCursor) ? Number(rawCursor) : 0;
+    const events = await getEvents(sessionId, {
+      afterSequence,
+      limit: 200,
+      browserVisibleOnly: true,
+    });
+    const lastSequence = events.length > 0
+      ? Number(events.at(-1)?.sequence || afterSequence)
+      : afterSequence;
+    res.set('Cache-Control', 'no-store');
+    res.json({ events, lastSequence });
+  }),
+);
 
 /* ============================================================
  * 第三组 · :sessionId 的动作路由（两个 path segment）
