@@ -40,6 +40,14 @@ function readableCardText(value, fallback = '') {
   return text || fallback;
 }
 
+function readableOracleText(value, oracle) {
+  const text = String(value || '').trim();
+  const lower = String(oracle?.primary?.lower?.name || '').trim();
+  const upper = String(oracle?.primary?.upper?.name || '').trim();
+  if (!text || !lower || lower !== upper) return text;
+  return text.replaceAll(`${lower}${upper}`, lower);
+}
+
 export default function DecisionArtifact({
   phase,
   sessionId,
@@ -216,7 +224,7 @@ export default function DecisionArtifact({
               <span>未知 {oracleState.counts.unknown}</span>
               <span>冲突 {oracleState.counts.contested}</span>
             </div>}
-            <p>{oracle?.text || oracle?.tip || '卦象只提醒你检查遗漏、冲突与反转条件。'}</p>
+            <p>{readableOracleText(oracle?.text || oracle?.tip, oracle) || '卦象只提醒你检查遗漏、冲突与反转条件。'}</p>
             {phase === 'path_reveal' ? (
               <button type="button" onClick={onCommit}>确认此路 · 写下本心</button>
             ) : <div className="decision-artifact__commit-form">
