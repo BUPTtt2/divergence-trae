@@ -17,12 +17,11 @@ export function buildDestinyArtworkPrompt(ticket = {}) {
   ].join('');
 }
 
-export function buildSeedreamRequest(model, prompt) {
+export function buildSeedreamRequest(model, prompt, options = {}) {
   return {
     model,
     prompt,
-    size: '2048x2732',
-    sequential_image_generation: 'disabled',
+    size: options.size || '1K',
     response_format: 'url',
     watermark: false,
   };
@@ -34,6 +33,7 @@ export async function generateDestinyArtwork(ticket, options = {}) {
   if (!apiKey || !model) return { available: false, reason: 'not_configured' };
 
   const fetchImpl = options.fetchImpl || fetch;
+  const size = options.size || process.env.SEEDREAM_SIZE || '1K';
   const baseUrl = String(options.baseUrl || process.env.ARK_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, '');
   try {
     const response = await fetchImpl(`${baseUrl}/images/generations`, {
@@ -42,7 +42,7 @@ export async function generateDestinyArtwork(ticket, options = {}) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(buildSeedreamRequest(model, buildDestinyArtworkPrompt(ticket))),
+      body: JSON.stringify(buildSeedreamRequest(model, buildDestinyArtworkPrompt(ticket), { size })),
       // Keep the image request inside the 60s Vercel function ceiling.
       signal: options.signal || AbortSignal.timeout(48000),
     });
@@ -56,7 +56,7 @@ export async function generateDestinyArtwork(ticket, options = {}) {
     return {
       available: true,
       url: image.url,
-      size: image.size || '2048x2732',
+      size: image.size || size,
       source: 'seedream',
       model: payload.model || model,
       usage: payload.usage || null,

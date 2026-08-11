@@ -19,18 +19,24 @@ const DEFAULT_TIMEOUT_MS = 30000;
  * 构建提供商列表（按优先级）
  * 只返回配置了 API Key 的提供商
  */
-function getProviders() {
+export function getConfiguredProviders() {
   const providers = [];
 
-  // 1. 火山方舟 / 豆包（赛事资源；配置后优先）
-  if (process.env.ARK_API_KEY && (process.env.ARK_ENDPOINT_ID || process.env.DOUBAO_MODEL)) {
+  // 1. 火山方舟赛事资源：主模型失败后才串行切换，不做双路并发。
+  const arkPrimary = process.env.ARK_PRIMARY_MODEL || process.env.ARK_ENDPOINT_ID || process.env.DOUBAO_MODEL;
+  const arkModels = [...new Set([
+    arkPrimary,
+    ...(process.env.ARK_FALLBACK_MODELS || '').split(',').map((item) => item.trim()),
+  ].filter(Boolean))];
+  if (process.env.ARK_API_KEY && arkModels.length > 0) {
     const baseUrl = (process.env.ARK_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/$/, '');
-    providers.push({
-      name: 'doubao',
+    arkModels.forEach((model, index) => providers.push({
+      name: index === 0 ? 'ark-primary' : `ark-fallback-${index}`,
+      kind: 'ark',
       endpoint: `${baseUrl}/chat/completions`,
       apiKey: process.env.ARK_API_KEY,
-      model: process.env.ARK_ENDPOINT_ID || process.env.DOUBAO_MODEL,
-    });
+      model,
+    }));
   }
 
   // 2. 智谱 AI（未配置赛事资源时的当前主力）
@@ -66,6 +72,8 @@ function getProviders() {
 
   return providers;
 }
+
+const getProviders = getConfiguredProviders;
 
 /**
  * 判断是否有可用的 LLM 提供商
@@ -127,10 +135,11 @@ export function buildProviderRequestBody(provider, messages, options = {}) {
     temperature,
   };
 
-  if (provider.name === 'zhipu' && provider.model.includes('flash')) {
+  if ((provider.name === 'zhipu' && provider.model.includes('flash'))
+    || (provider.kind === 'ark' && provider.model.startsWith('glm-'))) {
     body.thinking = { type: 'disabled' };
   }
-  if (provider.name === 'deepseek' && provider.model.startsWith('deepseek-v4')) {
+  if ((provider.name === 'deepseek' || provider.kind === 'ark') && provider.model.startsWith('deepseek-v4')) {
     body.thinking = { type: thinking ? 'enabled' : 'disabled' };
   }
   if (tools && tools.length > 0) {
@@ -139,7 +148,7 @@ export function buildProviderRequestBody(provider, messages, options = {}) {
   }
   if (stream) {
     body.stream = true;
-    if (provider.name === 'doubao') {
+    if (provider.name === 'doubao' || provider.kind === 'ark') {
       body.stream_options = { include_usage: true };
     }
   }

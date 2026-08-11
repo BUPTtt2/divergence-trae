@@ -20,9 +20,10 @@ function configuredDoubaoPrice() {
 
 function modelPrice(model, provider) {
   if (PRICE_CNY_PER_MILLION[model]) return PRICE_CNY_PER_MILLION[model];
+  if (String(model).includes('deepseek-v4-flash')) return PRICE_CNY_PER_MILLION['deepseek-v4-flash'];
   if (String(model).includes('doubao-seed-2-1-pro')) return PRICE_CNY_PER_MILLION['doubao-seed-2-1-pro'];
   if (String(model).includes('doubao-seed-2-1-turbo')) return PRICE_CNY_PER_MILLION['doubao-seed-2-1-turbo'];
-  return provider === 'doubao' ? configuredDoubaoPrice() : null;
+  return provider === 'doubao' || String(provider).startsWith('ark-') ? configuredDoubaoPrice() : null;
 }
 
 function estimatedCostCny(model, usage = {}, provider = '') {

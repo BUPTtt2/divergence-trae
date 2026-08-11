@@ -20,16 +20,19 @@ test('artwork prompt requests a text-free portrait image from real ticket fields
   assert.equal(prompt.includes('undefined'), false);
 });
 
-test('seedream request is one portrait image without watermark', () => {
+test('seedream request defaults to one economical 1K portrait image without watermark', () => {
   const body = buildSeedreamRequest('model-id', 'prompt');
   assert.deepEqual(body, {
     model: 'model-id',
     prompt: 'prompt',
-    size: '2048x2732',
-    sequential_image_generation: 'disabled',
+    size: '1K',
     response_format: 'url',
     watermark: false,
   });
+});
+
+test('seedream request accepts an explicit server-side quality setting', () => {
+  assert.equal(buildSeedreamRequest('model-id', 'prompt', { size: '2K' }).size, '2K');
 });
 
 test('missing server configuration returns an explicit non-blocking fallback', async () => {
