@@ -943,10 +943,24 @@ export function useDeliberationFlow(initialQuestion = "") {
 
       setDeliberationFindings(result.findings);
       setDeliberationOracle(result.oracle);
-      setInference((previous) => ({ ...(previous || {}), ...result }));
+      const executionPlan = {
+        ...(inference?.plan || {}),
+        ...(result.plan || {}),
+        agents: Array.isArray(result.plan?.agents) && result.plan.agents.length > 0
+          ? result.plan.agents
+          : plannedAgents,
+        selectedAgentIds: requestedAgentIds,
+        councilStatus: 'confirmed',
+      };
+      setInference((previous) => ({
+        ...(previous || {}),
+        ...result,
+        plan: executionPlan,
+      }));
       setArenaProjection((previous) => projectSessionSnapshot({
         ...(inference || {}),
         ...result,
+        plan: executionPlan,
         sessionId: deliberationSessionId,
         findings: Array.isArray(result.findings) ? result.findings : [],
       }, { lastSequence: previous.lastSequence }));
