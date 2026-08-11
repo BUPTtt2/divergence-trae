@@ -71,7 +71,10 @@ function createFrontTexture({ guaName, guaIcon, question, title, summary, keys, 
 
   const meta = Array.isArray(lineMeta) ? lineMeta : [];
   for (let i = 0; i < 6; i += 1) {
-    const value = meta[i]?.value ?? meta[i]?.yinYang ?? meta[i]?.type;
+    const value = meta[i]?.value
+      ?? meta[i]?.yinYang
+      ?? (meta[i]?.isYang === true ? 1 : meta[i]?.isYang === false ? 0 : undefined)
+      ?? meta[i]?.type;
     const broken = value === 0 || value === 'yin' || value === '阴' || value === 'broken';
     drawYao(ctx, W / 2, 96 + i * 18, 122, broken, 0.48 + i * 0.07);
   }
@@ -177,7 +180,10 @@ function createBackTexture({ lineMeta }) {
 
   const meta = Array.isArray(lineMeta) ? lineMeta : [];
   for (let i = 0; i < 6; i += 1) {
-    const value = meta[i]?.value ?? meta[i]?.yinYang ?? meta[i]?.type;
+    const value = meta[i]?.value
+      ?? meta[i]?.yinYang
+      ?? (meta[i]?.isYang === true ? 1 : meta[i]?.isYang === false ? 0 : undefined)
+      ?? meta[i]?.type;
     drawYao(ctx, W / 2, 728 + i * 24, value === 0 || value === 'yin' || value === '阴', 0.58 + i * 0.05);
   }
   drawGlowText(ctx, '六爻待明 · 触牌揭示', W / 2, 882, '500 22px "STKaiti", serif', '#e5cf8b', 8);
@@ -346,7 +352,12 @@ export default function DestinyRevealFX({ phase, oracle = null, dynamicChoices =
     [dynamicChoices, selectedChoice],
   );
   const guaName = resolveHexagramName(oracle, choice?.gua || '本卦');
-  const guaIcon = oracle?.trigram || oracle?.primary?.symbol || choice?.trigram || '☯';
+  const lowerSymbol = oracle?.primary?.lower?.symbol;
+  const upperSymbol = oracle?.primary?.upper?.symbol;
+  const guaIcon = oracle?.trigram
+    || (lowerSymbol && upperSymbol ? `${upperSymbol}${lowerSymbol}` : null)
+    || choice?.trigram
+    || '☯';
   const presentation = useMemo(() => {
     const base = buildFateCardPresentation({
       fateContent: choice?.fateContent || null,

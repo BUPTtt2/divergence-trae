@@ -13,6 +13,8 @@ test('development keeps SSE for local debugging', () => {
 
 test('poll delay stays responsive and backs off after failures', () => {
   assert.equal(pollDelay({ idle: false, failures: 0 }), 1500);
-  assert.equal(pollDelay({ idle: true, failures: 0 }), 2500);
-  assert.equal(pollDelay({ idle: true, failures: 3 }), 8000);
+  assert.equal(pollDelay({ idle: true, idleCount: 1, failures: 0 }), 3500);
+  assert.equal(pollDelay({ idle: true, idleCount: 8, failures: 0 }), 12000);
+  assert.equal(pollDelay({ idle: true, idleCount: 8, failures: 0, hidden: true }), 20000);
+  assert.equal(pollDelay({ idle: true, failures: 3 }), 12000);
 });

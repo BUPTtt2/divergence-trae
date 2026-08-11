@@ -42,8 +42,8 @@ export function buildFateCardPresentation({
 
   return {
     question: clean(fateContent?.question || question || choice?.question, 32),
-    title: clean(fateContent?.choice || choice?.label || fateContent?.title, 24),
-    summary: clean(fateContent?.summary || inference?.masterSummary || inference?.summary, 56),
+    title: clean(fateContent?.cardCopy?.sealTitle || fateContent?.choice || choice?.label || fateContent?.title, 24),
+    summary: clean(fateContent?.cardCopy?.verdict || fateContent?.summary || inference?.masterSummary || inference?.summary, 56),
     actions,
     sourceMark: fallback ? '藏' : '灵',
     sourceLabel: fallback ? '离线推演结果' : '由模型根据本局案卷生成',

@@ -108,6 +108,8 @@
 .decision-artifact__ticket blockquote { display: grid; grid-template-columns: 52px 1fr; gap: 12px; margin: 12px 0 0; padding: 10px 0; border: 0; border-top: 1px solid rgb(211 173 84 / 18%); color: #e2d6bc; font: 10px/1.7 "Noto Serif SC",serif; }
 .decision-artifact__ticket blockquote small { color: #a88e59; font-size: 8px; letter-spacing: .12em; }
 .decision-artifact__ticket-source { display: block; margin-top: 8px; color: #796d58 !important; font: 7px/1.4 ui-monospace,monospace !important; letter-spacing: .1em !important; text-align: right; }
+.decision-artifact__artwork-retry { display: block; margin: 8px 0 0 auto; padding: 5px 8px; border: 1px solid rgb(213 177 88 / 22%); background: rgb(8 6 3 / 42%); color: #9b8965; cursor: pointer; font: 8px/1.3 "Noto Serif SC",serif; letter-spacing: .08em; }
+.decision-artifact__artwork-retry:hover,.decision-artifact__artwork-retry:focus-visible { border-color: rgb(213 177 88 / 56%); color: #ead89e; outline: none; }
 .decision-artifact__ticket-orbit { position:relative; width: 94px; height: 94px; display: grid; place-items: center; margin: 2px auto 20px; border: 1px solid rgb(247 225 159 / 48%); border-radius: 50%; box-shadow:0 0 30px rgb(255 244 205 / 13%),inset 0 0 22px rgb(225 248 236 / 7%); }
 .decision-artifact__ticket-orbit i { position: absolute; width: 66px; height: 66px; border: 1px dashed rgb(225 246 235 / 32%); border-radius: 50%; transform: rotate(18deg); }
 .decision-artifact__ticket-orbit span { color: #fff6d6; font: 40px/1 "Ma Shan Zheng", serif; text-shadow: 0 0 12px rgb(255 247 218 / 72%),0 0 32px rgb(255 230 139 / 30%); }

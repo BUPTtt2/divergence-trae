@@ -71,6 +71,7 @@ export default function DecisionArtifact({
   const navigate = useNavigate();
   const [saveState, setSaveState] = useState('idle');
   const [artwork, setArtwork] = useState(() => fateContent?.artwork || null);
+  const [artworkAttempt, setArtworkAttempt] = useState(0);
   const artworkRequestedRef = useRef('');
   const artifact = createDecisionArtifact(inference, choices);
   const isDecisionPhase = ['summary', 'branch_select'].includes(phase);
@@ -92,8 +93,9 @@ export default function DecisionArtifact({
     artwork: artwork?.available ? artwork : (fateContent?.artwork || null),
   }), [artifact.summary, artwork, fateContent, inference?.question, selectedPath]);
   useEffect(() => {
-    if (!isFinal || !sessionId || !fateContent?.ticketId || artworkRequestedRef.current === fateContent.ticketId) return undefined;
-    artworkRequestedRef.current = fateContent.ticketId;
+    const requestKey = `${fateContent?.ticketId || ''}:${artworkAttempt}`;
+    if (!isFinal || !sessionId || !fateContent?.ticketId || artworkRequestedRef.current === requestKey) return undefined;
+    artworkRequestedRef.current = requestKey;
     let active = true;
     setArtwork({ available: false, status: 'loading' });
     generateDestinyArtwork(sessionId)
@@ -110,7 +112,7 @@ export default function DecisionArtifact({
         onArtworkChange?.(nextArtwork);
       });
     return () => { active = false; };
-  }, [fateContent?.ticketId, isFinal, onArtworkChange, sessionId]);
+  }, [artworkAttempt, fateContent?.ticketId, isFinal, onArtworkChange, sessionId]);
   const saveFateCard = async () => {
     if (saveState === 'saving' || saveState === 'saved') return;
     setSaveState('saving');
@@ -272,6 +274,7 @@ export default function DecisionArtifact({
             <span>{cardPresentation.date}</span>
           </div>
           <small className="decision-artifact__ticket-source">{artwork?.status === 'loading' ? '专属画境生成中' : cardPresentation.artworkSource === 'seedream' ? '即梦画境 · 本局生成' : `${cardPresentation.copySource} · 典藏画境`}</small>
+          {artwork?.status === 'fallback' && <button type="button" className="decision-artifact__artwork-retry" onClick={() => setArtworkAttempt((value) => value + 1)}>即梦暂未返回 · 重绘画境</button>}
         </article>
         {(fateContent?.evidence?.length > 0 || fateContent?.contextIndex?.length > 0) && <details className="decision-artifact__ticket-ledger">
           <summary>证据与本局档案</summary>

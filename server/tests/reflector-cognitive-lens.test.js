@@ -189,7 +189,7 @@ test('LLM 只能通过合法 template 和 clause ID 调整受控审查句式', a
   assert.notEqual(selected.oracle.text, fallback.oracle.text);
   assert.equal(
     selected.oracle.text,
-    '边界先行：事实、风险与审批要求保持不变。【艮乾】审查概览：已验证4项，未知1项，冲突1项。反转观察：2爻动，对照兑乾镜头。下一步仅补证未知、核验冲突与反转条件。',
+    '边界先行：事实、风险与审批要求保持不变。【兑乾】审查概览：已验证4项，未知1项，冲突1项。反转观察：2爻动，对照震乾镜头。下一步仅补证未知、核验冲突与反转条件。',
   );
   assert.doesNotMatch(selected.oracle.text, new RegExp(`${FORBIDDEN_VERDICT.source}|${INJECTED_DECISION.source}`));
   assert.deepEqual(selected.session.dynamicChoices, fallback.session.dynamicChoices);
@@ -443,7 +443,7 @@ test('mapToHexagram 不会把立场强度当作知识真假', () => {
 
   const oracle = mapToHexagram(aggregated, dimensions, { conflicts: [], gaps: [] });
 
-  assert.deepEqual(oracle.primary.lines.slice(0, 3), [1, 0, 0]);
+  assert.deepEqual(oracle.primary.lines.slice(0, 3), [1, 1, 1]);
   assert.deepEqual(
     oracle.lineMeta.slice(0, 3).map((line) => line.knowledgeState),
     ['verified', 'unknown', 'unknown'],

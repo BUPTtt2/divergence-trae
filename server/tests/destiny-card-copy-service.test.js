@@ -12,9 +12,10 @@ test('accepts concise generated copy and marks its real source', async () => {
     reversals: ['验证低于阈值即停止'],
     hexagram: '风山渐',
   }, {
-    callLLMImpl: async () => '```json\n{"verse":"山行有序，渐进有成","verdict":"先以小步换取真实反馈","insight":"判断不靠想象","nextAction":"两周内完成验证","guardrail":"低于阈值即停止"}\n```',
+    callLLMImpl: async () => '```json\n{"sealTitle":"渐行验真","verse":"山行有序，渐进有成","verdict":"先以小步换取真实反馈","insight":"判断不靠想象","nextAction":"两周内完成验证","guardrail":"低于阈值即停止"}\n```',
   });
   assert.equal(copy.source, 'generated');
+  assert.equal(copy.sealTitle, '渐行验真');
   assert.equal(copy.verse, '山行有序，渐进有成');
   assert.equal(copy.nextAction, '两周内完成验证');
 });
@@ -34,8 +35,9 @@ test('malformed model output falls back to real dossier fields without preset co
 test('generated fields are clamped to the card contract', async () => {
   const long = '很长'.repeat(60);
   const copy = await createDestinyCardCopy({}, {
-    callLLMImpl: async () => JSON.stringify({ verse: long, verdict: long, insight: long, nextAction: long, guardrail: long }),
+    callLLMImpl: async () => JSON.stringify({ sealTitle: long, verse: long, verdict: long, insight: long, nextAction: long, guardrail: long }),
   });
+  assert.equal(copy.sealTitle.length <= 5, true);
   assert.equal(copy.verse.length <= 28, true);
   assert.equal(copy.verdict.length <= 42, true);
   assert.equal(copy.insight.length <= 24, true);

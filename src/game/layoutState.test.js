@@ -36,6 +36,12 @@ test('one main surface always mutes arena labels and traces behind it', () => {
   assert.equal(layoutState.shouldMuteArena({ phase: 'agent_debate', companionOpen: false, showHistoryPanel: false }), false);
 });
 
+test('history and the council workbench are mutually exclusive surfaces', () => {
+  assert.equal(layoutState.shouldShowCompanion({ phase: 'agent_debate', companionOpen: true, showHistoryPanel: true }), false);
+  assert.equal(layoutState.shouldShowCompanion({ phase: 'agent_debate', companionOpen: true, showHistoryPanel: false }), true);
+  assert.equal(layoutState.shouldShowCompanion({ phase: 'summary', companionOpen: true, showHistoryPanel: false }), false);
+});
+
 test('sandbox uses its own companion navigation instead of the global floating compass', () => {
   assert.equal(layoutState.shouldShowGlobalCompass('/sandbox'), false);
   assert.equal(layoutState.shouldShowGlobalCompass('/cards'), true);

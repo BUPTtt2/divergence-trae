@@ -536,6 +536,7 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
     let pollTimer = null;
     let abortController = null;
     let failures = 0;
+    let idleCount = 0;
     let opened = false;
 
     const poll = async () => {
@@ -551,6 +552,7 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
         const payload = await response.json();
         const events = Array.isArray(payload?.events) ? payload.events : [];
         idle = events.length === 0;
+        idleCount = idle ? idleCount + 1 : 0;
         failures = 0;
         readyState = 1;
         if (!opened) {
@@ -567,7 +569,12 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
         readyState = 0;
         onError?.(error);
       }
-      if (alive) pollTimer = setTimeout(poll, pollDelay({ idle, failures }));
+      if (alive) pollTimer = setTimeout(poll, pollDelay({
+        idle,
+        idleCount,
+        failures,
+        hidden: typeof document !== 'undefined' && document.hidden,
+      }));
     };
 
     poll();

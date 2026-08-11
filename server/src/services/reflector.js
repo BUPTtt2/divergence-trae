@@ -26,6 +26,7 @@ import logger from './logger.js';
 import { validateDeliberationContribution } from './deliberationContribution.js';
 import { callLLM } from './llmRouter.js';
 import * as agentEngine from './agentEngine.js';
+import { PERSPECTIVE_TRIGRAM_KEYS, TRIGRAMS } from '../data/yijingCore.js';
 import {
   createCognitivePerturbationPlan,
 } from './cognitivePerturbationService.js';
@@ -47,16 +48,9 @@ const LOCKED_INVARIANTS = Object.freeze({
 });
 
 // 八卦维度映射（对齐 REAL_AGENT_ARCHITECTURE.md 5.2 节）
-const PERSPECTIVE_TO_TRIGRAM = {
-  strategic: { name: '乾', symbol: '☰', lines: [1, 1, 1] },     // 天
-  communication: { name: '兑', symbol: '☱', lines: [1, 1, 0] },  // 泽
-  emotional: { name: '离', symbol: '☲', lines: [1, 0, 1] },     // 火
-  action: { name: '震', symbol: '☳', lines: [0, 0, 1] },         // 雷
-  experience: { name: '巽', symbol: '☴', lines: [1, 1, 0] },     // 风（注:巽下断，lines从底到上[1,1,0]）
-  risk: { name: '坎', symbol: '☵', lines: [0, 1, 0] },           // 水
-  practical: { name: '艮', symbol: '☶', lines: [1, 0, 0] },      // 山
-  health: { name: '坤', symbol: '☷', lines: [0, 0, 0] },         // 地
-};
+const PERSPECTIVE_TO_TRIGRAM = Object.fromEntries(
+  Object.entries(PERSPECTIVE_TRIGRAM_KEYS).map(([perspective, key]) => [perspective, TRIGRAMS[key]]),
+);
 
 // 维度兼容性（用于跨维度矛盾检测）：对立维度对
 const OPPOSING_PERSPECTIVES = [
@@ -214,8 +208,8 @@ export function checkCoverage(dimensions, findings) {
  *
  * 算法（确定性映射，非随机起卦）:
  *   - 从 plan.dimensions 取最多6个维度，按顺序对应6爻（初爻→上爻）
- *   - 已验证且稳定的事实 → 阳爻 (1)
- *   - 未验证、缺失或两可的信息 → 阴爻 (0)
+ *   - 阴阳取自该决策视角对应的八卦原型，不把“未知”误当成“阴”
+ *   - 已验证/未知/冲突作为独立知识状态写入 lineMeta
  *   - 同一维度的冲突 → 动爻（只表示反转变量）
  *   - 主卦: 6 爻组合
  *   - 变卦: 动爻阴阳互换后的 6 爻
@@ -232,7 +226,7 @@ export function mapToHexagram(aggregated, dimensions, knowledgeContext = {}) {
   const conflicts = Array.isArray(knowledgeContext.conflicts) ? knowledgeContext.conflicts : [];
   const gaps = Array.isArray(knowledgeContext.gaps) ? knowledgeContext.gaps : [];
 
-  // 生成6爻：已验证事实=阳，未知/缺失=阴，冲突=动爻。
+  // 生成6爻：视角原型决定阴阳；知识状态独立记录；冲突标记动爻。
   const lines = []; // 0=阴 1=阳
   const dynamics = []; // 动爻位置（0-5）
   const lineMeta = []; // 每爻的维度信息
@@ -243,8 +237,8 @@ export function mapToHexagram(aggregated, dimensions, knowledgeContext = {}) {
     const data = byPerspective[perspective];
     const knowledgeState = resolveKnowledgeState(perspective, data, conflicts, gaps);
     const isDynamic = knowledgeState === 'contested';
-    // 冲突只表示可能反转，以爻位奇偶稳定选择当前爻，不使用立场或强度裁决。
-    const isYang = knowledgeState === 'verified' || (isDynamic && i % 2 === 0);
+    const archetype = PERSPECTIVE_TO_TRIGRAM[perspective]?.lines;
+    const isYang = (archetype?.[i % 3] ?? (i % 2)) === 1;
     if (isDynamic) dynamics.push(i);
     lines.push(isYang ? 1 : 0);
     lineMeta.push({

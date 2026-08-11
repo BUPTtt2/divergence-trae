@@ -38,6 +38,14 @@ test('uses the generated artwork when present and otherwise keeps the local arch
   assert.equal(generated.artworkSource, 'seedream');
 });
 
+test('uses the generated commemorative title instead of slicing the decision label', () => {
+  const card = createDestinyCardPresentation({
+    path: { label: '推进当前方案' },
+    cardCopy: { source: 'generated', sealTitle: '循势验真' },
+  });
+  assert.equal(card.sealTitle, '循势验真');
+});
+
 test('never invents detail when the fate ticket is sparse', () => {
   const card = createDestinyCardPresentation({});
   assert.equal(card.question, '本局所问');

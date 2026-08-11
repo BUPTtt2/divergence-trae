@@ -225,6 +225,77 @@ function ZiweiDisk({ visible }) {
   );
 }
 
+function FlowParticles({ phase, position }) {
+  const refs = useRef([]);
+  const glow = useMemo(() => createGlowTexture('#e2bd68', 96), []);
+  const particles = useMemo(() => Array.from({ length: 28 }, (_, index) => ({
+    angle: index / 28 * Math.PI * 2,
+    radius: 0.62 + (index % 7) * 0.085,
+    speed: 0.18 + (index % 5) * 0.035,
+    offset: (index * 1.618) % (Math.PI * 2),
+  })), []);
+  const active = ['casting', 'yan_analyze', 'clarify_loop', 'agent_select', 'agent_debate', 'summary'].includes(phase);
+  useFrame(({ clock }) => {
+    const time = clock.getElapsedTime();
+    refs.current.forEach((sprite, index) => {
+      if (!sprite) return;
+      const particle = particles[index];
+      const intensity = phase === 'agent_debate' ? 1.55 : phase === 'summary' ? 0.62 : 1;
+      const angle = particle.angle + time * particle.speed * intensity;
+      const radius = particle.radius + Math.sin(time * 0.46 + particle.offset) * 0.09;
+      sprite.position.set(
+        position[0] + Math.cos(angle) * radius,
+        position[1] + Math.sin(time * 0.7 + particle.offset) * 0.32,
+        position[2] + Math.sin(angle) * radius * 0.62,
+      );
+      const pulse = 0.035 + (Math.sin(time * 1.4 + particle.offset) + 1) * 0.012;
+      sprite.scale.set(pulse, pulse, 1);
+      sprite.material.opacity = active ? 0.18 + (Math.sin(time + particle.offset) + 1) * 0.14 : 0;
+    });
+  });
+  return (
+    <group visible={active}>
+      {particles.map((particle, index) => (
+        <sprite key={`${particle.angle}:${index}`} ref={(node) => { refs.current[index] = node; }}>
+          <spriteMaterial map={glow} transparent opacity={0.3} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </sprite>
+      ))}
+    </group>
+  );
+}
+
+function YanAnalyzeRunes({ visible, position }) {
+  const refs = useRef([]);
+  const glyphs = useMemo(() => ['天', '地', '人', '和'], []);
+  const textures = useMemo(() => glyphs.map((glyph) => createCalligraphyTexture(glyph, 224, 0.72)), [glyphs]);
+  useFrame(({ camera, clock }) => {
+    if (!visible) return;
+    const time = clock.getElapsedTime();
+    refs.current.forEach((sprite, index) => {
+      if (!sprite) return;
+      const angle = index / glyphs.length * Math.PI * 2 + time * 0.13;
+      sprite.position.set(
+        position[0] + Math.cos(angle) * 1.34,
+        position[1] + Math.sin(time * 0.58 + index) * 0.44,
+        position[2] + Math.sin(angle) * 0.82,
+      );
+      sprite.lookAt(camera.position);
+      const scale = 0.27 + Math.sin(time * 0.82 + index) * 0.025;
+      sprite.scale.set(scale, scale, 1);
+      sprite.material.opacity = 0.38 + Math.sin(time * 0.74 + index) * 0.12;
+    });
+  });
+  return (
+    <group visible={visible}>
+      {glyphs.map((glyph, index) => (
+        <sprite key={glyph} ref={(node) => { refs.current[index] = node; }}>
+          <spriteMaterial map={textures[index]} transparent opacity={0.5} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </sprite>
+      ))}
+    </group>
+  );
+}
+
 export default function LightOrb({ phase, position = [0, 1.5, 0], minimal = false }) {
   return (
     <group>
@@ -232,6 +303,8 @@ export default function LightOrb({ phase, position = [0, 1.5, 0], minimal = fals
       {!minimal && <>
         <CenterSymbol phase={phase} position={position} />
         <OrbitTrigrams phase={phase} position={position} />
+        <FlowParticles phase={phase} position={position} />
+        <YanAnalyzeRunes visible={phase === 'yan_analyze' || phase === 'clarify_loop'} position={position} />
         <ZiweiDisk visible={phase === 'summary'} />
       </>}
     </group>

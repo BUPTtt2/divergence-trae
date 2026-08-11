@@ -14,7 +14,8 @@ import { generateDialoguesForAgents } from '../services/inferenceEngine';
 import { saveAgentFeedback } from '../services/memoryStore';
 import { sanitizeDecisionDisplayText, sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
-import { initialCompanionOpen, sandboxLayoutClass, shouldMuteArena } from '../game/layoutState';
+import { initialCompanionOpen, sandboxLayoutClass, shouldMuteArena, shouldShowCompanion } from '../game/layoutState';
+import { uniqueMessages, uniqueRoles } from '../game/historyPresentation';
 import { buildArenaViewModel } from '../game/arenaViewModel';
 import SystemPulse from '../components/layout/SystemPulse';
 
@@ -185,7 +186,7 @@ export default function Game() {
     handleResume,
     handleChoiceClick, handleRevealFate,
     handleShowChoices, handleCommit, handleStartOracle,
-    handleProceedToChoices, handleSkipOracle, handleAgentClick: handleFlowAgentClick,
+    handleProceedToChoices, handleSkipOracle,
     handleSaveToCollection, handleConfirmCaseFile, handleContinueCaseQuestions, handleBackFromCaseFile,
     saveGameState, fateRevealed,
   } = flow;
@@ -196,6 +197,10 @@ export default function Game() {
   const [focusedHistoryRoleId, setFocusedHistoryRoleId] = useState(null);
   const [decisionArtifactOpen, setDecisionArtifactOpen] = useState(true);
   const [destinyArtwork, setDestinyArtwork] = useState(null);
+  const historyRoles = useMemo(() => uniqueRoles(
+    VIRTUAL_ROLES,
+    (activeAgents || []).filter((agent) => agent && agent.role !== 'master'),
+  ), [activeAgents]);
   const previousDecisionPhaseRef = useRef('');
   useEffect(() => {
     const decisionPhase = ['summary', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase);
@@ -215,8 +220,7 @@ export default function Game() {
     setFocusedHistoryRoleId(agent?.id || null);
     setShowHistoryPanel(false);
     setCompanionOpen(true);
-    handleFlowAgentClick?.(agent);
-  }, [handleFlowAgentClick, setShowHistoryPanel]);
+  }, [setShowHistoryPanel]);
   const handleExitDeliberation = useCallback(() => {
     handleRestart();
     setCompanionOpen(false);
@@ -271,7 +275,7 @@ export default function Game() {
               userInput={userInput}
               showQuestion={showQuestion}
               choices={choices}
-              selectedChoice={selectedChoice || fateContent?.path || (fateContent?.choice ? {
+              selectedChoice={selectedChoice ? { ...selectedChoice, fateContent: fateContent || selectedChoice.fateContent } : fateContent?.path || (fateContent?.choice ? {
                 id: fateContent.ticketId || 'restored-final-path',
                 label: fateContent.choice,
                 keyPoints: fateContent.keyPoints || [],
@@ -307,7 +311,7 @@ export default function Game() {
           >再问一件事</button>
         )}
 
-        {!showInput && ['casting', 'yan_analyze', 'clarify_loop', 'agent_debate'].includes(phase) && (
+        {!showInput && shouldShowCompanion({ phase, companionOpen, showHistoryPanel }) && (
           <DeliberationConversation
             phase={phase}
             question={userInput}
@@ -327,7 +331,7 @@ export default function Game() {
             answerPending={answerPending}
             assignments={activeAgents.length > 0 ? activeAgents : (inference?.plan?.agents || [])}
             orchestration={inference?.plan?.orchestration}
-            open={companionOpen}
+            open
             onOpenChange={handleCompanionOpenChange}
             onExit={handleExitDeliberation}
             onHome={handleReturnHome}
@@ -604,7 +608,7 @@ export default function Game() {
                   >×</button>
                 </div>
                 <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 12, borderBottom: `1px solid ${BORDER_COLOR}30`, marginBottom: 12 }}>
-                  {[{ id: null, name: '全部' }, ...VIRTUAL_ROLES, ...(activeAgents || []).filter(a => a && a.role !== 'master')].map((role) => (
+                  {[{ id: null, name: '全部' }, ...historyRoles].map((role) => (
                     <button key={role.id || 'all'} type="button" onClick={() => setFocusedHistoryRoleId(role.id)} style={{
                       minHeight: 34, flex: '0 0 auto', padding: '0 11px', cursor: 'pointer',
                       border: focusedHistoryRoleId === role.id ? `1px solid ${GLOW_COLOR}` : `1px solid ${BORDER_COLOR}35`,
@@ -625,19 +629,14 @@ export default function Game() {
                 <div className="flex-1 overflow-y-auto ingot-scroll">
                   {(() => {
                     const history = agentDialogues?.history || {};
-                    const allRoles = [
-                      ...VIRTUAL_ROLES,
-                      ...(activeAgents || []).filter(a => a && a.role !== 'master'),
-                    ];
+                    const allRoles = historyRoles;
                     let anyShown = false;
                     const blocks = [];
                     for (const role of allRoles) {
                       if (!role || !role.id) continue;
                       if (focusedHistoryRoleId && role.id !== focusedHistoryRoleId) continue;
                       const rawArr = history[role.id] || [];
-                      const msgs = Array.isArray(rawArr)
-                        ? rawArr.map(_normalizeMsg).filter(Boolean)
-                        : [];
+                      const msgs = uniqueMessages(rawArr, _normalizeMsg);
                       if (msgs.length === 0) continue;
                       anyShown = true;
                       const isVirtual = role.role === 'virtual';

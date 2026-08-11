@@ -30,6 +30,19 @@ test('fate card presentation marks actual local fallback without preset wording'
   assert.deepEqual(result.actions, []);
 });
 
+test('fate card presentation uses the generated seal title instead of slicing the decision label', () => {
+  const result = buildFateCardPresentation({
+    selectedChoice: { label: '推进当前方案' },
+    fateContent: {
+      source: 'model',
+      cardCopy: { sealTitle: '小步验真', verdict: '先验证再扩大。' },
+    },
+  });
+
+  assert.equal(result.title, '小步验真');
+  assert.equal(result.summary, '先验证再扩大。');
+});
+
 test('fate card presentation bounds display copy without inventing missing blocks', () => {
   const result = buildFateCardPresentation({
     question: '问'.repeat(100),

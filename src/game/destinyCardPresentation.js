@@ -48,7 +48,7 @@ export function createDestinyCardPresentation(ticket = {}) {
     archiveId: archiveId(ticket.ticketId),
     date: cardDate(ticket.timestamp),
     hexagram: compactDestinyText(ticket.hexagram?.primary, 8, '观照之卦'),
-    sealTitle: deriveSealTitle(decision),
+    sealTitle: compactDestinyText(ticket.cardCopy?.sealTitle, 5, deriveSealTitle(decision)).replace(/…$/, ''),
     decision: compactDestinyText(decision, 24, '保留判断，继续验证'),
     question: compactDestinyText(ticket.question, 34, '本局所问'),
     verdict: compactDestinyText(ticket.cardCopy?.verdict || ticket.summary, 42, '判断已形成，留待行动验证'),

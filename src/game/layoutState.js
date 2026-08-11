@@ -14,6 +14,10 @@ export function shouldMuteArena({ phase, companionOpen = false, showHistoryPanel
   return showHistoryPanel || isPresentationPhase(phase) || (companionOpen && CONVERSATION_PHASES.has(phase));
 }
 
+export function shouldShowCompanion({ phase, companionOpen = false, showHistoryPanel = false } = {}) {
+  return CONVERSATION_PHASES.has(phase) && companionOpen && !showHistoryPanel;
+}
+
 export function shouldShowGlobalCompass(pathname = '') {
   return pathname !== '/sandbox';
 }
