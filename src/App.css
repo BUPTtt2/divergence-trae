@@ -1,1 +1,39 @@
 // App Entry - styles are in index.css and tailwind
+.shared-device-handoff {
+  position: fixed;
+  left: max(14px, env(safe-area-inset-left));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  z-index: 9998;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(212, 176, 82, 0.42);
+  border-radius: 999px;
+  background: rgba(10, 8, 6, 0.88);
+  color: #e8d392;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  font: 500 12px/1 "Noto Serif SC", serif;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.shared-device-handoff > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #42d98a;
+  box-shadow: 0 0 9px rgba(66, 217, 138, 0.8);
+}
+
+.shared-device-handoff:focus-visible {
+  outline: 2px solid #f0d890;
+  outline-offset: 3px;
+}
+
+.shared-device-handoff:active {
+  transform: translateY(1px);
+}

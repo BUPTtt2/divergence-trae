@@ -17,6 +17,10 @@ import { tracker, initWebVitals } from './services/tracker';
 import { shouldShowGlobalCompass } from './game/layoutState';
 import { loadWithRetry } from './utils/lazyRetry';
 import Game from './pages/Game';
+import {
+  detectSharedDeviceMode,
+  handoffSharedDevice,
+} from './utils/sharedDeviceSession.js';
 
 /* 有限重试：失败后交给 ErrorBoundary，绝不留下永久加载态 */
 function lazyRetry(loader) {
@@ -242,6 +246,30 @@ function AnimatedRoutes() {
   );
 }
 
+function SharedDeviceHandoff() {
+  const location = useLocation();
+  const enabled = detectSharedDeviceMode({ search: location.search });
+  if (!enabled) return null;
+
+  const handoff = () => {
+    const confirmed = window.confirm('交给下一位后，将清除本机当前访客的推演、命牌和匿名身份；设备外观与声音设置会保留。是否继续？');
+    if (confirmed) handoffSharedDevice();
+  };
+
+  return (
+    <button
+      type="button"
+      className="shared-device-handoff"
+      onClick={handoff}
+      title="清除本位访客数据，交给下一位体验"
+      aria-label="交给下一位体验"
+    >
+      <span aria-hidden="true" />
+      下一位体验
+    </button>
+  );
+}
+
 export default function App() {
   extendTHREE();
 
@@ -273,6 +301,7 @@ export default function App() {
             <AuthProvider>
               <GameProvider>
                 <AnimatedRoutes />
+                <SharedDeviceHandoff />
                 <AchievementToast />
                 <FollowUpReminder />
                 {/* 已废弃：旧轨 <YanChat /> */}
