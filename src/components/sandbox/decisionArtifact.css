@@ -1,5 +1,8 @@
 .decision-artifact { position: fixed; z-index: 45; top: 18px; right: 18px; bottom: 18px; width: min(500px, 44vw); overflow: auto; padding: 20px; border: 1px solid rgb(213 177 88 / 34%); background: rgb(10 8 7 / 97%); color: #eee5d2; box-shadow: -28px 0 80px rgb(0 0 0 / 38%); scrollbar-width: thin; scrollbar-color: rgb(213 177 88 / 62%) rgb(255 255 255 / 4%); }
-.history-reading-shell { width:min(1040px,96vw); background:rgb(8 7 7 / 98%) !important; box-shadow:-38px 0 90px rgb(0 0 0 / 58%); }
+.history-reading-shell { width:min(1440px,72vw); min-width:min(620px,96vw); max-width:96vw; background:rgb(8 7 7 / 98%) !important; box-shadow:-38px 0 90px rgb(0 0 0 / 58%); }
+.history-reading-shell__resize { position:absolute; z-index:3; inset:0 auto 0 -6px; width:12px; padding:0; border:0; background:transparent; cursor:ew-resize; touch-action:none; }
+.history-reading-shell__resize::after { content:""; position:absolute; top:42%; bottom:42%; left:5px; width:1px; background:rgb(213 177 88 / 34%); box-shadow:0 0 10px rgb(213 177 88 / 18%); }
+.history-reading-shell__resize:hover::after,.history-reading-shell__resize:focus-visible::after { background:#d5b158; }
 .history-reading-shell__archive { margin-bottom:16px; padding:18px 20px; border:1px solid rgb(213 177 88 / 22%); background:linear-gradient(135deg,rgb(213 177 88 / 7%),rgb(255 255 255 / 1%)); }
 .history-reading-shell__archive small { color:#9f8b5c; font:9px/1.5 "Noto Serif SC",serif; letter-spacing:.18em; }
 .history-reading-shell__archive h2 { margin:7px 0 8px; color:#f0dda0; font:22px/1.35 "Ma Shan Zheng",serif; letter-spacing:.08em; }

@@ -17,4 +17,6 @@ test('poll delay stays responsive and backs off after failures', () => {
   assert.equal(pollDelay({ idle: true, idleCount: 8, failures: 0 }), 12000);
   assert.equal(pollDelay({ idle: true, idleCount: 8, failures: 0, hidden: true }), 20000);
   assert.equal(pollDelay({ idle: true, failures: 3 }), 12000);
+  assert.equal(pollDelay({ idle: true, failures: 4 }), 30000);
+  assert.equal(pollDelay({ idle: true, failures: 6 }), 60000);
 });

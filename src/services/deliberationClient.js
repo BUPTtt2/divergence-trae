@@ -125,6 +125,7 @@ export async function probeBackend(timeoutMs = 3000) {
 async function _deliberationFetch(path, init = {}, opts = {}) {
   const throwOnError = opts.throwOnError !== false;
   const reportStatus = opts.reportStatus !== false;
+  const quiet = opts.quiet === true;
 
   // === LOCAL_FULL 模式：不发任何真实请求，直接返回统一的成功空响应 ===
   // 这样后端挂时，所有调用 deliberationClient 的路径都不会 404/500 报错
@@ -163,7 +164,7 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
     try {
       const startedAt = performance.now();
       if (reportStatus) emitRuntimeStatus({ type: 'request:start' });
-      CLOG.fetch(authenticatedInit.method || 'GET', path);
+      if (!quiet) CLOG.fetch(authenticatedInit.method || 'GET', path);
       let resp = await fetch(url, authenticatedInit);
       if (resp.status === 401) {
         const recoveredToken = await recoverDeliberationAuthentication();
@@ -177,7 +178,7 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
       if (resp.ok) {
         // 记住第一个可用 base（加速后续请求）
         if (!_cachedBase || _cachedBase !== base) _persistBase(base);
-        CLOG.resp(init?.method || 'GET', path, resp.status);
+        if (!quiet) CLOG.resp(init?.method || 'GET', path, resp.status);
         if (reportStatus) emitRuntimeStatus({ type: 'request:ok', latencyMs: performance.now() - startedAt });
         return resp;
       }
@@ -201,7 +202,7 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
       return resp;
     } catch (e) {
       if (reportStatus) emitRuntimeStatus({ type: 'request:error' });
-      CLOG.error(authenticatedInit.method, path, e);
+      if (!quiet) CLOG.error(authenticatedInit.method, path, e);
       if (e?.status >= 400) throw e;
       // 网络错误 / CORS / 拒绝连接：继续 fallback
       errors.push(`[${base || '/'}] ${e.message || 'NetworkError'}`);
@@ -210,7 +211,7 @@ async function _deliberationFetch(path, init = {}, opts = {}) {
 
   // 全部候选失败
   const msg = `所有推演后端不可用: ${errors.join(' → ')}。请启动本地后端（npm --prefix server run dev）或检查网络。`;
-  console.error('[deliberationClient]', msg);
+  if (!quiet) console.error('[deliberationClient]', msg);
   if (throwOnError) {
     const err = new Error(msg);
     err.status = 0;
@@ -547,7 +548,7 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
         const response = await _deliberationFetch(
           `/api/deliberation/${sessionId}/events-poll?afterSequence=${lastSequence}`,
           { signal: abortController.signal },
-          { reportStatus: false },
+          { reportStatus: false, quiet: true },
         );
         const payload = await response.json();
         const events = Array.isArray(payload?.events) ? payload.events : [];
@@ -567,7 +568,7 @@ export function subscribeDeliberationStream(sessionId, callbacks) {
         if (!alive || error?.name === 'AbortError') return;
         failures += 1;
         readyState = 0;
-        onError?.(error);
+        if (failures === 1 || failures === 4 || failures === 6) onError?.(error);
       }
       if (alive) pollTimer = setTimeout(poll, pollDelay({
         idle,

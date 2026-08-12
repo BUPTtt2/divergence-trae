@@ -10,6 +10,13 @@ test('advisor selection keeps only a dim non-interactive scene beneath the counc
   assert.match(source, /phase === 'agent_select'[\s\S]*className="council-stage"/);
 });
 
+test('scene advisors open the dedicated history reader while a folded workbench stays folded', async () => {
+  const source = await readFile(new URL('../../src/pages/Game.jsx', import.meta.url), 'utf8');
+  assert.match(source, /const handleAgentClick = useCallback\(\(agent\) => \{\s*openHistoryPanel\(agent\?\.id \|\| null\);/);
+  assert.match(source, /open=\{companionDockOpen\(companionOpen\)\}/);
+  assert.doesNotMatch(source, /const handleAgentClick = useCallback\(\(agent\) => \{[\s\S]{0,180}setCompanionOpen\(true\)/);
+});
+
 test('pause and case edits preserve the confirmed council while a question targets explicit advisors', async () => {
   const source = await readFile(new URL('../../src/game/useDeliberationFlow.js', import.meta.url), 'utf8');
   assert.match(source, /commandType === 'QUESTION' && requestedTargetIds\.length === 0/);

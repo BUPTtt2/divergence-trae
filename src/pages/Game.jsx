@@ -16,6 +16,7 @@ import { sanitizeDecisionDisplayText, sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
 import {
   initialCompanionOpen,
+  companionDockOpen,
   sandboxLayoutClass,
   shouldAutoOpenCompanion,
   shouldMuteArena,
@@ -202,6 +203,9 @@ export default function Game() {
     typeof window === 'undefined' ? 760 : Math.round(Math.min(920, Math.max(660, window.innerWidth * 0.52)))
   ));
   const [focusedHistoryRoleId, setFocusedHistoryRoleId] = useState(null);
+  const [historyPanelWidth, setHistoryPanelWidth] = useState(() => (
+    typeof window === 'undefined' ? 1120 : Math.round(Math.min(1440, Math.max(780, window.innerWidth * 0.72)))
+  ));
   const [decisionArtifactOpen, setDecisionArtifactOpen] = useState(true);
   const [destinyArtwork, setDestinyArtwork] = useState(null);
   const historyRoles = useMemo(() => uniqueRoles(
@@ -230,10 +234,23 @@ export default function Game() {
     setShowHistoryPanel(true);
   }, [setShowHistoryPanel]);
   const handleAgentClick = useCallback((agent) => {
-    setFocusedHistoryRoleId(agent?.id || null);
-    setShowHistoryPanel(false);
-    setCompanionOpen(true);
-  }, [setShowHistoryPanel]);
+    openHistoryPanel(agent?.id || null);
+  }, [openHistoryPanel]);
+  const handleHistoryResizeStart = useCallback((event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = historyPanelWidth;
+    const onMove = (moveEvent) => {
+      const viewportWidth = window.innerWidth;
+      setHistoryPanelWidth(Math.min(viewportWidth * 0.96, Math.max(620, startWidth + startX - moveEvent.clientX)));
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+  }, [historyPanelWidth]);
   const handleExitDeliberation = useCallback(() => {
     handleRestart();
     setCompanionOpen(false);
@@ -345,7 +362,7 @@ export default function Game() {
             answerPending={answerPending}
             assignments={activeAgents.length > 0 ? activeAgents : (inference?.plan?.agents || [])}
             orchestration={inference?.plan?.orchestration}
-            open
+            open={companionDockOpen(companionOpen)}
             onOpenChange={handleCompanionOpenChange}
             onExit={handleExitDeliberation}
             onHome={handleReturnHome}
@@ -606,11 +623,19 @@ export default function Game() {
               exit={{ x: 980, opacity: 0 }}
               transition={{ duration: 0.5, ease: 'easeOut' }}
               style={{
+                width: `${historyPanelWidth}px`,
                 background: 'rgba(8,8,12,0.95)',
                 backdropFilter: 'blur(16px)',
                 borderLeft: `1px solid ${BORDER_COLOR}40`,
               }}
             >
+              <button
+                type="button"
+                className="history-reading-shell__resize"
+                onPointerDown={handleHistoryResizeStart}
+                aria-label="拖动调整推演记录宽度"
+                title="左右拖动调整宽度"
+              />
               <div className="p-5 h-full flex flex-col">
                 <div className="flex items-center justify-between mb-4">
                   <span style={{ color: GLOW_COLOR, fontFamily: '"Ma Shan Zheng", serif', fontSize: '14px', letterSpacing: '0.15em' }}>

@@ -18,6 +18,10 @@ export function shouldShowCompanion({ phase, showHistoryPanel = false } = {}) {
   return CONVERSATION_PHASES.has(phase) && !showHistoryPanel;
 }
 
+export function companionDockOpen(open) {
+  return open === true;
+}
+
 export function shouldAutoOpenCompanion({ phase, awaitingAnswers = [], answerPending = false } = {}) {
   if (phase !== 'clarify_loop' || answerPending || !Array.isArray(awaitingAnswers)) return false;
   return awaitingAnswers.some((item) => String(item?.question || item || '').trim().length > 0);

@@ -43,6 +43,11 @@ test('history and the council workbench are mutually exclusive surfaces', () => 
   assert.equal(layoutState.shouldShowCompanion({ phase: 'summary', companionOpen: true, showHistoryPanel: false }), false);
 });
 
+test('a folded companion remains mounted only as its compact launcher', () => {
+  assert.equal(layoutState.companionDockOpen(false), false);
+  assert.equal(layoutState.companionDockOpen(true), true);
+});
+
 test('pending clarification automatically opens the answer workbench', () => {
   assert.equal(typeof layoutState.shouldAutoOpenCompanion, 'function');
   assert.equal(layoutState.shouldAutoOpenCompanion({
