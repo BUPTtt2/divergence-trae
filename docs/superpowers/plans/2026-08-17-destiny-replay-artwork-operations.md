@@ -1,6 +1,6 @@
 # 命牌、完整回放与画境运营 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 在可部署基线上交付完整推演留存、统一命牌视觉与 PNG、手机可见的 3D 揭牌、可恢复的专属画境任务，以及不采集正文的运营指标。
 
@@ -35,7 +35,7 @@
 - Produces: `normalizeReplay(raw) -> { schemaVersion: 2, completeness, events }`
 - Consumes: existing clarification rounds, case file, dialogue history, selected path and committed fate ticket.
 
-- [ ] **Step 1: Write the failing replay normalization tests**
+- [x] **Step 1: Write the failing replay normalization tests**
 
 ```js
 test('preserves user questions, answers, advisor messages and commitment in chronological order', () => {
@@ -55,27 +55,27 @@ test('preserves user questions, answers, advisor messages and commitment in chro
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `node --test src/game/replayTimeline.test.js src/game/decisionCollectionStore.test.js`
 
 Expected: FAIL because `buildReplayTimeline` and replay persistence do not exist.
 
-- [ ] **Step 3: Implement deterministic replay normalization**
+- [x] **Step 3: Implement deterministic replay normalization**
 
 Implement immutable events with `id`, `seq`, `kind`, `phase`, `speakerType`, `speakerId`, `speakerName`, `text`, `sourceEventId`, `occurredAt`; deduplicate only by stable event/source identity, never by equal text alone.
 
-- [ ] **Step 4: Save Replay V2 with every local card**
+- [x] **Step 4: Save Replay V2 with every local card**
 
 Add `replay: { schemaVersion: 2, completeness: 'complete'|'partial'|'local_only', events: [...] }` to the card saved by `handleSaveToCollection`; preserve old cards as `partial` without inventing missing dialogue.
 
-- [ ] **Step 5: Run GREEN and regressions**
+- [x] **Step 5: Run GREEN and regressions**
 
 Run: `node --test src/game/replayTimeline.test.js src/game/decisionCollectionStore.test.js src/game/decisionCardContract.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/game/replayTimeline.js src/game/replayTimeline.test.js src/game/decisionCardContract.js src/game/decisionCollectionStore.js src/game/decisionCollectionStore.test.js src/game/useDeliberationFlow.js
@@ -95,27 +95,27 @@ git commit -m "feat: preserve complete deliberation replay"
 - Consumes: client `replay` contract from Task 1.
 - Produces: owned card responses with `replay`, `replay_schema_version`, `replay_completeness`.
 
-- [ ] **Step 1: Write failing route tests**
+- [x] **Step 1: Write failing route tests**
 
 Cover create/read/update ownership, maximum event count, maximum text length, supported event kinds, and rejection of replay writes to another user’s card.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `cd server && node --test tests/cards-replay-routes.test.js tests/migrationFormat.test.js`
 
 Expected: FAIL because replay columns and validation are absent.
 
-- [ ] **Step 3: Add schema and input validation**
+- [x] **Step 3: Add schema and input validation**
 
 Add JSONB replay storage plus indexed schema/completeness columns. Accept only the Replay V2 allowlist, cap event count and text sizes, and return structured `400` errors without logging event text.
 
-- [ ] **Step 4: Run GREEN and server regressions**
+- [x] **Step 4: Run GREEN and server regressions**
 
 Run: `cd server && node --test tests/cards-replay-routes.test.js tests/product-events-ownership.test.js tests/migrationFormat.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/src/migrations/025-card-replay-v2.sql server/src/routes/cards.js server/src/services/migrations.js server/tests/cards-replay-routes.test.js server/tests/migrationFormat.test.js
@@ -137,27 +137,27 @@ git commit -m "feat: persist owned replay timelines"
 - Consumes: normalized `card.replay.events`.
 - Produces: `buildReplaySections(events, filter) -> { sections, counts, completeness }` and an accessible chronological reader.
 
-- [ ] **Step 1: Write failing replay section tests**
+- [x] **Step 1: Write failing replay section tests**
 
 Assert that user speech, system questions, advisor messages, failures, decisions and commitment remain visible; filters may hide groups visually but cannot mutate stored events.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `node --test src/pages/collectionReplayModel.test.js src/game/historyPresentation.test.js`
 
 Expected: FAIL because the reader model is absent.
 
-- [ ] **Step 3: Implement reader model and UI**
+- [x] **Step 3: Implement reader model and UI**
 
 Render phase sections with speaker, time, source and failure state. Old cards show “历史记录不含完整过程”; current cards show event counts and completeness. Add “完整过程” action on selected cards and support `/cards?card=<id>&view=replay`.
 
-- [ ] **Step 4: Run GREEN and build**
+- [x] **Step 4: Run GREEN and build**
 
 Run: `node --test src/pages/collectionReplayModel.test.js src/game/historyPresentation.test.js && npm run build`
 
 Expected: PASS and Vite build exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/cards/ReplayTimeline.jsx src/components/cards/replayTimeline.css src/pages/Collection.jsx src/pages/collectionReplayModel.js src/pages/collectionReplayModel.test.js src/game/historyPresentation.js src/game/historyPresentation.test.js
@@ -181,31 +181,31 @@ git commit -m "feat: show complete deliberation replay"
 - Produces: `renderFateTicketCanvas(presentation, { width, height }) -> HTMLCanvasElement`.
 - Consumed by: 3D texture, final artifact, collection card and PNG export.
 
-- [ ] **Step 1: Write failing canonical model tests**
+- [x] **Step 1: Write failing canonical model tests**
 
 Assert one fixture yields identical seal title, question, decision, verdict, anchors, artwork selection and archive ID for every consumer. Assert text compaction and system artwork fallback.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `node --test src/game/fateTicketPresentation.test.js src/game/fateTicketCanvas.test.js`
 
 Expected: FAIL because the canonical model and renderer do not exist.
 
-- [ ] **Step 3: Implement the model and canvas renderer**
+- [x] **Step 3: Implement the model and canvas renderer**
 
 Move shared normalization into the new model. Canvas output is portrait 1024×1536, includes system artwork fallback, readable Chinese text, provenance label and no external DOM screenshot dependency.
 
-- [ ] **Step 4: Wire final and collection views**
+- [x] **Step 4: Wire final and collection views**
 
 Replace duplicated presentation construction. Add “导出命牌 PNG”; use a Blob URL and revoke it after download.
 
-- [ ] **Step 5: Run GREEN, lint and build**
+- [x] **Step 5: Run GREEN, lint and build**
 
 Run: `node --test src/game/fateTicketPresentation.test.js src/game/fateTicketCanvas.test.js src/game/destinyCardPresentation.test.js && npm run lint && npm run build`
 
 Expected: PASS, lint exit 0, build exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/game/fateTicketPresentation.js src/game/fateTicketPresentation.test.js src/game/fateTicketCanvas.js src/game/fateTicketCanvas.test.js src/game/fateCardPresentation.js src/game/destinyCardPresentation.js src/components/sandbox/DecisionArtifact.jsx src/pages/Collection.jsx
@@ -228,31 +228,31 @@ git commit -m "feat: unify destiny card presentation and export"
 - Consumes: `FateTicketPresentation`, phase, reveal state and current artwork.
 - Produces: one visible scene card during `path_reveal`, `committing`, `final`; LightOrb no longer renders a duplicate card.
 
-- [ ] **Step 1: Write failing ceremony integration tests**
+- [x] **Step 1: Write failing ceremony integration tests**
 
 Assert the scene mounts `DestinyRevealFX`, uses the canonical presentation, retains it in final, respects reduced motion, and does not also render the legacy `LightOrb` fate card.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `node --test src/game/destinyCeremonyModel.test.js server/tests/sandbox-phase-isolation.test.js`
 
 Expected: FAIL because `DestinyRevealFX` exists but is not mounted in `Board3D`.
 
-- [ ] **Step 3: Wire the ceremony at the scene root**
+- [x] **Step 3: Wire the ceremony at the scene root**
 
 Mount the effect once. Sequence back rise, explicit reveal flip and final hover. Derive compact layout from R3F viewport; reduce particles and texture anisotropy on narrow/low-DPR displays while keeping the card centered and readable.
 
-- [ ] **Step 4: Remove duplicate fate rendering at the root**
+- [x] **Step 4: Remove duplicate fate rendering at the root**
 
 Keep LightOrb responsible for ambient state only. Do not add feature flags or a second production code path.
 
-- [ ] **Step 5: Run GREEN, build and browser preview**
+- [x] **Step 5: Run GREEN, build and browser preview**
 
 Run: `node --test src/game/destinyCeremonyModel.test.js server/tests/sandbox-phase-isolation.test.js && npm run build`
 
 Then verify the deterministic development fixture at 1440×900 and 390×844 without LLM/image calls.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/board/Board3D.jsx src/components/board/DestinyRevealFX.jsx src/components/board/LightOrb.jsx src/components/board/GameBoard.jsx src/pages/Game.jsx src/components/sandbox/decisionArtifact.css src/game/destinyCeremonyModel.test.js server/tests/sandbox-phase-isolation.test.js
@@ -279,31 +279,31 @@ git commit -m "feat: reveal destiny card in the 3d arena"
 - Produces: `POST /api/cards/:id/artwork-versions/:versionId/select`.
 - Consumes: owned card, controlled style ID and entitlement/credit decision.
 
-- [ ] **Step 1: Write failing job lifecycle tests**
+- [x] **Step 1: Write failing job lifecycle tests**
 
 Cover idempotent creation, valid transitions, refresh recovery, provider failure, no-charge/refund semantics, stable selected version, and owner isolation.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `cd server && node --test tests/artwork-job-service.test.js tests/destiny-artwork-service.test.js`
 
 Expected: FAIL because persistent jobs and versions are absent.
 
-- [ ] **Step 3: Implement the state machine and controlled styles**
+- [x] **Step 3: Implement the state machine and controlled styles**
 
 Create immutable versions and a selected version pointer. Start with `ink_landscape`, `mineral_color`, `minimal_xuan`; reject arbitrary prompt text. Preserve provider metadata and classify temporary URLs as non-persistent until copied to configured storage.
 
-- [ ] **Step 4: Replace final-page automatic generation**
+- [x] **Step 4: Replace final-page automatic generation**
 
 Remove the automatic final `useEffect` request. The default presentation uses system artwork immediately; user action creates a job. Poll with bounded backoff and resume from persisted job ID.
 
-- [ ] **Step 5: Run GREEN and regressions**
+- [x] **Step 5: Run GREEN and regressions**
 
 Run: `node --test src/game/artworkJobModel.test.js && cd server && node --test tests/artwork-job-service.test.js tests/destiny-artwork-service.test.js tests/product-reliability-events.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/src/migrations/026-artwork-jobs.sql server/src/services/artworkJobService.js server/src/services/destinyArtworkService.js server/src/routes/deliberation.js server/src/routes/cards.js server/tests/artwork-job-service.test.js server/tests/destiny-artwork-service.test.js src/services/apiClient.js src/game/artworkJobModel.js src/game/artworkJobModel.test.js src/pages/Game.jsx
@@ -328,31 +328,31 @@ git commit -m "feat: add recoverable destiny artwork jobs"
 - Consumes: artwork jobs and versions from Task 6.
 - Produces: style selection, regenerate confirmation, version preview/select, and aggregate metrics without decision content.
 
-- [ ] **Step 1: Write failing metrics and presentation tests**
+- [x] **Step 1: Write failing metrics and presentation tests**
 
 Assert generation starts/success/failure, latency, regeneration and version selection aggregate correctly, while event property allowlists reject prompts and card text.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `node --test src/pages/opsModel.test.js && cd server && node --test tests/product-analytics.test.js tests/ops-routes.test.js`
 
 Expected: FAIL because new metrics and studio projection are absent.
 
-- [ ] **Step 3: Implement Artwork Studio**
+- [x] **Step 3: Implement Artwork Studio**
 
 Show system artwork as free and always available. Label paid/credit-requiring styles honestly without fake checkout. Confirm regeneration cost before request, keep old versions, and require explicit “设为当前”.
 
-- [ ] **Step 4: Add privacy-safe metrics**
+- [x] **Step 4: Add privacy-safe metrics**
 
 Aggregate initiation, success rate, P90/P95 latency, regeneration rate, selected-version rate and failure classes. `/ops` receives only IDs masked at the existing level and aggregate properties.
 
-- [ ] **Step 5: Run GREEN, lint and build**
+- [x] **Step 5: Run GREEN, lint and build**
 
 Run: `node --test src/pages/opsModel.test.js && cd server && node --test tests/product-analytics.test.js tests/ops-routes.test.js && cd .. && npm run lint && npm run build`
 
 Expected: PASS, lint exit 0, build exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/cards/ArtworkStudio.jsx src/components/cards/artworkStudio.css src/pages/Collection.jsx src/pages/opsModel.js src/pages/opsModel.test.js src/pages/Ops.jsx server/src/services/productAnalytics.js server/src/services/opsMetrics.js server/tests/product-analytics.test.js server/tests/ops-routes.test.js

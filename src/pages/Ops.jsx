@@ -95,6 +95,8 @@ export default function Ops() {
               <div><dt>模型失败</dt><dd>{view.reliability.llmFailures ?? 0}</dd></div>
               <div><dt>画境请求</dt><dd>{view.reliability.artworkRequests ?? 0}</dd></div>
               <div><dt>画境失败</dt><dd>{view.reliability.artworkFailures ?? 0}</dd></div>
+              <div><dt>画境采用</dt><dd>{view.reliability.artworkSelections ?? 0}</dd></div>
+              <div><dt>临时画境</dt><dd>{view.reliability.artworkTemporaryResults ?? 0}</dd></div>
               <div><dt>规则兜底</dt><dd>{view.reliability.fallbacks ?? 0}</dd></div>
               <div><dt>前端错误</dt><dd>{view.reliability.clientErrors ?? 0}</dd></div>
             </dl>

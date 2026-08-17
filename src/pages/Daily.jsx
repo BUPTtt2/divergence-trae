@@ -562,8 +562,6 @@ export default function Daily() {
             <Link to="/legal" className="text-[10px] hover:underline" style={{ color: T.muted }}>用户协议</Link>
             <span style={{ color: T.border }}>|</span>
             <Link to="/privacy" className="text-[10px] hover:underline" style={{ color: T.muted }}>隐私政策</Link>
-            <span style={{ color: T.border }}>|</span>
-            <span className="text-[10px]" style={{ color: T.muted, opacity: 0.6 }}>京ICP备XXXXXXXX号</span>
           </div>
         </footer>
       </div>

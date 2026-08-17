@@ -15,7 +15,7 @@ const T = {
 };
 const EASE = [0.16, 1, 0.3, 1];
 
-// 八卦方位对应剧本 (用于装饰)
+// 八卦方位对应预设推演 (用于装饰)
 const SCENARIO_TRIGRAMS = ['☲', '☷', '☱', '☳'];
 
 export default function Scenarios() {
@@ -47,13 +47,13 @@ export default function Scenarios() {
               择一局<span style={{ color: T.accent }}>困境</span>，<br />立卦推演。
             </h1>
             <p className="text-[13px] leading-relaxed max-w-[480px]" style={{ color: T.muted }}>
-              每个剧本对应一个真实的决策困境。选局之后，「演」将依局召唤智囊沿八卦方位协助你推演每一种可能。
+              每个预设对应一类常见决策困境。选局之后，「演」将依局召唤智囊沿八卦方位协助你审视多种可能。
             </p>
           </motion.div>
         </div>
       </section>
 
-      {/* 剧本网格 */}
+      {/* 预设推演网格 */}
       <section className="px-6 pb-24">
         <div className="max-w-[1000px] mx-auto">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -125,7 +125,7 @@ export default function Scenarios() {
             className="mt-12 text-center"
           >
             <p className="text-[11px] font-mono" style={{ color: T.muted }}>
-              更多剧本持续上线 / 社区也可自创剧本
+              更多预设推演将根据真实使用反馈持续完善
             </p>
             <motion.button
               whileHover={{ y: -1 }}
@@ -147,10 +147,8 @@ export default function Scenarios() {
             <Link to="/legal" className="text-[10px] hover:underline" style={{ color: T.muted }}>用户协议</Link>
             <span style={{ color: T.border }}>|</span>
             <Link to="/privacy" className="text-[10px] hover:underline" style={{ color: T.muted }}>隐私政策</Link>
-            <span style={{ color: T.border }}>|</span>
-            <span className="text-[10px]" style={{ color: T.muted, opacity: 0.6 }}>京ICP备XXXXXXXX号</span>
           </div>
-          <span className="text-[10px] font-mono" style={{ color: T.muted }}>MIT License / Open Source</span>
+          <span className="text-[10px] font-mono" style={{ color: T.muted }}>演策 · 决策辅助工具</span>
         </div>
       </footer>
     </div>

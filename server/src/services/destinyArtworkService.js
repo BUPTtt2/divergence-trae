@@ -8,10 +8,11 @@ export function buildDestinyArtworkPrompt(ticket = {}) {
   const question = safeText(ticket.question, 60) || '一项需要审慎判断的现实选择';
   const decision = safeText(ticket.path?.label || ticket.choice, 40) || '先验证，再决定';
   const hexagram = safeText(ticket.hexagram?.primary, 12) || '观照之卦';
+  const stylePrompt = safeText(ticket.artworkStyle?.prompt, 120) || '宋代水墨山水、宣纸纤维、克制的矿物金修补线和极淡卦爻压纹';
   return [
     '为一张中国决策产品的收藏命牌创作竖版 3:4 无字底画。',
     `本局主题来自“${question}”，最终路径是“${decision}”，卦象意象为“${hexagram}”。`,
-    '用宋代水墨山水、宣纸纤维、克制的矿物金修补线和极淡卦爻压纹表达：判断完成后的安定、清醒与行动感。',
+    `视觉风格限定为：${stylePrompt}。表达判断完成后的安定、清醒与行动感。`,
     '中央与下半部保留安静留白，供程序叠加准确中文；画面重心放在左上月轮和底部远山。',
     '不要任何文字、汉字、字母、数字、印章内容、人物、UI边框、塔罗牌、霓虹、光圈、漂浮粒子、发光符文或水印。',
   ].join('');

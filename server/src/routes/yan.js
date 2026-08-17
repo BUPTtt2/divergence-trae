@@ -28,17 +28,9 @@ router.post(
       return res.status(400).json({ error: '消息过长，请控制在4000字以内' });
     }
 
-    if (!req.userId) {
-      const mockReply = `我听到了你说的，但听到的只是表层。\n请允许我问三点：\n一、这件事最坏的结果，你能否承受？\n二、三年后回看今天，你希望自己已经做了什么？\n三、你此刻最怕的不是失败，而是什么？\n回答之前不必急，先静坐片刻。`;
-      return res.json({
-        message: mockReply,
-        conversationId: conversationId || 'anonymous-' + Date.now(),
-        hasUserId: false,
-      });
-    }
-
-    const result = await chatWithYan(req.userId, message, conversationId);
-    res.json({ ...result, hasUserId: true });
+    const actualUserId = req.userId || `anonymous-${Date.now()}`;
+    const result = await chatWithYan(actualUserId, message, conversationId);
+    res.json({ ...result, hasUserId: Boolean(req.userId) });
   })
 );
 
@@ -132,8 +124,9 @@ router.get(
     if (!req.userId) {
       const today = new Date().toISOString().split('T')[0];
       const guas = ['乾', '坤', '屯', '蒙', '需', '讼', '师', '比'];
-      const g = guas[Math.floor(Math.random() * guas.length)];
-      return res.json({ date: today, gua: g, message: `演今日观你之气，恰合「${g}」卦。不必问吉凶，先问自己是否已准备好承接。` });
+      const daySeed = [...today].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+      const g = guas[daySeed % guas.length];
+      return res.json({ date: today, gua: g, message: `今日公共认知镜面为「${g}」卦：不问吉凶，先检查自己是否已准备好承接。`, personalized: false });
     }
     const today = new Date().toISOString().split('T')[0];
     const daily = await getDailyGua(req.userId, today);

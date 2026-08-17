@@ -51,14 +51,10 @@ export default function Footer({ theme = {} }) {
           >
             反馈建议
           </button>
-          <span style={{ color: borderColor }}>|</span>
-          <span className="text-[10px]" style={{ color: mutedColor, opacity: 0.6 }}>
-            京ICP备XXXXXXXX号
-          </span>
         </div>
 
         <span className="text-[10px] font-mono" style={{ color: mutedColor }}>
-          v{APP_VERSION} · MIT License · Open Source
+          v{APP_VERSION} · 决策辅助工具
         </span>
       </div>
     </footer>

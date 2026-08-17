@@ -37,6 +37,12 @@ test('rental fallback asks concrete housing questions instead of two generic pro
   assert.equal(fields.some((field) => field.prompt === '你现在的实际状态是什么？'), false);
 });
 
+test('career relocation fallback asks about the offer before housing details', () => {
+  const fields = fallbackCaseFields('要不要接受一个需要搬家的新工作？');
+  assert.deepEqual(fields.slice(0, 3).map((field) => field.id), ['role_value', 'relocation_cost', 'exit_boundary']);
+  assert.equal(fields.some((field) => field.id === 'living_context'), false);
+});
+
 test('case analyst keeps a useful model field and fills missing coverage instead of discarding the model result', async () => {
   const result = await analyzeCaseIntake({ question: '要不要北京租房' }, {
     callLLMFn: async () => JSON.stringify({

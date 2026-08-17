@@ -28,6 +28,9 @@ const EVENT_PROPERTIES = Object.freeze({
   llm_request_completed: ['provider', 'model', 'success', 'durationMs', 'retryCount', 'errorCode', 'usageAvailable'],
   fallback_activated: ['phase', 'fallbackType', 'errorCode'],
   artwork_request_completed: ['provider', 'model', 'success', 'durationMs', 'retryCount', 'errorCode'],
+  artwork_job_started: ['cardId', 'styleId', 'includedCredit'],
+  artwork_job_completed: ['cardId', 'styleId', 'success', 'durationMs', 'errorCode', 'persistent', 'includedCredit'],
+  artwork_version_selected: ['cardId', 'styleId', 'persistent'],
   client_error: ['phase', 'errorCode', 'source'],
   api_health_observed: ['success', 'durationMs', 'errorCode'],
   destiny_card_saved: ['storageMode'],
@@ -149,7 +152,7 @@ export function aggregateProductAnalytics(rows = [], options = {}) {
   const phaseSessions = new Map(FUNNEL_PHASES.map((phase) => [phase, new Set()]));
   const durationBySession = new Map();
   const releases = new Map();
-  const reliability = { llmRequests: 0, llmFailures: 0, artworkRequests: 0, artworkFailures: 0, fallbacks: 0, clientErrors: 0 };
+  const reliability = { llmRequests: 0, llmFailures: 0, artworkRequests: 0, artworkFailures: 0, artworkSelections: 0, artworkTemporaryResults: 0, fallbacks: 0, clientErrors: 0 };
   let handoffs = 0;
   let feedback = 0;
 
@@ -172,10 +175,12 @@ export function aggregateProductAnalytics(rows = [], options = {}) {
       reliability.llmRequests += 1;
       if (properties.success === false) reliability.llmFailures += 1;
     }
-    if (event === 'artwork_request_completed') {
+    if (event === 'artwork_request_completed' || event === 'artwork_job_completed') {
       reliability.artworkRequests += 1;
       if (properties.success === false) reliability.artworkFailures += 1;
+      if (properties.success === true && properties.persistent === false) reliability.artworkTemporaryResults += 1;
     }
+    if (event === 'artwork_version_selected') reliability.artworkSelections += 1;
     if (event === 'fallback_activated') reliability.fallbacks += 1;
     if (event === 'client_error' || event === 'error') reliability.clientErrors += 1;
 

@@ -67,8 +67,6 @@ export default function DecisionArtifact({
   onSave,
   onOpenHistory,
   onClose,
-  artwork,
-  onRetryArtwork,
 }) {
   const navigate = useNavigate();
   const [saveState, setSaveState] = useState('idle');
@@ -90,18 +88,13 @@ export default function DecisionArtifact({
     question: fateContent?.question || inference?.question,
     summary: fateContent?.summary || artifact.summary,
     path: selectedPath || fateContent?.path,
-    artwork: artwork?.available ? artwork : (fateContent?.artwork || null),
-  }), [artifact.summary, artwork, fateContent, inference?.question, selectedPath]);
+    artwork: fateContent?.artwork || null,
+  }), [artifact.summary, fateContent, inference?.question, selectedPath]);
   const saveFateCard = async () => {
     if (saveState === 'saving' || saveState === 'saved') return;
     setSaveState('saving');
     try {
-      const result = await onSave?.(artwork?.available ? {
-        url: artwork.url,
-        source: 'seedream',
-        model: artwork.model || '',
-        size: artwork.size || '',
-      } : { source: 'archive' });
+      const result = await onSave?.({ source: 'archive' });
       setSaveState(result?.mode === 'local' ? 'local' : 'saved');
     } catch {
       setSaveState('error');
@@ -262,8 +255,7 @@ export default function DecisionArtifact({
             <span>卦作镜，不替你决定</span>
             <span>{cardPresentation.date}</span>
           </div>
-          <small className="decision-artifact__ticket-source">{artwork?.status === 'loading' ? '专属画境生成中' : cardPresentation.artworkSource === 'seedream' ? '即梦画境 · 本局生成' : `${cardPresentation.copySource} · 典藏画境`}</small>
-          {artwork?.status === 'fallback' && <button type="button" className="decision-artifact__artwork-retry" onClick={onRetryArtwork}>即梦暂未返回 · 重绘画境</button>}
+          <small className="decision-artifact__ticket-source">{cardPresentation.copySource} · 系统典藏画境</small>
         </article>
         {(fateContent?.evidence?.length > 0 || fateContent?.contextIndex?.length > 0) && <details className="decision-artifact__ticket-ledger">
           <summary>证据与本局档案</summary>
@@ -292,6 +284,7 @@ export default function DecisionArtifact({
           <button type="button" onClick={saveFateCard} disabled={saveState === 'saving' || saveState === 'saved'}>
             {saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已存入命牌库' : saveState === 'local' ? '已存本机 · 重试云端' : saveState === 'error' ? '保存失败 · 重试' : '收藏命牌'}
           </button>
+          <span className="decision-artifact__save-note">收藏后可在命牌库免费生成一次专属画境</span>
           {saveState === 'local' && <span className="decision-artifact__save-note">云端未连接，本机副本仍可在命牌库查看</span>}
         </footer>
       </section>}

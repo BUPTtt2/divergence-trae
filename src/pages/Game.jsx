@@ -8,9 +8,6 @@ import DeliberationConversation from '../components/sandbox/DeliberationConversa
 import CouncilWorkbench from '../components/sandbox/CouncilWorkbench';
 import DecisionArtifact from '../components/sandbox/DecisionArtifact';
 import DecisionCaseReviewPanel from '../components/yan/DecisionCaseReviewPanel';
-import { COLORS } from '../components/board/layoutConfig';
-import { detectQuestionType } from '../data/agents';
-import { generateDialoguesForAgents } from '../services/inferenceEngine';
 import { saveAgentFeedback } from '../services/memoryStore';
 import { sanitizeDecisionDisplayText, sanitizeLLMText } from '../utils/helpers';
 import useSandboxFlow from '../game/useSandboxFlow';
@@ -26,25 +23,9 @@ import { uniqueMessages, uniqueRoles } from '../game/historyPresentation';
 import { buildArenaViewModel } from '../game/arenaViewModel';
 import SystemPulse from '../components/layout/SystemPulse';
 import SessionMeasurement from '../components/layout/SessionMeasurement';
-import { generateDestinyArtwork } from '../services/apiClient.js';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
-const DEFAULT_CHOICES = [
-  { id: 'opportunity', label: '抓住机会', color: COLORS.choice.opportunity, glowColor: '#E8B880', icon: '☰', gua: '大有',
-    verse: '元亨。先据要津，后补疏漏。',
-    keyPoints: ['先占位置再说', '错过窗口更难补', '核心：先动再完善'] },
-  { id: 'risk', label: '规避风险', color: COLORS.choice.risk, glowColor: '#E88080', icon: '☵', gua: '坎',
-    verse: '习坎有孚。维心亨，行有尚。',
-    keyPoints: ['先算最坏结果', '兜住底再看机会', '核心：不退不进先稳'] },
-  { id: 'stable', label: '稳守当前', color: COLORS.choice.stable, glowColor: '#80C8A8', icon: '☶', gua: '艮',
-    verse: '艮其背。时止则止，时行则行。',
-    keyPoints: ['守住已有成果', '等信号齐了再动', '核心：不动如山'] },
-  { id: 'explore', label: '探索新路', color: COLORS.choice.explore, glowColor: '#D8A8C8', icon: '☴', gua: '巽',
-    verse: '小亨。利有攸往，利见大人。',
-    keyPoints: ['30天小范围试验', '换定义重新看题', '核心：另辟蹊径'] },
-];
-
 const _normalizeMsg = (raw) => {
   if (raw == null) return '';
   const rawToStr = (r) => {
@@ -171,17 +152,16 @@ function _renderNavButton(phase, ctx) {
 export default function Game() {
   const location = useLocation();
   const navigate = useNavigate();
-  const flow = useSandboxFlow({ DEFAULT_CHOICES, initialQuestion: location.state?.initialQuestion || '' });
+  const flow = useSandboxFlow({ initialQuestion: location.state?.initialQuestion || '' });
   const {
     phase, userInput, inputValue, setInputValue, inference, showInput,
     showQuestion, activeAgentIdx, selectedChoice, agentDialogues,
     showHistoryPanel, setShowHistoryPanel, awaitingUser, currentResponse, isPaused,
     setCurrentResponse, currentCommit, setCurrentCommit,
     oracleResult, floatTip, selectedAgentIds, setSelectedAgentIds,
-    agentCallResults, setAgentCallResults, toolCallState, debateRound,
-    debateConvergence, showAgentErrorModal, setShowAgentErrorModal,
-    agentErrors, fateContent, activeAgents, candidateAgents, choices, phaseLabel,
-    historyCount, mentionMessages, setFloatTip, setInference,
+    agentCallResults, toolCallState, debateRound,
+    debateConvergence, fateContent, activeAgents, candidateAgents, choices, phaseLabel,
+    historyCount, mentionMessages,
     backendError, streamError, handleRejectRetry,
     commitPending, answerPending, processingNarrative,
     councilCatalog, councilCatalogLoading, councilCatalogError, recommendedAgentIds,
@@ -208,9 +188,6 @@ export default function Game() {
     typeof window === 'undefined' ? 1120 : Math.round(Math.min(1440, Math.max(780, window.innerWidth * 0.72)))
   ));
   const [decisionArtifactOpen, setDecisionArtifactOpen] = useState(true);
-  const [destinyArtwork, setDestinyArtwork] = useState(null);
-  const [artworkAttempt, setArtworkAttempt] = useState(0);
-  const artworkRequestRef = useRef('');
   const historyRoles = useMemo(() => uniqueRoles(
     VIRTUAL_ROLES,
     (activeAgents || []).filter((agent) => agent && agent.role !== 'master'),
@@ -287,30 +264,11 @@ export default function Game() {
   const sceneOverlayMode = presentationMode && !fateStage;
   const artifactWidth = phase === 'final' ? 'min(640px, 50vw)' : ['path_reveal', 'committing'].includes(phase) ? 'min(580px, 48vw)' : 'min(500px, 44vw)';
 
-  useEffect(() => {
-    const ticketId = fateContent?.ticketId || '';
-    const sessionId = flow.deliberationSessionId || '';
-    const requestKey = `${sessionId}:${ticketId}:${artworkAttempt}`;
-    if (phase !== 'final' || !sessionId || !ticketId || artworkRequestRef.current === requestKey) return undefined;
-    artworkRequestRef.current = requestKey;
-    let active = true;
-    setDestinyArtwork({ available: false, status: 'loading' });
-    generateDestinyArtwork(sessionId)
-      .then((result) => {
-        if (!active) return;
-        setDestinyArtwork(result?.available ? { ...result, status: 'ready' } : { ...result, status: 'fallback' });
-      })
-      .catch(() => {
-        if (active) setDestinyArtwork({ available: false, status: 'fallback', reason: 'request_failed' });
-      });
-    return () => { active = false; };
-  }, [artworkAttempt, fateContent?.ticketId, flow.deliberationSessionId, phase]);
-
   return (
     <div className={`game-root ${layoutClass} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)', '--companion-width': `${companionWidth}px`, '--artifact-width': artifactWidth }}>
       <div className="crt-overlay" />
       <SystemPulse />
-      <SessionMeasurement sessionId={flow.deliberationSessionId} phase={phase} artwork={destinyArtwork} />
+      <SessionMeasurement sessionId={flow.deliberationSessionId} phase={phase} artwork={null} />
       {(backendError || streamError) && (
         <div role="alert" className="runtime-alert">
           <span>Agent Runtime：{backendError || streamError}</span>
@@ -340,7 +298,7 @@ export default function Game() {
               inference={inference}
               deliberationOracle={inference?.oracle || fateContent?.hexagram || null}
               fateRevealed={fateRevealed}
-              destinyArtwork={destinyArtwork}
+              destinyArtwork={null}
               arenaView={arenaView}
               directResult={directResult}
               onDirectChoice={handleDirectChoice}
@@ -602,8 +560,6 @@ export default function Game() {
             onSave={handleSaveToCollection}
             onOpenHistory={() => openHistoryPanel(null)}
             onClose={() => setDecisionArtifactOpen(false)}
-            artwork={destinyArtwork}
-            onRetryArtwork={() => setArtworkAttempt((value) => value + 1)}
           />
         )}
 
@@ -1021,107 +977,6 @@ export default function Game() {
                   }}
                 >
                   立卦开演
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {showAgentErrorModal && (
-          <motion.div
-            className="fixed inset-0 z-[60] flex items-center justify-center"
-            style={{ backgroundColor: 'rgba(0,0,0,0.85)' }}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <motion.div
-              className="max-w-md w-full mx-4"
-              initial={{ opacity: 0, scale: 0.92, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.92, y: -20 }}
-              transition={{ duration: 0.4 }}
-              style={{
-                background: 'rgba(15,12,8,0.98)',
-                border: `1px solid ${BORDER_COLOR}`,
-                borderRadius: 4,
-                padding: '24px',
-                boxShadow: `0 0 40px ${GLOW_COLOR}20`,
-              }}
-            >
-              <div style={{ fontSize: '16px', color: '#E88080', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.2em', marginBottom: '16px', textAlign: 'center' }}>
-                智囊发言异常
-              </div>
-              <div style={{ fontSize: '12px', color: '#A0A0A0', fontFamily: '"Noto Serif SC", serif', marginBottom: '16px', lineHeight: 1.8 }}>
-                以下智囊暂未连接模型，当前显示离线推演结果：
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
-                {Object.entries(agentErrors).map(([agentId, error]) => (
-                  <div key={agentId} style={{
-                    padding: '10px 12px',
-                    background: 'rgba(168,64,64,0.1)',
-                    border: '1px solid #A8404040',
-                    borderRadius: 2,
-                  }}>
-                    <div style={{ color: '#E88080', fontSize: '13px', fontWeight: 600 }}>{error.agentName}</div>
-                    <div style={{ color: '#888', fontSize: '11px', marginTop: '4px' }}>{error.error}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <button
-                  onClick={() => setShowAgentErrorModal(false)}
-                  style={{
-                    flex: 1,
-                    padding: '10px',
-                    background: 'rgba(60,55,50,0.5)',
-                    border: `1px solid ${BORDER_COLOR}40`,
-                    borderRadius: 2,
-                    color: '#A0A0A0',
-                    fontSize: '12px',
-                    fontFamily: '"Ma Shan Zheng", serif',
-                    letterSpacing: '0.15em',
-                    cursor: 'pointer',
-                  }}
-                >
-                  跳过，继续推演
-                </button>
-                <button
-                  onClick={() => {
-                    setShowAgentErrorModal(false);
-                    const question = userInput;
-                    const qType = detectQuestionType(question);
-                    const agents = inference?.agents || [];
-                    const newDialogues = {};
-                    const callResults = {};
-                    setFloatTip('正在重试...');
-                    const onAgentComplete = (agentId, text, success, error, source) => {
-                      newDialogues[agentId] = text;
-                      callResults[agentId] = { success, error, source };
-                      setInference(prev => prev ? { ...prev, agentDialogues: { ...newDialogues } } : { agentDialogues: newDialogues });
-                    };
-                    generateDialoguesForAgents(question, agents, qType, onAgentComplete).then(() => {
-                      setFloatTip(null);
-                      setAgentCallResults(callResults);
-                    });
-                  }}
-                  style={{
-                    flex: 1,
-                    padding: '10px',
-                    background: `linear-gradient(135deg, ${BORDER_COLOR}, ${GLOW_COLOR})`,
-                    border: 'none',
-                    borderRadius: 2,
-                    color: '#1A1410',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    fontFamily: '"Ma Shan Zheng", serif',
-                    letterSpacing: '0.15em',
-                    cursor: 'pointer',
-                  }}
-                >
-                  重试连接
                 </button>
               </div>
             </motion.div>

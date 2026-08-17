@@ -6,7 +6,6 @@ import NoteModal from '../components/NoteModal';
 import {
   completeFollowUp,
   deleteCard,
-  getCardNotes,
   getCards,
   getDeliberationUsage,
   getFollowUps,
@@ -15,9 +14,7 @@ import {
   updateCard,
 } from '../services/apiClient';
 import tracker from '../services/tracker';
-import DecisionCardIdentity from '../components/cards/DecisionCardIdentity';
 import { decisionUsagePresentation } from '../components/cards/decisionUsagePresentation.js';
-import '../components/cards/decisionCardIdentity.css';
 import { normalizeDecisionCard } from '../game/decisionCardContract.js';
 import { createDestinyCardPresentation } from '../game/destinyCardPresentation.js';
 import { mergeDecisionCards, readLocalDecisionCards, writeLocalDecisionCard } from '../game/decisionCollectionStore.js';
@@ -25,6 +22,7 @@ import ReplayTimeline from '../components/cards/ReplayTimeline.jsx';
 import { findReplayCard } from './collectionReplayModel.js';
 import { exportFateTicketPng } from '../game/fateTicketCanvas.js';
 import './collectionDestinyCard.css';
+import ArtworkStudio from '../components/cards/ArtworkStudio.jsx';
 
 const T = {
   paper: '#F2EDE0',
@@ -52,596 +50,8 @@ const ACHIEVEMENTS = [
   { id: 'fifty', name: '大衍之数', desc: '完成五十次推演', icon: '☷', threshold: 50 },
 ];
 
-const RARITY_CONFIG = {
-  common: { label: '普通', color: '#7A7468', border: '#D9D2C0', glow: 'none' },
-  rare: { label: '稀有', color: '#5078A8', border: '#80A8D8', glow: '#5078A840' },
-  epic: { label: '史诗', color: '#A87898', border: '#D8A8C8', glow: '#A8789840' },
-  legendary: { label: '传说', color: '#C8A850', border: '#F0D890', glow: '#C8A85060' },
-};
-
 /* 卡牌面 - 真实视觉(卦象 + 卦辞 + 四柱 + 终局) */
-// oxlint-disable-next-line no-unused-vars
-function LegacyFatedCard({ card, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay, onScheduleFollowUp }) {
-  const [showShare, setShowShare] = useState(false);
-  const [noteCount, setNoteCount] = useState(0);
-  // 编辑模式：标题 / 个人感悟(summary) / 承诺文字(decision)
-  const [isEditing, setIsEditing] = useState(false);
-  const [editTitle, setEditTitle] = useState(card.title || '');
-  const [editSummary, setEditSummary] = useState(card.summary || '');
-  const [editDecision, setEditDecision] = useState(card.decision || '');
-  const [followUpDays, setFollowUpDays] = useState(7);
-  const [usageSummary, setUsageSummary] = useState(null);
-  const [usageLoading, setUsageLoading] = useState(false);
-  const rarity = card.rarity || 'common';
-  const rarityConfig = RARITY_CONFIG[rarity];
-  const cardAccent = isUser ? '#F3D985' : card.color;
-  const cardText = isUser ? '#F7F2E8' : T.paperLight;
-  const cardSoftText = isUser ? '#C9C3B7' : T.paperLight;
-  const cardLine = isUser ? 'rgba(243,217,133,.25)' : `${card.color}40`;
-  const cardPanel = isUser ? 'rgba(255,255,255,.035)' : `${card.color}10`;
-
-  useEffect(() => {
-    if (!isUser || !card.id) return;
-    const loadNoteCount = async () => {
-      try {
-        const data = await getCardNotes(card.id);
-        if (data && data.notes) {
-          setNoteCount(data.notes.length);
-        }
-      } catch (e) {
-        try {
-          const localNotes = JSON.parse(localStorage.getItem(`yance_notes_${card.id}`) || '[]');
-          setNoteCount(localNotes.length);
-        } catch (e2) { /* ignore */ }
-      }
-    };
-    loadNoteCount();
-  }, [card.id, isUser]);
-
-  useEffect(() => {
-    const sessionId = card.sourceSessionId || card.source_session_id;
-    if (!isUser || !isSelected || !sessionId) return;
-    let active = true;
-    setUsageLoading(true);
-    getDeliberationUsage(sessionId)
-      .then((result) => { if (active) setUsageSummary(result?.summary || null); })
-      .catch(() => { if (active) setUsageSummary(null); })
-      .finally(() => { if (active) setUsageLoading(false); });
-    return () => { active = false; };
-  }, [card.sourceSessionId, card.source_session_id, isSelected, isUser]);
-
-  // 进入编辑
-  const handleStartEdit = () => {
-    setEditTitle(card.title || '');
-    setEditSummary(card.summary || '');
-    setEditDecision(card.decision || '');
-    setIsEditing(true);
-  };
-
-  // 保存编辑
-  const handleSaveEdit = () => {
-    const updated = { ...card, title: editTitle, summary: editSummary, decision: editDecision };
-    if (onSave) onSave(updated);
-    setIsEditing(false);
-  };
-
-  // 取消编辑
-  const handleCancelEdit = () => {
-    setIsEditing(false);
-  };
-
-  // 分享：调用后端 shareCard
-  const handleShare = useCallback(async () => {
-    if (onShare) {
-      try { await onShare(card.id); } catch (e) { /* 降级：忽略 */ }
-    }
-    setShowShare(false);
-  }, [card.id, onShare]);
-
-  const generateShareImage = useCallback(() => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 800;
-    canvas.height = 1100;
-    const ctx = canvas.getContext('2d');
-
-    ctx.fillStyle = '#FAF6EC';
-    ctx.fillRect(0, 0, 800, 1100);
-
-    ctx.strokeStyle = '#C8A878';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(20, 20, 760, 1060);
-
-    ctx.fillStyle = '#1A1410';
-    ctx.globalAlpha = 0.03;
-    for (let i = 0; i < 100; i++) {
-      ctx.fillRect(Math.random() * 800, Math.random() * 1100, 2 + Math.random() * 3, 2 + Math.random() * 3);
-    }
-    ctx.globalAlpha = 1;
-
-    ctx.font = 'bold 180px "Ma Shan Zheng", serif';
-    ctx.fillStyle = '#1A1410';
-    ctx.textAlign = 'center';
-    ctx.fillText(card.trigram, 400, 280);
-
-    ctx.font = 'bold 48px "Ma Shan Zheng", serif';
-    ctx.fillStyle = '#1A1410';
-    ctx.fillText(card.gua, 400, 360);
-
-    ctx.font = '14px monospace';
-    ctx.fillStyle = '#7A7468';
-    ctx.fillText(`${card.date} · 五行属${card.element}`, 400, 400);
-
-    ctx.fillStyle = '#A8472E';
-    ctx.fillRect(300, 440, 200, 2);
-
-    ctx.font = '28px "Ma Shan Zheng", serif';
-    ctx.fillStyle = '#1A1410';
-    ctx.fillText(card.title, 400, 520);
-
-    ctx.font = '20px "Noto Serif SC", serif';
-    ctx.fillStyle = '#7A7468';
-    const questionLines = card.question.length > 30 ? [card.question.slice(0, 30), card.question.slice(30)] : [card.question];
-    questionLines.forEach((line, i) => ctx.fillText(line, 400, 570 + i * 30));
-
-    ctx.font = 'italic 24px "Ma Shan Zheng", serif';
-    ctx.fillStyle = '#C8A850';
-    ctx.fillText(card.verse, 400, 650);
-
-    ctx.fillStyle = '#A8472E';
-    ctx.fillRect(300, 700, 200, 2);
-
-    ctx.font = '16px monospace';
-    ctx.fillStyle = '#7A7468';
-    ctx.fillText('四柱 · 年 月 日 时', 400, 760);
-
-    ctx.font = 'bold 24px "Ma Shan Zheng", serif';
-    ctx.fillStyle = '#1A1410';
-    const pillars = [card.pillars.year, card.pillars.month, card.pillars.day, card.pillars.hour];
-    pillars.forEach((p, i) => ctx.fillText(p, 180 + i * 160, 820));
-
-    ctx.fillStyle = '#A8472E';
-    ctx.fillRect(300, 860, 200, 2);
-
-    ctx.font = '16px monospace';
-    ctx.fillStyle = '#7A7468';
-    ctx.fillText('智囊之议', 400, 920);
-
-    ctx.font = '18px "Ma Shan Zheng", serif';
-    ctx.fillStyle = '#1A1410';
-    ctx.fillText(card.advisors.join(' · '), 400, 970);
-
-    ctx.fillStyle = '#A8472E';
-    ctx.fillRect(350, 1000, 100, 100);
-    ctx.font = 'bold 48px "Ma Shan Zheng", serif';
-    ctx.fillStyle = '#FAF6EC';
-    ctx.fillText('演', 400, 1065);
-
-    ctx.font = '12px monospace';
-    ctx.fillStyle = '#7A7468';
-    ctx.fillText('演策 · BAGUA ENGINE', 400, 1090);
-
-    const dataUrl = canvas.toDataURL('image/png');
-    const link = document.createElement('a');
-    link.download = `演策-${card.gua}-${card.date}.png`;
-    link.href = dataUrl;
-    link.click();
-  }, [card]);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 30, rotate: -2 }}
-      animate={{ opacity: 1, y: 0, rotate: 0 }}
-      transition={{ delay: index * 0.06, duration: 0.7, ease: EASE }}
-      whileHover={{ y: -6, transition: { duration: 0.4, ease: EASE } }}
-      className="relative overflow-hidden cursor-pointer group"
-      style={{
-        borderRadius: 18,
-        background: isUser
-          ? 'radial-gradient(circle at 50% -10%, rgba(239,222,168,.17), transparent 35%), linear-gradient(155deg, rgba(18,22,22,.98), rgba(5,8,9,.98))'
-          : '#0E0A06',
-        border: `1px solid ${isSelected ? '#F3D985' : (isUser ? 'rgba(243,217,133,.38)' : card.color + '60')}`,
-        boxShadow: isSelected 
-          ? '0 0 0 1px rgba(243,217,133,.46), 0 0 42px rgba(222,190,98,.2)'
-          : (isUser ? '0 18px 55px rgba(0,0,0,.34), inset 0 1px rgba(255,255,255,.05)' : `0 4px 20px ${card.color}30`),
-      }}
-    >
-      {/* 选中标记 */}
-      {isSelected && (
-        <motion.div
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          className="absolute top-3 right-3 w-6 h-6 flex items-center justify-center"
-          style={{
-            backgroundColor: T.accent,
-            borderRadius: '50%',
-            zIndex: 10,
-          }}
-        >
-          <span className="text-[10px] font-bold" style={{ color: T.paperLight }}>✓</span>
-        </motion.div>
-      )}
-
-      {/* 稀有度标记 */}
-      <div
-        className="absolute top-3 left-3 px-2 py-0.5 text-[8px] font-mono font-bold tracking-wider"
-        style={{
-          backgroundColor: rarityConfig.color + '20',
-          border: `1px solid ${rarityConfig.border}`,
-          color: rarityConfig.color,
-          borderRadius: 2,
-          zIndex: 10,
-        }}
-      >
-        {rarityConfig.label}
-      </div>
-
-      {/* 卡顶: 卦象 + 标题 + 日期 */}
-      <div className="relative p-5 pb-4" style={{
-        background: isUser
-          ? 'linear-gradient(180deg, rgba(243,217,133,.09) 0%, rgba(255,255,255,.018) 100%)'
-          : `linear-gradient(180deg, ${card.color}15 0%, transparent 100%)`,
-      }}>
-        <div style={{ color: cardText, '--decision-card-accent': cardAccent }}>
-          <DecisionCardIdentity card={{ ...card, title: '' }} />
-        </div>
-
-        {/* 决策名（编辑模式下变为 input） */}
-        {isEditing ? (
-          <input
-            className="text-[12px] font-medium w-full px-2 py-1"
-            style={{ color: T.inkSoft, border: `1px solid ${T.accent}`, borderRadius: 2, outline: 'none' }}
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-          />
-        ) : (
-          <div className="text-[12px] font-medium" style={{ color: cardSoftText }}>
-            {card.title}
-          </div>
-        )}
-      </div>
-
-      {/* 卡中: 问题 + 卦辞 */}
-      <div className="px-5 py-3" style={{
-        borderTop: `1px solid ${cardLine}`,
-        borderBottom: `1px solid ${cardLine}`,
-      }}>
-        <div className="text-[10px] font-mono tracking-wider mb-1" style={{ color: T.muted }}>
-          所问
-        </div>
-        <div className="text-[12px] leading-relaxed mb-3" style={{ color: cardSoftText }}>
-          {card.question}
-        </div>
-
-        <div className="text-[10px] font-mono tracking-wider mb-1" style={{ color: T.muted }}>
-          卦辞
-        </div>
-        <div
-          className="text-[11px] font-serif leading-relaxed italic"
-          style={{ color: cardText, opacity: 0.92 }}
-        >
-          {card.verse}
-        </div>
-      </div>
-
-      {/* 卡底: 四柱 + 智囊 */}
-      <div className="px-5 py-3">
-        <div className="text-[10px] font-mono tracking-wider mb-2" style={{ color: T.muted }}>
-          四柱
-        </div>
-        <div className="grid grid-cols-4 gap-1 mb-3">
-          {['年', '月', '日', '时'].map((label, i) => {
-            const key = ['year', 'month', 'day', 'hour'][i];
-            return (
-              <div key={key} className="text-center">
-                <div className="text-[9px] font-mono" style={{ color: T.muted }}>{label}柱</div>
-                <div
-                  className="text-[12px] font-serif font-semibold mt-0.5"
-                  style={{ color: cardText }}
-                >
-                  {card.pillars[key]}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="text-[10px] font-mono tracking-wider mb-1" style={{ color: T.muted }}>
-          智囊之议
-        </div>
-        <div className="flex flex-wrap gap-1 mb-3">
-          {card.advisors.map((a) => (
-            <span
-              key={a}
-              className="text-[9px] font-mono px-1.5 py-0.5"
-              style={{
-                color: isUser ? '#E6D59A' : card.color,
-                border: `1px solid ${cardLine}`,
-                borderRadius: 999,
-                backgroundColor: cardPanel,
-              }}
-            >
-              {a}
-            </span>
-          ))}
-        </div>
-
-        {(card.powerfulQuestion || card.framework) && (
-          <div
-            className="mb-3 p-2.5"
-            style={{
-              borderRadius: 3,
-              border: `1px solid ${cardLine}`,
-              backgroundColor: cardPanel,
-            }}
-          >
-            {card.powerfulQuestion && (
-              <div className="mb-1.5">
-                <div className="text-[9px] font-mono tracking-wider mb-0.5" style={{ color: cardAccent }}>
-                  一句反问
-                </div>
-                <div
-                  className="text-[11px] font-serif leading-relaxed"
-                  style={{ color: cardText, fontStyle: 'italic' }}
-                >
-                  {card.powerfulQuestion}
-                </div>
-              </div>
-            )}
-            {card.framework && (
-              <div>
-                <div className="text-[9px] font-mono tracking-wider mb-0.5" style={{ color: cardAccent }}>
-                  决策框架
-                </div>
-                <div
-                  className="text-[10px] font-serif leading-relaxed"
-                  style={{ color: cardSoftText, opacity: 0.9 }}
-                >
-                  {card.framework}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {isUser && isSelected && (card.sourceSessionId || card.source_session_id) && (
-          <div className="mb-3 p-2.5" style={{ borderRadius: 3, border: `1px solid ${cardLine}`, backgroundColor: cardPanel }}>
-            <div className="text-[9px] font-mono tracking-wider mb-1" style={{ color: cardAccent }}>本局模型用量</div>
-            {usageLoading ? (
-              <div className="text-[10px]" style={{ color: cardSoftText }}>正在核对供应商用量…</div>
-            ) : usageSummary ? (() => {
-              const usage = decisionUsagePresentation(usageSummary);
-              return usage.measured ? (
-                <div className="text-[10px] font-mono leading-relaxed" style={{ color: cardSoftText }}>
-                  <strong style={{ color: cardText }}>{usage.total} tokens</strong>
-                  <span> · 输入 {usage.input} · 输出 {usage.output}</span><br />
-                  <span>{usage.calls} · {usage.cost}</span>
-                </div>
-              ) : (
-                <div className="text-[10px]" style={{ color: cardSoftText }}>供应商未返回精确 usage，未计入正式实耗。</div>
-              );
-            })() : (
-              <div className="text-[10px]" style={{ color: cardSoftText }}>此命签生成于用量账本启用前，暂无可核对明细。</div>
-            )}
-          </div>
-        )}
-
-        <div className="text-[10px] font-mono tracking-wider mb-1" style={{ color: T.muted }}>
-          终局（个人感悟）
-        </div>
-        {isEditing ? (
-          <textarea
-            className="text-[12px] font-serif leading-relaxed w-full px-2 py-1"
-            style={{ color: T.ink, border: `1px solid ${T.accent}`, borderRadius: 2, outline: 'none', minHeight: '60px', resize: 'vertical' }}
-            value={editSummary}
-            onChange={(e) => setEditSummary(e.target.value)}
-          />
-        ) : (
-          <div
-            className="text-[12px] font-serif leading-relaxed"
-            style={{ color: cardText }}
-          >
-            {card.summary}
-          </div>
-        )}
-      </div>
-
-      {/* 卡底角标: 决策名 + 操作按钮 */}
-      <div
-        className="px-5 py-2 flex items-center justify-between flex-wrap gap-2"
-        style={{
-          backgroundColor: isUser ? 'rgba(243,217,133,.045)' : `${card.color}20`,
-          borderTop: `1px solid ${cardLine}`,
-        }}
-      >
-        <span className="text-[9px] font-mono" style={{ color: T.muted }}>
-          {isUser ? '我之推演' : '示例推演'}
-        </span>
-        <div className="flex items-center gap-2 flex-wrap">
-          {isEditing ? (
-            <>
-              <input
-                className="text-[11px] font-serif font-semibold px-2 py-0.5"
-                style={{ color: T.accent, border: `1px solid ${T.accent}40`, borderRadius: 2, outline: 'none', width: '110px' }}
-                value={editDecision}
-                onChange={(e) => setEditDecision(e.target.value)}
-                placeholder="承诺文字"
-              />
-              <motion.button
-                onClick={(e) => { e.stopPropagation(); handleSaveEdit(); }}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className="text-[10px] font-mono px-2 py-0.5"
-                style={{ color: T.paperLight, border: `1px solid ${T.accent}`, borderRadius: 2, backgroundColor: T.accent, cursor: 'pointer' }}
-              >
-                保存
-              </motion.button>
-              <motion.button
-                onClick={(e) => { e.stopPropagation(); handleCancelEdit(); }}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className="text-[10px] font-mono px-2 py-0.5"
-                style={{ color: T.muted, border: `1px solid ${T.border}`, borderRadius: 2, backgroundColor: 'transparent', cursor: 'pointer' }}
-              >
-                取消
-              </motion.button>
-            </>
-          ) : (
-            <>
-              <span
-                className="text-[11px] font-serif font-semibold"
-                style={{ color: cardAccent }}
-              >
-                择 {card.decision} →
-              </span>
-              {isUser && (
-                <>
-                  <select
-                    value={followUpDays}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => setFollowUpDays(Number(e.target.value))}
-                    aria-label="选择回访时间"
-                    className="text-[10px] font-mono px-2 min-h-11"
-                    style={{ color: cardText, border: `1px solid ${cardLine}`, borderRadius: 6, backgroundColor: '#101313' }}
-                  >
-                    {[3, 7, 30, 90].map((days) => <option key={days} value={days}>{days}天</option>)}
-                  </select>
-                  <motion.button
-                    onClick={(e) => { e.stopPropagation(); onScheduleFollowUp?.(card, followUpDays); }}
-                    whileTap={{ scale: 0.98 }}
-                    className="text-[10px] font-mono px-3 min-h-11"
-                    style={{ color: T.paperLight, border: `1px solid ${T.accent}`, borderRadius: 2, backgroundColor: T.accent, cursor: 'pointer' }}
-                  >
-                    设回访
-                  </motion.button>
-                  <motion.button
-                    onClick={(e) => { e.stopPropagation(); if (onOpenNotes) onOpenNotes(card); }}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="text-[10px] font-mono px-2 py-0.5 relative"
-                    style={{ color: T.gold, border: `1px solid ${T.gold}40`, borderRadius: 2, backgroundColor: `${T.gold}08`, cursor: 'pointer' }}
-                  >
-                    📝 笔记
-                    {noteCount > 0 && (
-                      <motion.span
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center"
-                        style={{
-                          backgroundColor: T.accent,
-                          color: T.paperLight,
-                          borderRadius: '50%',
-                          fontSize: '9px',
-                          fontWeight: 'bold',
-                          border: `1px solid ${T.paperLight}`,
-                        }}
-                      >
-                        {noteCount > 9 ? '9+' : noteCount}
-                      </motion.span>
-                    )}
-                  </motion.button>
-                  <motion.button
-                    onClick={(e) => { e.stopPropagation(); handleStartEdit(); }}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="text-[10px] font-mono px-2 py-0.5"
-                    style={{ color: T.ink, border: `1px solid ${T.ink}40`, borderRadius: 2, backgroundColor: `${T.ink}08`, cursor: 'pointer' }}
-                  >
-                    ✎ 编辑
-                  </motion.button>
-                  {(card.yanSummary || (card.agentNotes && card.agentNotes.length > 0)) && (
-                    <motion.button
-                      onClick={(e) => { e.stopPropagation(); if (onReplay) onReplay(card); }}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className="text-[10px] font-mono px-2 py-0.5"
-                      style={{ color: T.gold, border: `1px solid ${T.gold}60`, borderRadius: 2, backgroundColor: `${T.gold}10`, cursor: 'pointer' }}
-                      title="回看完整推演路径"
-                    >
-                      ☳ 回看
-                    </motion.button>
-                  )}
-                  <motion.button
-                    onClick={(e) => { e.stopPropagation(); setShowShare(true); }}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="text-[10px] font-mono px-2 py-0.5"
-                    style={{ color: T.accent, border: `1px solid ${T.accent}40`, borderRadius: 2, backgroundColor: `${T.accent}08`, cursor: 'pointer' }}
-                  >
-                    分享
-                  </motion.button>
-                  <motion.button
-                    onClick={(e) => { e.stopPropagation(); if (onDelete) onDelete(card.id); }}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="text-[10px] font-mono px-2 py-0.5"
-                    style={{ color: '#A84848', border: `1px solid #A8484840`, borderRadius: 2, backgroundColor: `#A8484808`, cursor: 'pointer' }}
-                  >
-                    删除
-                  </motion.button>
-                </>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* 分享弹窗 */}
-      {showShare && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="absolute inset-0 z-10 flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(8,8,12,0.92)' }}
-        >
-          <motion.div
-            initial={{ scale: 0.95, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="w-full max-w-sm"
-          >
-            <div className="text-center mb-4">
-              <div className="text-[12px] font-mono" style={{ color: T.goldLight }}>生成分享图</div>
-            </div>
-            <div className="flex gap-2">
-              <motion.button
-                whileHover={{ y: -1 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => { generateShareImage(); handleShare(); }}
-                className="flex-1 py-2.5 text-[12px] font-medium"
-                style={{
-                  backgroundColor: T.accent,
-                  color: T.paperLight,
-                  border: 'none',
-                  borderRadius: 3,
-                  cursor: 'pointer',
-                }}
-              >
-                保存图片
-              </motion.button>
-              <motion.button
-                whileHover={{ y: -1 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setShowShare(false)}
-                className="px-4 py-2.5 text-[12px] font-medium"
-                style={{
-                  backgroundColor: 'transparent',
-                  color: T.muted,
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 3,
-                  cursor: 'pointer',
-                }}
-              >
-                取消
-              </motion.button>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </motion.div>
-  );
-}
-
-function FatedCard({ card: rawCard, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay, onScheduleFollowUp }) {
+function FatedCard({ card: rawCard, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay, onOpenArtwork, onScheduleFollowUp }) {
   const card = useMemo(() => normalizeDecisionCard(rawCard), [rawCard]);
   const [showTools, setShowTools] = useState(false);
   const [followUpDays, setFollowUpDays] = useState(7);
@@ -757,6 +167,7 @@ function FatedCard({ card: rawCard, index, isUser, isSelected = false, onSave, o
             {isUser && <button type="button" onClick={() => setIsEditing(true)}>编辑题名</button>}
             {isUser && <button type="button" onClick={() => onOpenNotes?.(card)}>笔记</button>}
             {(card.replay.events.length > 0 || card.yanSummary || card.agentNotes?.length > 0) && <button type="button" onClick={() => onReplay?.(card)}>完整过程</button>}
+            {isUser && <button type="button" onClick={() => onOpenArtwork?.(card)}>专属画境</button>}
             <button type="button" onClick={generateShareImage}>保存分享图</button>
             {isUser && <select value={followUpDays} onChange={(event) => setFollowUpDays(Number(event.target.value))} aria-label="回访时间">{[3, 7, 30, 90].map((days) => <option key={days} value={days}>{days}天回访</option>)}</select>}
             {isUser && <button type="button" onClick={() => onScheduleFollowUp?.(card, followUpDays)}>设回访</button>}
@@ -780,11 +191,11 @@ export default function Collection() {
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [achievements, setAchievements] = useState({});
   const [selectedCards, setSelectedCards] = useState([]);
-  const [showCompare, setShowCompare] = useState(false);
   const [noteModalCard, setNoteModalCard] = useState(null);
   const [showNoteModal, setShowNoteModal] = useState(false);
   // 推演路径回看
   const [replayCard, setReplayCard] = useState(null);
+  const [artworkCard, setArtworkCard] = useState(null);
   // 决策回顾闭环 - 30天到期回访
   const [followUps, setFollowUps] = useState([]);
   const [completedFollowUps, setCompletedFollowUps] = useState([]);
@@ -810,6 +221,13 @@ export default function Collection() {
     setNoteModalCard(card);
     setShowNoteModal(true);
   }, []);
+
+  const handleArtworkSelected = useCallback((version) => {
+    if (!artworkCard) return;
+    const artwork = version ? { selectedVersion: version, url: version.url, source: version.source || 'generated' } : { source: 'archive' };
+    setUserCards((current) => current.map((card) => card.id === artworkCard.id ? { ...card, artwork } : card));
+    setArtworkCard((current) => current ? { ...current, artwork } : current);
+  }, [artworkCard]);
 
   const handleCloseNotes = useCallback(() => {
     setShowNoteModal(false);
@@ -1300,6 +718,7 @@ export default function Collection() {
                   onShare={handleShareCard}
                   onOpenNotes={handleOpenNotes}
                   onReplay={handleOpenReplay}
+                  onOpenArtwork={setArtworkCard}
                   onScheduleFollowUp={handleScheduleFollowUp}
                 />
               </motion.div>
@@ -1382,10 +801,8 @@ export default function Collection() {
             <Link to="/legal" className="text-[10px] hover:underline" style={{ color: T.muted }}>用户协议</Link>
             <span style={{ color: T.border }}>|</span>
             <Link to="/privacy" className="text-[10px] hover:underline" style={{ color: T.muted }}>隐私政策</Link>
-            <span style={{ color: T.border }}>|</span>
-            <span className="text-[10px]" style={{ color: T.muted, opacity: 0.6 }}>京ICP备XXXXXXXX号</span>
           </div>
-          <span className="text-[10px] font-mono" style={{ color: T.muted }}>MIT License / Open Source</span>
+          <span className="text-[10px] font-mono" style={{ color: T.muted }}>演策 · 决策辅助工具</span>
         </div>
       </footer>
 
@@ -1395,6 +812,8 @@ export default function Collection() {
         isOpen={showNoteModal}
         onClose={handleCloseNotes}
       />
+
+      {artworkCard && <ArtworkStudio card={normalizeDecisionCard(artworkCard)} onClose={() => setArtworkCard(null)} onArtworkSelected={handleArtworkSelected} />}
 
       {/* 推演路径回看弹窗 */}
       <AnimatePresence>

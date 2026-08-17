@@ -16,7 +16,7 @@ const T = {
 const NAV_ITEMS = [
   { label: '首页', path: '/' },
   { label: '每日运势', path: '/daily' },
-  { label: '剧本', path: '/scenarios' },
+  { label: '预设推演', path: '/scenarios' },
   { label: '沙盘', path: '/sandbox' },
   { label: '卡牌', path: '/cards' },
   { label: '日历', path: '/calendar' },

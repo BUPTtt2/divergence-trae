@@ -146,8 +146,6 @@ export function useDeliberationFlow(initialQuestion = "") {
   const [oracleResult, setOracleResult] = useState(null);
   const [debateRound, setDebateRound] = useState(1);
   const [debateConvergence, setDebateConvergence] = useState(null);
-  const [showAgentErrorModal, setShowAgentErrorModal] = useState(false);
-  const [agentErrors, setAgentErrors] = useState({});
   const [agentCallResults, setAgentCallResults] = useState({});
   const [toolCallState, setToolCallState] = useState({
     agentId: null, tools: [], currentTool: null, results: [], status: 'idle',
@@ -661,8 +659,6 @@ export function useDeliberationFlow(initialQuestion = "") {
     setOracleThrowing(false);
     setOracleResult(null);
     setFateContent(null);
-    setAgentErrors({});
-    setShowAgentErrorModal(false);
     setAgentCallResults({});
     setToolCallState({ agentId: null, tools: [], currentTool: null, results: [], status: 'idle' });
     setYanConversationId(null);
@@ -1394,8 +1390,6 @@ export function useDeliberationFlow(initialQuestion = "") {
     debateConvergence,
     debateBlackboard,
     debateMentionQueue,
-    showAgentErrorModal,
-    agentErrors,
     agentCallResults,
     toolCallState,
     fateContent,
@@ -1428,8 +1422,6 @@ export function useDeliberationFlow(initialQuestion = "") {
     setDebateConvergence,
     setDebateBlackboard,
     setDebateMentionQueue,
-    setShowAgentErrorModal,
-    setAgentErrors,
     setAgentCallResults,
     setToolCallState,
     setFateContent,

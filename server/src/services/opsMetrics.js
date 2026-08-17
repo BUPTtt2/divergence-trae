@@ -38,7 +38,7 @@ export function projectRecentSessions(rows = [], limit = 50) {
       current.llmRequests += 1;
       if (properties.success === false) current.llmFailures += 1;
     }
-    if (row.event_name === 'artwork_request_completed') current.artworkStatus = properties.success ? 'success' : 'failed';
+    if (['artwork_request_completed', 'artwork_job_completed'].includes(row.event_name)) current.artworkStatus = properties.success ? 'success' : 'failed';
     if (['client_error', 'error'].includes(row.event_name)) current.errorCode = String(properties.errorCode || 'CLIENT_ERROR').slice(0, 80);
     sessions.set(sessionId, current);
   }

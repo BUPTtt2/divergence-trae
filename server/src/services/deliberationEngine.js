@@ -616,7 +616,7 @@ export async function start(question, userId, options = {}) {
 
 /**
  * 最后一道兜底：当 planner.plan 全部失败（超时/LLM挂），给一个合法的响应
- * 确保前端能得到 sessionId + 启发式追问 + 4 个智囊，流程继续
+ * 确保前端能得到 sessionId + 启发式追问 + 领域相关智囊，流程继续
  */
 function _fallbackPlanResult(session, errorMsg = '') {
   const questionContext = session.question_context || session.questionContext || session.question || '';
@@ -640,7 +640,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
 
   // 规则降级也按题目动态组阁，避免模型不可用时永远落到同一组四人。
   const fallbackCouncilRoutes = [
-    { match: /(吃饭|进食|饿|嘴馋|减脂|减肥|体重|运动|睡眠|身体|健康|疾病|就医)/, ids: ['jiankang', 'xinhe', 'jingyuan', 'zhenxing'] },
+    { match: /(吃饭|进食|饿|嘴馋|减脂|减肥|体重|运动|睡眠|身体|健康|疾病|就医)/, ids: ['jiankang', 'xinhe', 'jingyuan'] },
     { match: /(旅行|旅游|出行|机票|酒店|住宿|比赛|演唱会|度假|请假)/, ids: ['fengyan', 'qiangu', 'yuntu', 'zhenxing'] },
     { match: /(offer|工作|跳槽|创业|辞职|转行|升职|职业|实习|公司)/, ids: ['luxiang', 'fengyan', 'qiangu', 'zhenxing'] },
     { match: /(投资|股票|基金|理财|贷款|汇率|借钱|还钱|预算|现金流)/, ids: ['qiangu', 'fengyan', 'jingyuan', 'zhenxing'] },
@@ -674,7 +674,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
   }).length;
   const shouldClarify = round < MAX_ROUND && answeredCount < MAX_INTAKE_QUESTIONS;
 
-  // 规则降级仍一次给出一组互补问题，避免每次只问一项造成重复往返。
+  // Planner 不可用时只保留一个最关键追问，避免无法自适应的模板一次塞给用户多题。
   const askUser = [];
   if (shouldClarify && /(租房|买房|换城市|城市|房租|房源)/.test(q)) {
     askUser.push({ question: '能接受的月预算大概是多少？', reason: '预算决定筛选范围', source: 'P0-FB' });
@@ -693,10 +693,7 @@ function _fallbackPlanResult(session, errorMsg = '') {
     askUser.push({ question: '这件事的时间限制是什么？多久之内必须决定？', reason: '时间决定信息获取深度', source: 'P0-FB' });
     askUser.push({ question: '最坏情况是什么？你能接受吗？', reason: '先判底线再谈收益', source: 'P0-FB' });
   }
-  askUser.splice(Math.max(0, Math.min(
-    MAX_INTAKE_QUESTIONS - answeredCount,
-    Math.min(3, Math.max(2, depthRoute.maxQuestions || 3)),
-  )));
+  askUser.splice(Math.max(0, Math.min(MAX_INTAKE_QUESTIONS - answeredCount, 1)));
 
   session.state = shouldClarify ? STATES.WAIT : STATES.READY;
   session.round = round;

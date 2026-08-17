@@ -5,10 +5,26 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { requireUser } from '../middleware/auth.js';
 import { requirePrincipal } from '../middleware/principal.js';
 import { normalizeCardReplay, replayColumns, requireAppendOnlyReplay } from '../services/cardReplayService.js';
+import { createArtworkRepository } from '../services/artworkRepository.js';
+import { runArtworkJob, selectArtworkVersion, serializeArtworkJob, serializeArtworkVersion } from '../services/artworkJobService.js';
+import { generateDestinyArtwork } from '../services/destinyArtworkService.js';
 
 const router = Router();
 
 const TABLE = 'cards';
+const artworkRepository = createArtworkRepository();
+
+async function findOwnedCard(cardId, userId) {
+  const result = await query({ table: TABLE, action: 'select', filter: { id: cardId, user_id: userId }, queryOptions: { limit: 1 } });
+  return result.rows[0] || null;
+}
+
+function artworkErrorStatus(code) {
+  if (code === 'ARTWORK_CARD_NOT_FOUND' || code === 'ARTWORK_VERSION_NOT_FOUND') return 404;
+  if (code === 'ARTWORK_CREDIT_REQUIRED') return 402;
+  if (code === 'ARTWORK_STYLE_INVALID' || code === 'ARTWORK_IDEMPOTENCY_REQUIRED') return 400;
+  return 503;
+}
 
 // 输入长度限制
 const MAX_LEN = {
@@ -141,6 +157,87 @@ router.post(
 
     res.status(201).json({ card: result.rows[0] });
   })
+);
+
+router.post(
+  '/:id/artwork-jobs',
+  requireUser,
+  asyncHandler(async (req, res) => {
+    const card = await findOwnedCard(req.params.id, req.userId);
+    if (!card) return res.status(404).json({ error: '命牌不存在' });
+    const idempotencyKey = String(req.body?.idempotencyKey || '').trim().slice(0, 120);
+    try {
+      const result = await runArtworkJob({
+        card,
+        userId: req.userId,
+        styleId: req.body?.styleId,
+        idempotencyKey,
+        // 付费权益只能由服务端订单/订阅状态注入，绝不信任客户端请求体。
+        entitlement: false,
+      }, { repository: artworkRepository, generator: generateDestinyArtwork });
+      res.status(result.idempotentReplay ? 200 : 201).json({ ...result, idempotencyKey });
+    } catch (error) {
+      res.status(artworkErrorStatus(error.code)).json({ error: error.message, errorCode: error.code || 'ARTWORK_REQUEST_FAILED' });
+    }
+  }),
+);
+
+router.get(
+  '/:id/artwork-jobs/:jobId',
+  requireUser,
+  asyncHandler(async (req, res) => {
+    const card = await findOwnedCard(req.params.id, req.userId);
+    if (!card) return res.status(404).json({ error: '命牌不存在' });
+    const job = await artworkRepository.findJobById(req.params.jobId, req.params.id, req.userId);
+    if (!job) return res.status(404).json({ error: '画境任务不存在' });
+    const versions = await artworkRepository.listVersions(req.params.id, req.userId);
+    const version = versions.find((item) => item.id === job.version_id || item.job_id === job.id) || null;
+    res.json({ job: serializeArtworkJob(job), version: serializeArtworkVersion(version) });
+  }),
+);
+
+router.get(
+  '/:id/artwork-versions',
+  requireUser,
+  asyncHandler(async (req, res) => {
+    const card = await findOwnedCard(req.params.id, req.userId);
+    if (!card) return res.status(404).json({ error: '命牌不存在' });
+    const versions = await artworkRepository.listVersions(req.params.id, req.userId);
+    res.json({ versions: versions.map(serializeArtworkVersion) });
+  }),
+);
+
+router.post(
+  '/:id/artwork-versions/:versionId/select',
+  requireUser,
+  asyncHandler(async (req, res) => {
+    const card = await findOwnedCard(req.params.id, req.userId);
+    if (!card) return res.status(404).json({ error: '命牌不存在' });
+    try {
+      const version = await selectArtworkVersion({ cardId: req.params.id, versionId: req.params.versionId, userId: req.userId }, { repository: artworkRepository });
+      await query({
+        table: TABLE,
+        action: 'update',
+        id: card.id,
+        data: { artwork: JSON.stringify({ selectedVersion: version, url: version.url, source: version.source || 'generated', model: version.model || '', size: version.size || '' }) },
+      });
+      res.json({ version });
+    } catch (error) {
+      res.status(artworkErrorStatus(error.code)).json({ error: error.message, errorCode: error.code || 'ARTWORK_SELECTION_FAILED' });
+    }
+  }),
+);
+
+router.post(
+  '/:id/artwork-system/select',
+  requireUser,
+  asyncHandler(async (req, res) => {
+    const card = await findOwnedCard(req.params.id, req.userId);
+    if (!card) return res.status(404).json({ error: '命牌不存在' });
+    await artworkRepository.selectSystem(card.id, req.userId);
+    await query({ table: TABLE, action: 'update', id: card.id, data: { artwork: JSON.stringify({ source: 'archive' }) } });
+    res.json({ artwork: { source: 'system' } });
+  }),
 );
 
 /**

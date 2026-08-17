@@ -191,55 +191,6 @@ function FloatingSeal({ chars = '演', x = '90%', y = '20%', rotate = -8, size =
 }
 
 /* ------------------------------------------------------------------
-   Counter
-   ------------------------------------------------------------------ */
-function Counter({ value, suffix = '', label, trend }) {
-  const ref = useRef(null);
-  const [inView, setInView] = useState(false);
-  const reduce = useReducedMotion();
-  const [display, setDisplay] = useState(0);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(([e]) => setInView(e.isIntersecting), { threshold: 0.4 });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (reduce || !inView) return;
-    let raf;
-    const dur = 1600;
-    const start = performance.now();
-    const tick = (now) => {
-      const p = Math.min((now - start) / dur, 1);
-      const eased = 1 - Math.pow(1 - p, 3);
-      setDisplay(Math.floor(eased * value));
-      if (p < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [inView, value, reduce]);
-
-  return (
-    <div ref={ref} className="flex flex-col items-start">
-      <div className="flex items-baseline gap-2">
-        <span className="text-3xl md:text-4xl font-semibold tabular-nums tracking-tight font-serif" style={{ color: T.ink, fontFamily: F.regular }}>
-          {reduce ? value.toLocaleString() : display.toLocaleString()}{suffix}
-        </span>
-        {trend && (
-          <span className="text-[10px] font-mono px-1.5 py-0.5" style={{ color: T.accent, backgroundColor: `${T.accent}14`, borderRadius: 2 }}>
-            {trend}
-          </span>
-        )}
-      </div>
-      <span className="text-[11px] font-mono mt-1" style={{ color: T.muted }}>{label}</span>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------
    滚动揭示大标题 (艺术字)
    ------------------------------------------------------------------ */
 function CalligraphyHeading({ lines, accentIndex, kicker }) {
@@ -1208,11 +1159,11 @@ export default function Landing() {
         style={{ backgroundColor: T.ink }}
       >
         <span className="text-[10px] font-mono tracking-wide">
-          <span style={{ color: T.accentBright }}>开源 / MIT</span>
+          <span style={{ color: T.accentBright }}>匿名可直接体验</span>
           <span className="mx-3" style={{ color: '#555' }}>|</span>
           <span style={{ color: '#999' }}>无需登录即可体验 · 登录后跨设备同步</span>
           <span className="mx-3" style={{ color: '#555' }}>|</span>
-          <button onClick={() => navigate('/scenarios')} className="hover:underline" style={{ color: T.accentBright }}>查看剧本 →</button>
+          <button onClick={() => navigate('/scenarios')} className="hover:underline" style={{ color: T.accentBright }}>查看预设推演 →</button>
         </span>
       </motion.div>
 
@@ -1305,7 +1256,7 @@ export default function Landing() {
                   className="px-6 py-3 text-[12px] font-medium border"
                   style={{ borderColor: T.ink, color: T.ink, backgroundColor: 'transparent', borderRadius: 3 }}
                 >
-                  浏览剧本
+                  浏览预设推演
                 </motion.button>
                 <motion.button
                   whileHover={{ y: -2 }}
@@ -1498,7 +1449,7 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* ── 剧本 (bento) ── */}
+      {/* ── 预设推演 (bento) ── */}
       <section className="py-24 md:py-32 px-6">
         <div className="max-w-[1200px] mx-auto">
           <motion.div
@@ -1514,7 +1465,7 @@ export default function Landing() {
                 四局精选，<span style={{ color: T.accent }}>立等开演</span>
               </h2>
             </div>
-            <span className="text-[10px] font-mono" style={{ color: T.muted }}>1 / 4 已启</span>
+            <span className="text-[10px] font-mono" style={{ color: T.muted }}>{SCENARIOS.length} 个预设均可体验</span>
           </motion.div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1539,7 +1490,7 @@ export default function Landing() {
               走进<span style={{ color: T.accentBright }}>推演台</span>
             </h2>
             <p className="text-[13px] leading-relaxed max-w-[420px] mb-8" style={{ color: '#999' }}>
-              「演」依你的问题召唤智囊实时辩论。每条发言永久留存，可随时回看复盘。投币立卦让天光参与决策。
+              「演」依你的问题召唤智囊实时辩论。完整问答会随命牌保存；匿名用户保存在本机，正式账号可跨设备同步。
             </p>
             <div className="flex items-center gap-6">
               <div>
@@ -1564,13 +1515,15 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* ── 数据条 ── */}
+      {/* ── 可核对能力条：不展示未经真实统计支持的增长数字 ── */}
       <section className="py-14 px-6 border-b" style={{ borderColor: T.border }}>
         <div className="max-w-[1200px] mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-12">
-          <Counter value={12552} label="累计完成推演" trend="+2.4%" />
-          <Counter value={4} label="在线剧本数" />
-          <Counter value={38708} label="节省纠结时间（分）" trend="+18%" />
-          <Counter value={12507} label="社区用户" trend="+38" />
+          {[
+            ['匿名体验', '无需注册即可开局'],
+            ['完整回放', '保留提问、追问与智囊发言'],
+            ['命牌导出', '生成真实 PNG 文件'],
+            ['运营可观测', '只记录指标，不记录问题正文'],
+          ].map(([title, detail]) => <div key={title}><strong className="block text-lg" style={{ color: T.ink }}>{title}</strong><span className="text-[11px] leading-relaxed" style={{ color: T.muted }}>{detail}</span></div>)}
         </div>
       </section>
 

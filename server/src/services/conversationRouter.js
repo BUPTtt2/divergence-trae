@@ -12,6 +12,8 @@ const LOOKUP_PATTERNS = [
 const DEEP_SIGNAL_PATTERNS = [
   /(考研|读研|租房|买房|转正|辞职|离职|offer|创业|投资|留学|结婚|分手|请假|休假|年假|病假|事假|调休)/i,
   /(预算|通勤|合同|长期|风险|收入|期限|责任|贷款)/,
+  /(工作|职业|跳槽|新岗位|新工作)/,
+  /(搬家|异地|迁居|跨城)/,
   /(女朋友|男朋友|伴侣|父母|孩子|合伙人|老板)/,
   /(不确定|纠结|两难|权衡|选择|决定)/,
 ];
@@ -25,9 +27,9 @@ function inferDomain(question) {
   if (BEHAVIOR_CHANGE_PATTERN.test(question)) return 'behavior_change';
   if (WORK_LEAVE_PATTERN.test(question)) return 'workplace_leave';
   if (/考研|读研|留学|升学|考试|学习/.test(question)) return 'education';
+  if (/工作|职业|offer|跳槽|辞职|创业|面试|实习|转正|升职/i.test(question)) return 'career';
   if (/租房|买房|搬家|通勤|房租/.test(question)) return 'housing';
   if (/旅行|旅游|景点|航班|酒店/.test(question)) return 'travel';
-  if (/工作|职业|offer|跳槽|辞职|创业|面试|实习|转正|升职/i.test(question)) return 'career';
   if (/投资|股票|基金|贷款|借贷|现金流/.test(question)) return 'finance';
   if (/伴侣|女朋友|男朋友|分手|结婚|关系/.test(question)) return 'relationship';
   if (/健康|身体|生病|就医|睡眠|疼痛/.test(question)) return 'health';

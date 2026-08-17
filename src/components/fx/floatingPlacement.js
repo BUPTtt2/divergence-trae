@@ -7,10 +7,10 @@ export function chooseHorizontalPlacement({ anchorX, viewportWidth, panelWidth, 
   return leftSpace > rightSpace ? 'left' : 'right';
 }
 
-export function clampFloatingPosition({ position, viewportWidth, viewportHeight, anchorSize = 70 }) {
+export function clampFloatingPosition({ position, viewportWidth, viewportHeight, anchorSize = 70, bottomClearance = 0 }) {
   return {
     x: Math.max(0, Math.min(viewportWidth - anchorSize, position.x)),
-    y: Math.max(0, Math.min(viewportHeight - anchorSize, position.y)),
+    y: Math.max(0, Math.min(viewportHeight - anchorSize - bottomClearance, position.y)),
   };
 }
 

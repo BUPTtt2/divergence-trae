@@ -20,3 +20,9 @@ test('saved floating position is clamped when the next viewport is smaller', () 
     viewportHeight: 844,
   }), { x: 320, y: 700 });
 });
+
+test('mobile can reserve the bottom action area for primary controls', () => {
+  assert.deepEqual(clampFloatingPosition({
+    position: { x: 320, y: 700 }, viewportWidth: 390, viewportHeight: 844, bottomClearance: 260,
+  }), { x: 320, y: 514 });
+});

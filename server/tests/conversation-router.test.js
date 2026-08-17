@@ -28,7 +28,8 @@ test('study choice enters deliberation while an everyday meal asks only relevant
   assert.equal(study.requiresSession, true);
   assert.equal(meal.requiresSession, false);
   assert.match(meal.answer, /饥饿|上一餐|身体目标/);
-  assert.deepEqual(meal.quickChoices, ['饥饿程度', '上一餐时间', '身体目标']);
+  assert.deepEqual(meal.quickChoices.map((choice) => choice.label), ['饥饿程度', '上一餐时间', '身体目标']);
+  assert.ok(meal.quickChoices.every((choice) => choice.action === 'start_session'));
 });
 
 test('real-time questions enter lookup and state what must be checked', () => {
@@ -46,6 +47,14 @@ test('multi-constraint consequential decisions enter deep deliberation', () => {
   assert.equal(result.requiresSession, true);
   assert.ok(result.complexity >= 3);
   assert.match(result.answer, /预算|通勤|转正/);
+});
+
+test('a new job that requires relocation is never answered with a travel template', () => {
+  const result = routeConversation('要不要接受一个需要搬家的新工作？');
+  assert.equal(result.lane, 'deep');
+  assert.equal(result.requiresSession, true);
+  assert.equal(result.intentFrame.domain, 'career');
+  assert.doesNotMatch(result.answer, /天气|排队|同行/);
 });
 
 test('high-risk health input enters the safety lane', () => {

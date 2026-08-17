@@ -10,63 +10,6 @@ const CATEGORIES = [
   { id: 'deduction', label: '推演记录', icon: '☲' },
 ];
 
-const DEMO_MEMORIES = [
-  {
-    id: 'm1',
-    category: 'profile',
-    title: '性格特质',
-    content: '思虑周全，做事谨慎，倾向于在决策前收集多方意见。',
-    source: '推演行为分析',
-    date: '2026-07-10',
-    confidence: 0.85,
-  },
-  {
-    id: 'm2',
-    category: 'preference',
-    label: '偏好',
-    title: '决策风格',
-    content: '偏好稳健型选择，在风险与机会之间倾向于保守。',
-    source: '选择模式分析',
-    date: '2026-07-09',
-    confidence: 0.78,
-  },
-  {
-    id: 'm3',
-    category: 'fact',
-    title: '职业状态',
-    content: '正在考虑新的工作机会，处于职业抉择期。',
-    source: '对话内容',
-    date: '2026-07-11',
-    confidence: 0.92,
-  },
-  {
-    id: 'm4',
-    category: 'deduction',
-    title: '关于「换城市」的推演',
-    content: '综合钱谷、路向、风眼、心禾、镜渊五位智者之言，最终选择「稳守当前」。卦象艮，属土，宜静不宜动。',
-    source: '推演记录',
-    date: '2026-07-11',
-    confidence: 1.0,
-  },
-  {
-    id: 'm5',
-    category: 'profile',
-    title: '思考方式',
-    content: '习惯从多个角度审视问题，重视内心感受与实际利益的平衡。',
-    source: '对话模式分析',
-    date: '2026-07-08',
-    confidence: 0.72,
-  },
-  {
-    id: 'm6',
-    category: 'preference',
-    title: '感兴趣的话题',
-    content: '对职业发展、人生抉择、自我成长类话题较为关注。',
-    source: '问题主题分析',
-    date: '2026-07-07',
-    confidence: 0.68,
-  },
-];
 
 export default function MemoryPanel({ memories = [], loading = false, onRefresh }) {
   const [searchQuery, setSearchQuery] = useState('');

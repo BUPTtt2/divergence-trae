@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+/**
  * 后端 API 封装模块
  * 统一管理所有后端接口调用，包含 SSE 流式处理
  *
@@ -690,6 +690,33 @@ export async function generateDestinyArtwork(sessionId) {
     method: 'POST',
     timeout: 95000,
   });
+}
+
+export async function createArtworkJob(cardId, { styleId, idempotencyKey }) {
+  return request(`/api/cards/${encodeURIComponent(cardId)}/artwork-jobs`, {
+    method: 'POST',
+    body: JSON.stringify({ styleId, idempotencyKey }),
+    timeout: 95000,
+  });
+}
+
+export async function getArtworkJob(cardId, jobId) {
+  return request(`/api/cards/${encodeURIComponent(cardId)}/artwork-jobs/${encodeURIComponent(jobId)}`);
+}
+
+export async function getArtworkVersions(cardId) {
+  const result = await request(`/api/cards/${encodeURIComponent(cardId)}/artwork-versions`);
+  return Array.isArray(result?.versions) ? result.versions : [];
+}
+
+export async function selectArtworkVersion(cardId, versionId) {
+  return request(`/api/cards/${encodeURIComponent(cardId)}/artwork-versions/${encodeURIComponent(versionId)}/select`, {
+    method: 'POST',
+  });
+}
+
+export async function selectSystemArtwork(cardId) {
+  return request(`/api/cards/${encodeURIComponent(cardId)}/artwork-system/select`, { method: 'POST' });
 }
 
 /**

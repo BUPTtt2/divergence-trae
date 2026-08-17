@@ -21,6 +21,7 @@ const CLIENT_PROPERTY_KEYS = new Set([
   'helpfulness', 'model', 'offline', 'page', 'phase', 'provider', 'retryCount',
   'shareChannel', 'source', 'storageMode', 'success', 'summaryLen', 'tags',
   'usageAvailable', 'value', 'withOutcome', 'gua',
+  'styleId', 'persistent', 'includedCredit',
 ]);
 
 function generateId() {

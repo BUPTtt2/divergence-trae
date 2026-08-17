@@ -25,8 +25,7 @@ export function requiredContributionCount(depth, selectedCount) {
   const normalizedDepth = String(depth || 'standard').toLowerCase();
   if (selectedCount <= 0) return 1;
   if (normalizedDepth === 'quick') return 1;
-  if (normalizedDepth === 'deep') return Math.min(selectedCount, 3);
-  return Math.min(selectedCount, 2);
+  return selectedCount;
 }
 
 export function validateDeliberationContribution(session = {}) {

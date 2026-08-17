@@ -107,6 +107,15 @@ function cityFallbackFields() {
   ]);
 }
 
+function careerRelocationFallbackFields() {
+  return normalizeFields([
+    { id: 'role_value', prompt: '这份新工作的岗位内容、收入、成长空间和你当前选择相比，最确定的提升与代价分别是什么？', reason: '先判断搬家是为一份怎样的机会服务，而不是先讨论房源。', decisionImpact: '决定这份机会是否值得承担迁移成本。', blocking: true, intakePriority: 100 },
+    { id: 'relocation_cost', prompt: '搬家会改变哪些现实条件：城市、通勤、住房成本、伴侣或家庭安排？其中哪一项最难逆转？', reason: '把迁移影响拆成真实约束。', decisionImpact: '决定可承受成本和需要协商的条件。', blocking: true, intakePriority: 90 },
+    { id: 'exit_boundary', prompt: '如果入职后发现不合适，你能接受的试用期限、现金缓冲和退出方案是什么？', reason: '新工作和迁移都需要明确止损线。', decisionImpact: '决定先试行、直接接受或继续谈条件。', blocking: true, intakePriority: 80 },
+    { id: 'decision_deadline', prompt: '最晚什么时候必须答复？在答复前还能向公司确认或谈判哪些关键条件？', reason: '截止时间决定验证顺序。', decisionImpact: '形成下一步查证与谈判清单。', blocking: false, required: false, askInIntake: false },
+  ]);
+}
+
 function genericFallbackFields() {
   return normalizeFields([
     { id: 'decision_context', prompt: '这件事现在处于什么阶段，涉及哪些人或已经发生了什么？', reason: '建立真实情境，不替用户补故事。', decisionImpact: '决定分析起点。' },
@@ -228,6 +237,7 @@ export function fallbackCaseFields(question) {
   const normalizedQuestion = clean(question);
   if (WORK_LEAVE_PATTERN.test(normalizedQuestion)) return workLeaveFallbackFields();
   if (/减脂|减肥|减重|体重管理|控卡|饮食控制|长期运动|健身习惯|戒烟|戒酒|睡眠改善/i.test(normalizedQuestion)) return behaviorChangeFallbackFields();
+  if (/(工作|职业|岗位|offer|跳槽|入职).*(搬家|异地|迁居|跨城)|(搬家|异地|迁居|跨城).*(工作|职业|岗位|offer|跳槽|入职)/i.test(normalizedQuestion)) return careerRelocationFallbackFields();
   if (/租房|买房|搬家|居住|合租|通勤|房租/i.test(normalizedQuestion)) return cityFallbackFields();
   if (/考研|读研|研究生|保研|备考|留学|升学|考试|学习/i.test(normalizedQuestion)) return studyFallbackFields();
   if (/旅行|旅游|游玩|攻略|景点|排队|天气|去.{1,10}(玩|旅行|旅游)/i.test(normalizedQuestion)) return travelFallbackFields();
@@ -302,8 +312,8 @@ JSON：
     const firstRound = answerTranscript.length === 0 && retainedFields.length === 0;
     const mergedFields = firstRound
       ? mergeFields(
+        safeFields.slice(0, MIN_FIELDS),
         modelFields,
-        modelFields.length < MIN_FIELDS ? safeFields.slice(0, MIN_FIELDS - modelFields.length) : [],
       )
       : mergeFields(
         adaptiveFields,

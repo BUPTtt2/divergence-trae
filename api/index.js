@@ -1,4 +1,4 @@
-﻿﻿﻿﻿import app from '../server/src/app.js';
+import app from '../server/src/app.js';
 
 export default async function handler(req, res) {
   app(req, res);

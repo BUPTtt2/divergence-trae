@@ -66,6 +66,10 @@ const DRAG_THRESHOLD = 6;
 const LONG_PRESS_MS = 800;
 const DOUBLE_CLICK_MS = 300;
 
+function mobileBottomClearance() {
+  return typeof window !== 'undefined' && window.innerWidth < 700 ? 260 : 0;
+}
+
 export default function DraggableCompass() {
   const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   const navigate = useNavigate();
@@ -86,10 +90,18 @@ export default function DraggableCompass() {
           position: saved,
           viewportWidth: window.innerWidth,
           viewportHeight: window.innerHeight,
+          bottomClearance: mobileBottomClearance(),
         });
       }
     } catch {}
-    return { x: (typeof window !== 'undefined' ? window.innerWidth : 1200) - 120, y: (typeof window !== 'undefined' ? window.innerHeight : 800) - 120 };
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
+    const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
+    return clampFloatingPosition({
+      position: { x: viewportWidth - 120, y: viewportHeight - 120 },
+      viewportWidth,
+      viewportHeight,
+      bottomClearance: mobileBottomClearance(),
+    });
   });
 
   // 模式
@@ -140,6 +152,7 @@ export default function DraggableCompass() {
       position: current,
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
+      bottomClearance: mobileBottomClearance(),
     }));
     window.addEventListener('resize', clampToViewport);
     return () => window.removeEventListener('resize', clampToViewport);
@@ -279,7 +292,17 @@ export default function DraggableCompass() {
       }
     };
     document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
+    const onEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      setMenuOpen(false);
+      setNoteOpen(false);
+      setUnpackOpen(false);
+    };
+    window.addEventListener('keydown', onEscape);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      window.removeEventListener('keydown', onEscape);
+    };
   }, [menuOpen, noteOpen, unpackOpen]);
 
   const onPointerDown = useCallback((e) => {
@@ -322,9 +345,12 @@ export default function DraggableCompass() {
       if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; }
       e.preventDefault();
       e.stopPropagation();
-      const newX = Math.max(0, Math.min(window.innerWidth - 70, s.elemStartX + dx));
-      const newY = Math.max(0, Math.min(window.innerHeight - 70, s.elemStartY + dy));
-      setPos({ x: newX, y: newY });
+      setPos(clampFloatingPosition({
+        position: { x: s.elemStartX + dx, y: s.elemStartY + dy },
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        bottomClearance: mobileBottomClearance(),
+      }));
     }
   }, []);
 
@@ -778,6 +804,12 @@ export default function DraggableCompass() {
               minWidth: compactMenu ? 0 : 268,
             }}
           >
+            <button
+              type="button"
+              aria-label="收起全局助手菜单"
+              onClick={(event) => { event.stopPropagation(); setMenuOpen(false); }}
+              style={{ gridColumn: '1 / -1', minHeight: 38, border: '1px solid rgba(213,177,88,.22)', borderRadius: 4, background: 'rgba(255,255,255,.025)', color: '#d8c995', cursor: 'pointer', fontFamily: '"Noto Serif SC", serif', letterSpacing: '.12em' }}
+            >收起全局助手</button>
             {TOOLS.map((tool) => {
               const t = tool.id === 'new'
                 ? { ...tool, label: primarySessionAction.label, desc: primarySessionAction.description }

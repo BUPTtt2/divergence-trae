@@ -61,6 +61,24 @@ test('admin audit does not count as a visitor or visit', () => {
   assert.equal(metrics.visits, 0);
 });
 
+test('artwork job events expose reliability without retaining prompts or card text', () => {
+  const normalized = normalizeProductEvent({
+    event: 'artwork_job_completed',
+    properties: {
+      cardId: 'card-1', styleId: 'ink_landscape', success: false,
+      durationMs: 4200, errorCode: 'provider_error', persistent: false,
+      includedCredit: true, prompt: 'private prompt', question: 'private question',
+    },
+  }, { principalId: 'u1', now: 1 });
+  assert.deepEqual(normalized.properties, {
+    cardId: 'card-1', styleId: 'ink_landscape', success: false,
+    durationMs: 4200, errorCode: 'provider_error', persistent: false, includedCredit: true,
+  });
+  const metrics = aggregateProductAnalytics([{ ...normalized, analytics_session_id: 'visit-1' }]);
+  assert.equal(metrics.reliability.artworkRequests, 1);
+  assert.equal(metrics.reliability.artworkFailures, 1);
+});
+
 test('analytics separates release and kiosk filters without inventing zero-sample trends', () => {
   const rows = [
     { ...row('u1', 'v1', 's1', 'deliberation_started', 10), release_id: 'r1', mode: 'standard' },

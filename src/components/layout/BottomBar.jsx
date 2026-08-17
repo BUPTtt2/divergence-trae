@@ -33,7 +33,7 @@ export default function BottomBar() {
         onMouseEnter={(e) => { e.currentTarget.style.color = '#A8472E'; e.currentTarget.style.borderColor = '#A8472E'; }}
         onMouseLeave={(e) => { e.currentTarget.style.color = '#7A7468'; e.currentTarget.style.borderColor = 'rgba(168, 71, 46, 0.25)'; }}
       >
-        ← 返回剧本
+        ← 返回预设推演
       </button>
       <button
         style={btnStyle}
@@ -45,7 +45,7 @@ export default function BottomBar() {
       </button>
       <div className="flex-1" />
       <span style={{ fontSize: 10, color: '#7A7468', fontFamily: '"Ma Shan Zheng", serif', letterSpacing: '0.15em' }}>
-        {state.phase === 'idle' ? '选择一个剧本开始推演' : phaseHint(state.phase)}
+        {state.phase === 'idle' ? '选择一个预设开始推演' : phaseHint(state.phase)}
       </span>
       <div className="flex-1" />
     </div>
