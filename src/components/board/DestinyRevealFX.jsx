@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useReducedMotion } from 'framer-motion';
 import * as THREE from 'three';
 import { buildFateCardPresentation } from '../../game/fateCardPresentation';
 import {
   DESTINY_ARCHIVE_ARTWORK,
+  createDestinyScenePlan,
   resolveDestinyArtwork,
   resolveHexagramName,
   shouldShowDestinyCeremony,
@@ -263,7 +264,7 @@ function DestinyOrbit({ active, reducedMotion }) {
   );
 }
 
-function DestinyCard({ guaName, guaIcon, presentation, lineMeta, revealed, reducedMotion, artworkUrl }) {
+function DestinyCard({ guaName, guaIcon, presentation, lineMeta, revealed, reducedMotion, artworkUrl, textureAnisotropy }) {
   const groupRef = useRef();
   const stateRef = useRef({ elapsed: 0, revealElapsed: 0 });
   const front = useMemo(() => createFrontTexture({
@@ -281,7 +282,7 @@ function DestinyCard({ guaName, guaIcon, presentation, lineMeta, revealed, reduc
     const loader = new THREE.TextureLoader();
     const texture = loader.load(artworkUrl || DESTINY_ARCHIVE_ARTWORK, (loaded) => {
       loaded.colorSpace = THREE.SRGBColorSpace;
-      loaded.anisotropy = 8;
+      loaded.anisotropy = textureAnisotropy;
     }, undefined, () => {
       if ((artworkUrl || DESTINY_ARCHIVE_ARTWORK) === DESTINY_ARCHIVE_ARTWORK) return;
       loader.load(DESTINY_ARCHIVE_ARTWORK, (fallback) => {
@@ -293,7 +294,7 @@ function DestinyCard({ guaName, guaIcon, presentation, lineMeta, revealed, reduc
     });
     texture.colorSpace = THREE.SRGBColorSpace;
     return texture;
-  }, [artworkUrl]);
+  }, [artworkUrl, textureAnisotropy]);
 
   useEffect(() => () => {
     front.dispose();
@@ -346,6 +347,14 @@ function DestinyCard({ guaName, guaIcon, presentation, lineMeta, revealed, reduc
 
 export default function DestinyRevealFX({ phase, oracle = null, dynamicChoices = [], selectedChoice = null, revealed = false, inference = null, artwork = null }) {
   const reducedMotion = useReducedMotion();
+  const { size, gl } = useThree();
+  const scenePlan = createDestinyScenePlan({
+    phase,
+    width: size.width,
+    height: size.height,
+    dpr: gl.getPixelRatio(),
+    reducedMotion: Boolean(reducedMotion),
+  });
   const active = shouldShowDestinyCeremony(phase);
   const choice = useMemo(
     () => selectedChoice || dynamicChoices[0] || {},
@@ -378,9 +387,9 @@ export default function DestinyRevealFX({ phase, oracle = null, dynamicChoices =
 
   if (!active) return null;
   return (
-    <group position={[-1.28, 0, 0]}>
+    <group position={scenePlan.groupPosition} scale={scenePlan.cardScale}>
       <DestinyOrbit active={revealed} reducedMotion={reducedMotion} />
-      <DestinyCard guaName={guaName} guaIcon={guaIcon} presentation={presentation} lineMeta={lineMeta} revealed={revealed} reducedMotion={reducedMotion} artworkUrl={artworkUrl} />
+      <DestinyCard guaName={guaName} guaIcon={guaIcon} presentation={presentation} lineMeta={lineMeta} revealed={revealed} reducedMotion={reducedMotion} artworkUrl={artworkUrl} textureAnisotropy={scenePlan.textureAnisotropy} />
     </group>
   );
 }

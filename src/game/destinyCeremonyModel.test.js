@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   createTrigramOrbit,
+  createDestinyScenePlan,
   resolveDestinyArtwork,
   resolveHexagramName,
   shouldShowDestinyCeremony,
@@ -41,4 +42,23 @@ test('hexagram name never duplicates equal upper and lower trigrams', () => {
 
 test('explicit formal hexagram name wins over trigram composition', () => {
   assert.equal(resolveHexagramName({ primary: { name: '风山渐', lower: { name: '艮' }, upper: { name: '巽' } } }), '风山渐');
+});
+
+test('mobile keeps one centered destiny card while reducing decorative load', () => {
+  const mobile = createDestinyScenePlan({ phase: 'final', width: 390, height: 844, dpr: 3 });
+  const desktop = createDestinyScenePlan({ phase: 'final', width: 1440, height: 900, dpr: 2 });
+
+  assert.equal(mobile.visible, true);
+  assert.equal(mobile.legacyCardVisible, false);
+  assert.equal(mobile.particleCount < desktop.particleCount, true);
+  assert.equal(mobile.textureAnisotropy < desktop.textureAnisotropy, true);
+  assert.deepEqual(mobile.groupPosition, [0, 0, 0]);
+});
+
+test('reduced motion keeps the card but removes automatic reveal travel', () => {
+  const plan = createDestinyScenePlan({ phase: 'path_reveal', width: 390, height: 844, dpr: 2, reducedMotion: true });
+
+  assert.equal(plan.visible, true);
+  assert.equal(plan.animateRise, false);
+  assert.equal(plan.animateHover, false);
 });

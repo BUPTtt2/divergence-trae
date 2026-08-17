@@ -40,3 +40,25 @@ export function createTrigramOrbit(radius = 1.48) {
     };
   });
 }
+
+export function createDestinyScenePlan({
+  phase,
+  width = 1440,
+  height = 900,
+  dpr = 1,
+  reducedMotion = false,
+} = {}) {
+  const compact = width <= 640 || height > width;
+  const visible = shouldShowDestinyCeremony(phase);
+  return {
+    visible,
+    legacyCardVisible: false,
+    compact,
+    particleCount: compact ? 8 : 24,
+    textureAnisotropy: compact || dpr > 2 ? 2 : 8,
+    groupPosition: compact ? [0, 0, 0] : [-1.28, 0, 0],
+    cardScale: compact ? 0.78 : 0.94,
+    animateRise: visible && !reducedMotion,
+    animateHover: visible && !reducedMotion,
+  };
+}

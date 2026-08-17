@@ -6,6 +6,7 @@ import LightOrb from './LightOrb';
 import AgentGhosts from './AgentGhosts';
 import PhaseTransitFX from './PhaseTransitFX';
 import YaolinesFormation from './YaolinesFormation';
+import DestinyRevealFX from './DestinyRevealFX';
 import { COLORS } from './layoutConfig';
 import { createGlowTexture } from '../../utils/trigramTextures';
 
@@ -53,8 +54,8 @@ export default function Board3D({
   onAgentClick,
   userInput,
   selectedChoice,
+  choices = [],
   inference,
-  yanOptions,
   deliberationOracle,
   deliberationSessionId,
   fateRevealed = false,
@@ -76,14 +77,17 @@ export default function Board3D({
       <LightOrb
         phase={phase}
         position={[0, 1.5, 0]}
-        selectedChoice={selectedChoice}
-        activeAgents={activeAgents}
-        inference={inference}
-        yanOptions={yanOptions}
-        arenaView={arenaView}
         fateRevealed={fateRevealed}
+      />
+
+      <DestinyRevealFX
+        phase={phase}
         oracle={deliberationOracle || inference?.oracle || null}
-        destinyArtwork={destinyArtwork}
+        dynamicChoices={choices}
+        selectedChoice={selectedChoice}
+        revealed={fateRevealed}
+        inference={inference}
+        artwork={destinyArtwork}
       />
 
       {/* 【全新动画 2/3】立卦：6 爻线从外围旋转汇入，到达朱砂闪烁后 halo 爆发 */}
