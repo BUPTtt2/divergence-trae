@@ -147,7 +147,7 @@
 .decision-artifact__mirror dl div { display: grid; grid-template-columns: 38px 1fr; gap: 10px; padding: 9px 10px; background: rgb(255 255 255 / 2%); }
 .decision-artifact__mirror dt { color: #c8a855; font: 10px/1.7 "Noto Serif SC", serif; }
 .decision-artifact__mirror dd { margin: 0; color: #a69d8e; font: 10px/1.7 "Noto Serif SC", serif; }
-.decision-artifact__final footer { position: sticky; z-index: 4; bottom: -18px; grid-column: 1 / -1; display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 -18px -18px; padding: 14px 18px 18px; border-top: 1px solid rgb(213 177 88 / 24%); background: linear-gradient(180deg, rgb(10 8 7 / 92%), #0a0807 26%); backdrop-filter: blur(14px); }
+.decision-artifact__final footer { position: static; z-index: 4; grid-column: 1 / -1; display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; padding: 14px 0 max(8px, env(safe-area-inset-bottom)); border-top: 1px solid rgb(213 177 88 / 24%); background: #0a0807; }
 .decision-artifact__final footer button { min-height: 38px; padding: 0 16px; }
 .decision-artifact__final footer button.is-primary { background: #d5b158; color: #17120a; }
 .decision-artifact__more-actions { position: relative; }
@@ -165,5 +165,34 @@
 .decision-artifact__final-empty > div { max-width:360px; margin:auto; }
 .decision-artifact__final-empty strong { color:#ead486; font:20px/1.5 "Ma Shan Zheng",serif; letter-spacing:.1em; }
 .decision-artifact__final-empty p { margin:10px 0 0; color:#9e9586; font:11px/1.8 "Noto Serif SC",serif; }
-@media (max-width: 900px), (orientation: portrait) { .decision-artifact,.decision-artifact.is-commit,.decision-artifact.is-final { top: auto; right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); left: max(8px, env(safe-area-inset-left)); width: auto; height: min(64dvh, 640px); padding: 17px; box-shadow: 0 -28px 72px rgb(0 0 0 / 42%); } .decision-artifact__paths button { min-height: 0; } .decision-artifact__mirror { padding-top: 20px; border-top: 1px solid rgb(213 177 88 / 18%); } }
-@media (max-width: 620px) { .decision-artifact__header { align-items: flex-start; flex-direction: column; } .decision-artifact__summary p { font-size: 14px; } .decision-artifact__final footer { align-items: stretch; flex-direction: column; } .decision-artifact__lens ol { grid-template-columns: 1fr; } }
+@media (max-width: 900px), (orientation: portrait) {
+  .decision-artifact,.decision-artifact.is-commit,.decision-artifact.is-final {
+    inset: 0;
+    width: 100%;
+    height: 100dvh;
+    max-height: none;
+    padding: max(17px, env(safe-area-inset-top)) max(17px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(17px, env(safe-area-inset-left));
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    box-shadow: none;
+  }
+  .decision-artifact__collapse { position: sticky; top: 0; z-index: 8; float: right; }
+  .decision-artifact__paths button { min-height: 0; }
+  .decision-artifact__mirror { padding-top: 20px; border-top: 1px solid rgb(213 177 88 / 18%); }
+  .decision-artifact__ticket { min-height: 0; aspect-ratio: 3 / 4; }
+}
+@media (max-width: 620px) {
+  .decision-artifact__header { align-items: flex-start; flex-direction: column; }
+  .decision-artifact__summary p { font-size: 14px; }
+  .decision-artifact__final footer { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; position: static; }
+  .decision-artifact__final footer button { width: 100%; min-height: 48px; }
+  .decision-artifact__final footer button.is-primary { grid-column: 1 / -1; }
+  .decision-artifact__ticket-title h3 { font-size: clamp(30px, 10vw, 48px); }
+  .decision-artifact__ticket { padding: 24px 20px 22px; }
+  .decision-artifact__ticket-masthead { gap: 28px; }
+  .decision-artifact__ticket-anchors { grid-template-columns: 1fr; }
+  .decision-artifact__ticket-title { width: 92%; }
+  .decision-artifact__lens ol { grid-template-columns: 1fr; }
+}

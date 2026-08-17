@@ -21,6 +21,7 @@ import {
   login as apiLogin,
   register as apiRegister,
   logout as apiLogout,
+  updateProfile as apiUpdateProfile,
   getCachedUser,
   clearAuth,
 } from '../services/auth.js';
@@ -201,6 +202,12 @@ export function AuthProvider({ children }) {
     return data;
   }, []);
 
+  const updateAccountProfile = useCallback(async (profile) => {
+    const user = await apiUpdateProfile(profile);
+    setState((previous) => ({ ...previous, user, error: null }));
+    return user;
+  }, []);
+
   // 重新拉取用户信息
   const refreshUser = useCallback(async () => {
     try {
@@ -248,6 +255,7 @@ export function AuthProvider({ children }) {
     register,
     logout,
     upgradeAccount,
+    updateAccountProfile,
     refreshUser,
     retryConnect,
   };

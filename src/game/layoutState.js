@@ -28,7 +28,7 @@ export function shouldAutoOpenCompanion({ phase, awaitingAnswers = [], answerPen
 }
 
 export function shouldShowGlobalCompass(pathname = '') {
-  return pathname !== '/sandbox';
+  return pathname !== '/ops';
 }
 
 export function sandboxLayoutClass(phase, companionOpen, decisionArtifactOpen = true) {

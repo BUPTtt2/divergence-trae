@@ -67,7 +67,8 @@ test('pending clarification automatically opens the answer workbench', () => {
   }), false);
 });
 
-test('sandbox uses its own companion navigation instead of the global floating compass', () => {
-  assert.equal(layoutState.shouldShowGlobalCompass('/sandbox'), false);
+test('the global assistant remains available inside the sandbox for starting a new deliberation', () => {
+  assert.equal(layoutState.shouldShowGlobalCompass('/sandbox'), true);
   assert.equal(layoutState.shouldShowGlobalCompass('/cards'), true);
+  assert.equal(layoutState.shouldShowGlobalCompass('/ops'), false);
 });

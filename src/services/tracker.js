@@ -16,8 +16,53 @@ const FLUSH_THRESHOLD = 5;
 const FLUSH_INTERVAL_MS = 30000;
 const MAX_BUFFER = 200;
 
+const CLIENT_PROPERTY_KEYS = new Set([
+  'agentId', 'cardId', 'durationMs', 'errorCode', 'fallbackType', 'feedbackId',
+  'helpfulness', 'model', 'offline', 'page', 'phase', 'provider', 'retryCount',
+  'shareChannel', 'source', 'storageMode', 'success', 'summaryLen', 'tags',
+  'usageAvailable', 'value', 'withOutcome', 'gua',
+]);
+
 function generateId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function sanitizeTrackingProperties(properties = {}) {
+  return Object.fromEntries(Object.entries(properties).filter(([key, value]) => (
+    CLIENT_PROPERTY_KEYS.has(key)
+    && value !== undefined
+    && value !== null
+    && ['string', 'number', 'boolean'].includes(typeof value)
+  )).map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 120) : value]));
+}
+
+export function createTrackingContext({
+  width = typeof window !== 'undefined' ? window.innerWidth : 1200,
+  userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '',
+  search = typeof window !== 'undefined' ? window.location.search : '',
+  releaseId = import.meta.env?.VITE_RELEASE_ID || '',
+} = {}) {
+  const ua = String(userAgent).toLowerCase();
+  const isIPad = /ipad/.test(ua) || (/macintosh/.test(ua) && /mobile/.test(ua));
+  const deviceClass = isIPad || (width >= 700 && width < 1100) ? 'tablet' : width < 700 ? 'mobile' : 'desktop';
+  const platformFamily = /iphone|ipad/.test(ua) ? 'ios-safari'
+    : /android/.test(ua) ? 'android'
+      : /mac os|macintosh/.test(ua) ? 'macos'
+        : /windows/.test(ua) ? 'windows' : 'other';
+  return {
+    mode: new URLSearchParams(search).get('kiosk') === '1' ? 'kiosk' : 'standard',
+    deviceClass,
+    platformFamily,
+    releaseId: String(releaseId || '').slice(0, 80),
+  };
+}
+
+export function normalizeErrorCode(message = '') {
+  const normalized = String(message).toLowerCase();
+  if (normalized.includes('timeout') || normalized.includes('timed out')) return 'TIMEOUT';
+  if (normalized.includes('network') || normalized.includes('fetch')) return 'NETWORK_ERROR';
+  if (normalized.includes('abort')) return 'ABORTED';
+  return 'CLIENT_RUNTIME_ERROR';
 }
 
 function getAnonymousId() {
@@ -33,20 +78,37 @@ function getAnonymousId() {
   }
 }
 
+export function clearTrackingState(storage, queue = []) {
+  queue.splice(0, queue.length);
+  storage?.removeItem?.(QUEUE_BUFFER_KEY);
+  storage?.removeItem?.(STORAGE_KEY);
+}
+
+function isTrackingOptedOut() {
+  try { return localStorage.getItem(OPT_OUT_KEY) === '1'; } catch { return false; }
+}
+
 class Tracker {
   constructor() {
-    this.userId = getAnonymousId();
-    this.sessionId = generateId();
+    const optedOut = isTrackingOptedOut();
+    this.userId = optedOut ? '' : getAnonymousId();
+    this.analyticsSessionId = generateId();
+    this.deliberationSessionId = '';
+    this.context = createTrackingContext();
     this.queue = [];
-    this.disabled = false;
+    this.disabled = optedOut;
     this.flushTimer = null;
     this.flushing = false;
 
     // 恢复离线缓冲
-    this._restoreQueue();
+    if (this.disabled) {
+      try { clearTrackingState(localStorage, this.queue); } catch { this.queue.length = 0; }
+    } else {
+      this._restoreQueue();
+    }
 
     // 启动定时 flush
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && !this.disabled) {
       this.flushTimer = setInterval(() => this.flush(), FLUSH_INTERVAL_MS);
       window.addEventListener('beforeunload', this._handleUnload);
       window.addEventListener('pagehide', this._handleUnload);
@@ -63,19 +125,24 @@ class Tracker {
     try {
       const entry = {
         event,
-        userId: this.userId,
-        sessionId: this.sessionId,
+        analyticsSessionId: this.analyticsSessionId,
+        deliberationSessionId: this.deliberationSessionId,
         timestamp: Date.now(),
-        properties,
+        properties: sanitizeTrackingProperties(properties),
+        ...this.context,
       };
       this.queue.push(entry);
       if (this.queue.length >= FLUSH_THRESHOLD) {
         this.flush();
       }
-    } catch (e) {
+    } catch (error) {
       // 埋点失败绝不影响主流程
-      console.warn('[tracker] track failed', e);
+      console.warn('[tracker] track failed', error);
     }
+  }
+
+  setDeliberationSession(sessionId = '') {
+    this.deliberationSessionId = String(sessionId || '').slice(0, 120);
   }
 
   /**
@@ -109,7 +176,7 @@ class Tracker {
       if (!resp.ok) {
         this._bufferToStorage(batch);
       }
-    } catch (e) {
+    } catch {
       // 所有网络错误（含 ERR_ABORTED / sendBeacon 失败）统一缓冲到 localStorage，不打 error
       this._bufferToStorage(batch);
     } finally {
@@ -122,8 +189,25 @@ class Tracker {
    */
   disable() {
     this.disabled = true;
-    try { localStorage.setItem(OPT_OUT_KEY, '1'); } catch { /* ignore */ }
+    try {
+      localStorage.setItem(OPT_OUT_KEY, '1');
+      clearTrackingState(localStorage, this.queue);
+      this.userId = '';
+    } catch { this.queue.length = 0; }
     if (this.flushTimer) clearInterval(this.flushTimer);
+  }
+
+  prepareForHandoff() {
+    this.disabled = true;
+    this.flushing = false;
+    try {
+      clearTrackingState(localStorage, this.queue);
+      this.userId = '';
+    } catch { this.queue.length = 0; }
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = null;
+    }
   }
 
   /**
@@ -135,11 +219,11 @@ class Tracker {
     if (this.disabled) return;
     try {
       const payload = JSON.stringify({
-        message: String(message).slice(0, 500),
-        stack: extra.stack ? String(extra.stack).slice(0, 1000) : undefined,
+        message: normalizeErrorCode(message),
         phase: extra.phase ? String(extra.phase) : undefined,
-        userId: this.userId,
-        sessionId: this.sessionId,
+        analyticsSessionId: this.analyticsSessionId,
+        deliberationSessionId: this.deliberationSessionId,
+        ...this.context,
       });
       const errUrl = `${API_BASE_URL}/api/track/error`;
       const isSameOrigin = (() => {
@@ -157,7 +241,7 @@ class Tracker {
         body: payload,
         keepalive: isSameOrigin,
       }).catch(() => { /* ignore */ });
-    } catch (e) {
+    } catch {
       // 埋点失败绝不影响主流程
     }
   }
@@ -168,6 +252,7 @@ class Tracker {
   enable() {
     this.disabled = false;
     try { localStorage.removeItem(OPT_OUT_KEY); } catch { /* ignore */ }
+    if (!this.userId) this.userId = getAnonymousId();
     if (typeof window !== 'undefined' && !this.flushTimer) {
       this.flushTimer = setInterval(() => this.flush(), FLUSH_INTERVAL_MS);
     }
@@ -180,6 +265,7 @@ class Tracker {
   };
 
   _bufferToStorage(batch) {
+    if (this.disabled) return;
     try {
       const existing = JSON.parse(localStorage.getItem(QUEUE_BUFFER_KEY) || '[]');
       const merged = [...existing, ...batch];
@@ -197,10 +283,6 @@ class Tracker {
       if (buffered.length > 0) {
         this.queue.push(...buffered);
         localStorage.removeItem(QUEUE_BUFFER_KEY);
-      }
-      // 启动时读取 opt-out
-      if (localStorage.getItem(OPT_OUT_KEY) === '1') {
-        this.disabled = true;
       }
     } catch { /* ignore */ }
   }

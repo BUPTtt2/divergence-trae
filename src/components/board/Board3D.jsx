@@ -6,7 +6,6 @@ import LightOrb from './LightOrb';
 import AgentGhosts from './AgentGhosts';
 import PhaseTransitFX from './PhaseTransitFX';
 import YaolinesFormation from './YaolinesFormation';
-import DestinyRevealFX from './DestinyRevealFX';
 import { COLORS } from './layoutConfig';
 import { createGlowTexture } from '../../utils/trigramTextures';
 
@@ -58,14 +57,12 @@ export default function Board3D({
   yanOptions,
   deliberationOracle,
   deliberationSessionId,
-  choices = [],
   fateRevealed = false,
   destinyArtwork = null,
   arenaView,
   onArenaNodeSelect,
   presentationMode = false,
 }) {
-  const fateStage = ['path_reveal', 'committing', 'final'].includes(phase);
   return (
     <group>
       {/* 全局氛围灯 */}
@@ -84,7 +81,9 @@ export default function Board3D({
         inference={inference}
         yanOptions={yanOptions}
         arenaView={arenaView}
-        minimal={fateStage}
+        fateRevealed={fateRevealed}
+        oracle={deliberationOracle || inference?.oracle || null}
+        destinyArtwork={destinyArtwork}
       />
 
       {/* 【全新动画 2/3】立卦：6 爻线从外围旋转汇入，到达朱砂闪烁后 halo 爆发 */}
@@ -101,16 +100,6 @@ export default function Board3D({
         presentationMode={presentationMode}
         hideAdvisorNodes={false}
         finalMode={phase === 'final'}
-      />
-
-      <DestinyRevealFX
-        phase={phase}
-        oracle={deliberationOracle || inference?.oracle || null}
-        dynamicChoices={choices}
-        selectedChoice={selectedChoice}
-        revealed={fateRevealed}
-        inference={inference}
-        artwork={destinyArtwork}
       />
 
       {!presentationMode && <AgentGhosts

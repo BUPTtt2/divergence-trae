@@ -3,6 +3,7 @@ import { query } from '../services/db.js';
 import { generateUUID } from '../utils/id.js';
 import { issueTokenPair, verifyToken } from '../services/authTokenService.js';
 import { hashPassword, verifyPassword } from '../services/passwordService.js';
+import { requirePrincipal } from '../middleware/principal.js';
 
 const router = express.Router();
 
@@ -10,6 +11,9 @@ const AVATARS = ['☰', '☷', '☳', '☴', '☵', '☲', '☶', '☱', '☯', 
 const COLORS = ['#A8472E', '#5078A8', '#508870', '#A87898', '#C88848', '#7858A0', '#489090', '#C06888'];
 const ADJECTIVES = ['云', '清', '玄', '墨', '风', '月', '星', '山', '水', '竹', '梅', '兰', '菊', '松', '鹤', '鹿', '鱼', '雁', '霜', '雪'];
 const NOUNS = ['隐', '渊', '尘', '寂', '澈', '远', '深', '微', '然', '若', '言', '思', '念', '怀', '观', '听', '行', '止', '卧', '游'];
+const MAX_AVATAR_LENGTH = 350_000;
+const IMAGE_AVATAR_PATTERN = /^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/i;
+const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
 function randomPick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -255,6 +259,71 @@ router.get('/me', async (req, res) => {
       return res.status(503).json({ error: 'AUTH_NOT_CONFIGURED' });
     }
     res.status(401).json({ error: 'AUTH_REQUIRED' });
+  }
+});
+
+router.patch('/me', requirePrincipal, async (req, res) => {
+  try {
+    const updates = {};
+
+    if (req.body?.nickname !== undefined) {
+      const nickname = String(req.body.nickname || '').trim();
+      if (!nickname || nickname.length > 16) {
+        return res.status(400).json({ error: 'INVALID_NICKNAME' });
+      }
+      updates.nickname = nickname;
+    }
+
+    if (req.body?.bio !== undefined) {
+      const bio = String(req.body.bio || '').trim();
+      if (bio.length > 80) {
+        return res.status(400).json({ error: 'INVALID_BIO' });
+      }
+      updates.bio = bio;
+    }
+
+    if (req.body?.color !== undefined) {
+      const color = String(req.body.color || '').trim();
+      if (!COLOR_PATTERN.test(color)) {
+        return res.status(400).json({ error: 'INVALID_COLOR' });
+      }
+      updates.color = color;
+    }
+
+    if (req.body?.avatar !== undefined) {
+      const avatar = String(req.body.avatar || '').trim();
+      const isSymbol = AVATARS.includes(avatar);
+      const isImage = avatar.length <= MAX_AVATAR_LENGTH && IMAGE_AVATAR_PATTERN.test(avatar);
+      if (!isSymbol && !isImage) {
+        return res.status(400).json({ error: 'INVALID_AVATAR' });
+      }
+      updates.avatar = avatar;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'EMPTY_PROFILE_UPDATE' });
+    }
+
+    updates.updated_at = new Date().toISOString();
+    await query({
+      table: 'users',
+      action: 'update',
+      id: req.principal.userId,
+      data: updates,
+    });
+
+    const result = await query({
+      table: 'users',
+      action: 'select',
+      filter: { id: req.principal.userId },
+      queryOptions: { limit: 1 },
+    });
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    }
+    return res.json({ user: publicUser(result.rows[0]) });
+  } catch (error) {
+    return handleAuthError(res, error);
   }
 });
 

@@ -86,8 +86,8 @@
 
 .game-root.companion-is-open .sandbox-stage { width: 100% !important; filter: brightness(.62) saturate(.74); transition: filter var(--xm-motion-fast, 180ms) ease; }
 .game-root.companion-is-open .process-stepper { left: 50% !important; }
-.game-root.decision-artifact-is-open .sandbox-stage { width: calc(100% - min(500px, 44vw) - 36px) !important; }
-.game-root.decision-artifact-is-open .process-stepper { left: calc((100% - min(500px, 44vw) - 36px) / 2) !important; }
+.game-root.decision-artifact-is-open .sandbox-stage { width: calc(100% - var(--artifact-width, min(500px, 44vw)) - 36px) !important; }
+.game-root.decision-artifact-is-open .process-stepper { left: calc((100% - var(--artifact-width, min(500px, 44vw)) - 36px) / 2) !important; }
 
 .runtime-alert {
   position: fixed;
@@ -131,7 +131,7 @@
     pointer-events: none;
   }
   .game-root.companion-is-open .process-stepper,.game-root.decision-artifact-is-open .process-stepper { left: 50% !important; }
-  .game-root.decision-artifact-is-open .sandbox-stage { width: 100% !important; height: 42dvh !important; }
+  .game-root.decision-artifact-is-open .sandbox-stage { width: 100% !important; height: 100% !important; opacity: .12; pointer-events: none; }
   .companion-dock__header {
     min-height: 54px;
     padding: 7px 8px;

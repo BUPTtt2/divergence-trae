@@ -12,20 +12,22 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { recordLLMResult } from '../middleware/errorMonitor.js';
 import { requirePrincipal } from '../middleware/principal.js';
 import { query } from '../services/db.js';
-import { generateUUID } from '../utils/id.js';
+import { aggregateProductAnalytics, normalizeProductEvent } from '../services/productAnalytics.js';
 
 const router = Router();
 
 async function pushEvent(event, userId) {
-  if (!event || !event.event) return null;
-  const normalized = {
-    id: generateUUID(),
-    user_id: userId,
-    session_id: String(event.sessionId || '').slice(0, 120) || null,
-    event_name: String(event.event).slice(0, 80),
-    properties: event.properties && typeof event.properties === 'object' ? event.properties : {},
-    occurred_at: new Date(Number(event.timestamp) || Date.now()).toISOString(),
-  };
+  const normalized = normalizeProductEvent({ ...event, timestamp: Date.now() }, { principalId: userId });
+  if (!normalized) return null;
+  if (normalized.deliberation_session_id) {
+    const ownedSession = await query({
+      table: 'deliberation_sessions',
+      action: 'select',
+      filter: { id: normalized.deliberation_session_id, user_id: userId },
+      queryOptions: { limit: 1 },
+    });
+    if (!ownedSession.rows[0]) return null;
+  }
   await query({ table: 'product_events', action: 'insert', data: normalized });
   // 同步给错误监控（用于 LLM 错误率告警）
   if (event.event === 'llm_result') {
@@ -48,10 +50,14 @@ router.post(
     }
     // 限制单批大小
     const safe = batch.slice(0, 100);
-    for (const e of safe) {
-      await pushEvent(e, req.principal.userId);
+    let received = 0;
+    let rejected = Math.max(0, batch.length - safe.length);
+    for (const event of safe) {
+      const stored = await pushEvent(event, req.principal.userId);
+      if (stored) received += 1;
+      else rejected += 1;
     }
-    res.json({ received: safe.length });
+    res.json({ received, rejected });
   })
 );
 
@@ -64,16 +70,19 @@ router.post(
   '/error',
   requirePrincipal,
   asyncHandler(async (req, res) => {
-    const { message, stack, phase } = req.body || {};
+    const { message, phase } = req.body || {};
     if (!message) return res.status(400).json({ error: '缺少 message' });
     await pushEvent({
-      event: 'error',
-      userId: req.body.userId || 'unknown',
-      sessionId: req.body.sessionId || 'unknown',
+      event: 'client_error',
+      analyticsSessionId: req.body.analyticsSessionId,
+      deliberationSessionId: req.body.deliberationSessionId,
+      releaseId: req.body.releaseId,
+      mode: req.body.mode,
+      deviceClass: req.body.deviceClass,
+      platformFamily: req.body.platformFamily,
       timestamp: Date.now(),
       properties: {
-        message: String(message).slice(0, 500),
-        stack: stack ? String(stack).slice(0, 1000) : undefined,
+        errorCode: String(message).slice(0, 80),
         phase: phase ? String(phase) : undefined,
         source: 'frontend',
       },
@@ -100,49 +109,29 @@ router.get(
       filter: { user_id: req.principal.userId },
       queryOptions: { orderBy: 'occurred_at:desc', limit: 5000 },
     });
-    const events = (stored.rows || []).map((row) => ({
-      event: row.event_name,
-      timestamp: new Date(row.occurred_at).getTime(),
-      properties: typeof row.properties === 'string' ? JSON.parse(row.properties || '{}') : (row.properties || {}),
-    }));
-    const now = Date.now();
-    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-    const thirtyDaysAgo = now - THIRTY_DAYS_MS;
-
-    let phaseEnterInput = 0;
-    let phaseEnterFinal = 0;
-    let phaseEnterPathReveal = 0;
-    let llmCall = 0;
-    let llmSuccess = 0;
-    let share = 0;
-    let revisitWithOutcome = 0;
-    let phaseEnterFinal30DaysAgo = 0;
-
-    for (const e of events) {
-      if (e.event === 'phase_enter') {
-        const phase = e.properties?.phase;
-        if (phase === 'input') phaseEnterInput++;
-        if (phase === 'final') {
-          phaseEnterFinal++;
-          if (e.timestamp < thirtyDaysAgo) phaseEnterFinal30DaysAgo++;
-        }
-        if (phase === 'path_reveal') phaseEnterPathReveal++;
-      } else if (e.event === 'llm_call') {
-        llmCall++;
-      } else if (e.event === 'llm_result') {
-        if (e.properties?.success) llmSuccess++;
-      } else if (e.event === 'share') {
-        share++;
-      } else if (e.event === 'revisit' && e.properties?.withOutcome) {
-        revisitWithOutcome++;
-      }
-    }
+    const rows = stored.rows || [];
+    const analytics = aggregateProductAnalytics(rows);
+    const eventRows = rows.map((row) => ({ event: row.event_name, properties: typeof row.properties === 'string' ? JSON.parse(row.properties || '{}') : (row.properties || {}) }));
+    const phaseEnterInput = new Set(rows.filter((row) => {
+      const properties = typeof row.properties === 'string' ? JSON.parse(row.properties || '{}') : (row.properties || {});
+      return ['phase_enter', 'phase_entered'].includes(row.event_name) && properties.phase === 'input';
+    }).map((row) => row.deliberation_session_id || row.session_id)).size;
+    const phaseEnterFinal = analytics.completions;
+    const phaseEnterPathReveal = new Set(rows.filter((row) => {
+      const properties = typeof row.properties === 'string' ? JSON.parse(row.properties || '{}') : (row.properties || {});
+      return ['phase_enter', 'phase_entered'].includes(row.event_name) && properties.phase === 'path_reveal';
+    }).map((row) => row.deliberation_session_id || row.session_id)).size;
+    const llmCall = eventRows.filter((event) => ['llm_call', 'llm_request_completed'].includes(event.event)).length;
+    const llmSuccess = eventRows.filter((event) => ['llm_result', 'llm_request_completed'].includes(event.event) && event.properties.success === true).length;
+    const share = eventRows.filter((event) => ['share', 'destiny_card_shared'].includes(event.event)).length;
+    const revisitWithOutcome = eventRows.filter((event) => ['revisit', 'outcome_revisit_submitted'].includes(event.event) && event.properties.withOutcome).length;
 
     res.json({
       firstSignCompletion: phaseEnterInput > 0 ? phaseEnterFinal / phaseEnterInput : 0,
       llmSuccessRate: llmCall > 0 ? llmSuccess / llmCall : 0,
       shareRate: phaseEnterPathReveal > 0 ? share / phaseEnterPathReveal : 0,
-      revisitRate: phaseEnterFinal30DaysAgo > 0 ? revisitWithOutcome / phaseEnterFinal30DaysAgo : 0,
+      revisitRate: phaseEnterFinal > 0 ? revisitWithOutcome / phaseEnterFinal : 0,
+      analytics,
       counts: {
         phaseEnterInput,
         phaseEnterFinal,
@@ -151,7 +140,7 @@ router.get(
         llmSuccess,
         share,
         revisitWithOutcome,
-        totalEvents: events.length,
+        totalEvents: rows.length,
       },
       generatedAt: new Date().toISOString(),
     });
@@ -179,7 +168,8 @@ router.get(
       id: row.id,
       event: row.event_name,
       userId: row.user_id,
-      sessionId: row.session_id,
+      sessionId: row.deliberation_session_id || row.session_id,
+      analyticsSessionId: row.analytics_session_id || null,
       timestamp: new Date(row.occurred_at).getTime(),
       properties: typeof row.properties === 'string' ? JSON.parse(row.properties || '{}') : (row.properties || {}),
     }));

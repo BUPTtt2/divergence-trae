@@ -38,6 +38,7 @@ import { persistDecisionCard } from './decisionCollectionStore.js';
 import { loadCouncilCatalog } from '../services/advisorClient';
 import { createCouncilModel } from './councilModel';
 import { emitRuntimeStatus } from '../services/runtimeStatus.js';
+import { advancePhaseTelemetry, createTelemetryState } from './deliberationTelemetry.js';
 
 const PHASE = {
   IDLE: 'idle',
@@ -192,7 +193,8 @@ export function useDeliberationFlow(initialQuestion = "") {
 
   const floatTipTimer = useRef(null);
   const stageTimersRef = useRef([]);
-  const prevPhaseRef = useRef(phase);
+  const telemetryStateRef = useRef(createTelemetryState());
+  const completedTelemetrySessionRef = useRef('');
   const clarifyActiveRef = useRef(false);
   const pendingActionIdsRef = useRef(createPendingActionRegistry());
   const startOperationRef = useRef(0);
@@ -232,19 +234,26 @@ export function useDeliberationFlow(initialQuestion = "") {
   }, [_updateHistoryCount]);
 
   useEffect(() => {
-    const prev = prevPhaseRef.current;
-    if (prev !== phase) {
-      try {
-        tracker.track('phase_exit', { phase: prev });
-        tracker.track('phase_enter', { phase });
-      } catch {}
-      prevPhaseRef.current = phase;
+    tracker.setDeliberationSession(deliberationSessionId || '');
+    if (!deliberationSessionId) return;
+    const viewPhase = INTERNAL_TO_VIEW_PHASE[phase] || 'input';
+    const transition = advancePhaseTelemetry(telemetryStateRef.current, {
+      phase: viewPhase,
+      sessionId: deliberationSessionId,
+      at: Date.now(),
+    });
+    telemetryStateRef.current = transition.state;
+    transition.events.forEach((event) => tracker.track(event.event, event.properties));
+    const completionKey = `yance:telemetry-complete:${deliberationSessionId}`;
+    let alreadyCompleted = false;
+    try { alreadyCompleted = sessionStorage.getItem(completionKey) === '1'; } catch {}
+    if (viewPhase === 'final' && !alreadyCompleted && completedTelemetrySessionRef.current !== deliberationSessionId) {
+      completedTelemetrySessionRef.current = deliberationSessionId;
+      try { sessionStorage.setItem(completionKey, '1'); } catch {}
+      const startedAt = Number(sessionStorage.getItem(`yance:telemetry-start:${deliberationSessionId}`)) || Date.now();
+      tracker.track('deliberation_completed', { durationMs: Math.max(0, Date.now() - startedAt) });
     }
-  }, [phase]);
-
-  useEffect(() => {
-    tracker.track('phase_enter', { phase: 'input' });
-  }, []);
+  }, [deliberationSessionId, phase]);
 
   useEffect(() => {
     let cancelled = false;
@@ -283,6 +292,8 @@ export function useDeliberationFlow(initialQuestion = "") {
       setArenaProjection(projectSessionSnapshot(session, { lastSequence: cursor }));
       activeSessionIdRef.current = savedSessionId;
       setDeliberationSessionId(savedSessionId);
+      tracker.setDeliberationSession(savedSessionId);
+      tracker.track('session_restored', { phase: INTERNAL_TO_VIEW_PHASE[mapSessionToInternalPhase(session)] || 'input' });
       if (shouldResumePlanning(session.state)) setPendingPlanSessionId(savedSessionId);
       setUserInput(session.question || '已恢复的推演');
       setInputValue(session.question || '');
@@ -587,6 +598,9 @@ export function useDeliberationFlow(initialQuestion = "") {
       const sessionId = session.sessionId;
       activeSessionIdRef.current = sessionId;
       setDeliberationSessionId(sessionId);
+      tracker.setDeliberationSession(sessionId);
+      try { sessionStorage.setItem(`yance:telemetry-start:${sessionId}`, String(Date.now())); } catch {}
+      tracker.track('deliberation_started', { phase: 'casting' });
       try { sessionStorage.setItem(ACTIVE_SESSION_KEY, sessionId); } catch {}
       notifyActiveSessionChanged();
 
@@ -632,6 +646,7 @@ export function useDeliberationFlow(initialQuestion = "") {
     setDebateBlackboard(null);
     setDebateMentionQueue([]);
     setDeliberationSessionId(null);
+    tracker.setDeliberationSession('');
     activeSessionIdRef.current = null;
     planningRequestSessionRef.current = null;
     setDeliberationOracle(null);

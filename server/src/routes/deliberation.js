@@ -43,6 +43,8 @@ import { contextLedgerIndex, selectContextEntries } from '../services/contextLed
 import { getSessionUsage } from '../services/llmUsageService.js';
 import { withLLMUsageContext } from '../services/llmUsageContext.js';
 import { generateDestinyArtwork } from '../services/destinyArtworkService.js';
+import { query } from '../services/db.js';
+import { artworkReliabilityEvent, normalizeProductEvent } from '../services/productAnalytics.js';
 import {
   normalizeExecuteResponse,
   parseExecuteRequest,
@@ -350,7 +352,13 @@ router.post(
     const session = await deliberationEngine.getState(sessionId, { userId: req.principal.userId });
     const ticket = session?.commitResult?.fateTicket || session?.commit_result?.fateTicket;
     if (!ticket?.ticketId) return res.status(409).json({ available: false, reason: 'fate_ticket_not_ready' });
+    const startedAt = Date.now();
     const artwork = await runWithSessionUsage(req, 'destiny_art', () => generateDestinyArtwork(ticket));
+    const event = normalizeProductEvent({
+      ...artworkReliabilityEvent(artwork, Date.now() - startedAt),
+      deliberationSessionId: sessionId,
+    }, { principalId: req.principal.userId });
+    if (event) await query({ table: 'product_events', action: 'insert', data: event });
     res.status(artwork.available ? 200 : 202).json(artwork);
   }),
 );

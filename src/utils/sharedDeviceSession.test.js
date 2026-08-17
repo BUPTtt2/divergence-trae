@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   SHARED_DEVICE_MARKER,
   detectSharedDeviceMode,
+  handoffSharedDevice,
   resetSharedDeviceSession,
 } from './sharedDeviceSession.js';
 
@@ -70,4 +71,31 @@ test('shared device mode is restored from URL or the current tab marker', () => 
   assert.equal(detectSharedDeviceMode({ search: '', session }), true);
   assert.equal(detectSharedDeviceMode({ search: '?kiosk=0', session }), false);
   assert.equal(session.getItem(SHARED_DEVICE_MARKER), null);
+});
+
+test('handoff broadcasts invalidation before loading a fresh kiosk identity', () => {
+  const local = storage({ yance_access_token: 'old-token' });
+  const session = storage({ yance_active_deliberation_session: 'sess-old' });
+  const calls = [];
+  const channel = {
+    postMessage(message) { calls.push(['broadcast', message]); },
+    close() { calls.push(['close']); },
+  };
+  const location = {
+    replace(url) { calls.push(['replace', url]); },
+  };
+  const tracking = {
+    prepareForHandoff() { calls.push(['prepare-tracking']); },
+  };
+
+  handoffSharedDevice({ local, session, channel, location, tracking });
+
+  assert.equal(local.getItem('yance_access_token'), null);
+  assert.equal(session.getItem('yance_active_deliberation_session'), null);
+  assert.deepEqual(calls, [
+    ['prepare-tracking'],
+    ['broadcast', { type: 'KIOSK_HANDOFF' }],
+    ['close'],
+    ['replace', '/sandbox?new=1&kiosk=1&handoff=1'],
+  ]);
 });

@@ -1,13 +1,13 @@
 import { motion } from 'framer-motion';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createDecisionArtifact } from '../../game/decisionArtifactModel.js';
 import { createDestinyCardPresentation } from '../../game/destinyCardPresentation.js';
-import { generateDestinyArtwork } from '../../services/apiClient.js';
 import './decisionArtifact.css';
 import { hexagramName } from '../../game/decisionCardContract.js';
 import { resolveHexagramName } from '../../game/destinyCeremonyModel.js';
 import { sanitizeDecisionDisplayText } from '../../utils/helpers.js';
+import DecisionFeedback from './DecisionFeedback.jsx';
 
 const KNOWLEDGE_LABEL = {
   verified: '已证',
@@ -49,8 +49,8 @@ function readableOracleText(value, oracle) {
 }
 
 export default function DecisionArtifact({
-  phase,
   sessionId,
+  phase,
   inference,
   choices,
   selectedChoice,
@@ -66,13 +66,11 @@ export default function DecisionArtifact({
   onSave,
   onOpenHistory,
   onClose,
-  onArtworkChange,
+  artwork,
+  onRetryArtwork,
 }) {
   const navigate = useNavigate();
   const [saveState, setSaveState] = useState('idle');
-  const [artwork, setArtwork] = useState(() => fateContent?.artwork || null);
-  const [artworkAttempt, setArtworkAttempt] = useState(0);
-  const artworkRequestedRef = useRef('');
   const artifact = createDecisionArtifact(inference, choices);
   const isDecisionPhase = ['summary', 'branch_select'].includes(phase);
   const isCommitPhase = ['path_reveal', 'committing'].includes(phase);
@@ -92,27 +90,6 @@ export default function DecisionArtifact({
     path: selectedPath || fateContent?.path,
     artwork: artwork?.available ? artwork : (fateContent?.artwork || null),
   }), [artifact.summary, artwork, fateContent, inference?.question, selectedPath]);
-  useEffect(() => {
-    const requestKey = `${fateContent?.ticketId || ''}:${artworkAttempt}`;
-    if (!isFinal || !sessionId || !fateContent?.ticketId || artworkRequestedRef.current === requestKey) return undefined;
-    artworkRequestedRef.current = requestKey;
-    let active = true;
-    setArtwork({ available: false, status: 'loading' });
-    generateDestinyArtwork(sessionId)
-      .then((result) => {
-        if (!active) return;
-        const nextArtwork = result?.available ? { ...result, status: 'ready' } : { ...result, status: 'fallback' };
-        setArtwork(nextArtwork);
-        onArtworkChange?.(nextArtwork);
-      })
-      .catch(() => {
-        if (!active) return;
-        const nextArtwork = { available: false, status: 'fallback', reason: 'request_failed' };
-        setArtwork(nextArtwork);
-        onArtworkChange?.(nextArtwork);
-      });
-    return () => { active = false; };
-  }, [artworkAttempt, fateContent?.ticketId, isFinal, onArtworkChange, sessionId]);
   const saveFateCard = async () => {
     if (saveState === 'saving' || saveState === 'saved') return;
     setSaveState('saving');
@@ -274,7 +251,7 @@ export default function DecisionArtifact({
             <span>{cardPresentation.date}</span>
           </div>
           <small className="decision-artifact__ticket-source">{artwork?.status === 'loading' ? '专属画境生成中' : cardPresentation.artworkSource === 'seedream' ? '即梦画境 · 本局生成' : `${cardPresentation.copySource} · 典藏画境`}</small>
-          {artwork?.status === 'fallback' && <button type="button" className="decision-artifact__artwork-retry" onClick={() => setArtworkAttempt((value) => value + 1)}>即梦暂未返回 · 重绘画境</button>}
+          {artwork?.status === 'fallback' && <button type="button" className="decision-artifact__artwork-retry" onClick={onRetryArtwork}>即梦暂未返回 · 重绘画境</button>}
         </article>
         {(fateContent?.evidence?.length > 0 || fateContent?.contextIndex?.length > 0) && <details className="decision-artifact__ticket-ledger">
           <summary>证据与本局档案</summary>
@@ -293,6 +270,7 @@ export default function DecisionArtifact({
             <div><dt>戒</dt><dd>卦象只提醒遗漏、冲突与反转条件，不替代事实和你的选择。</dd></div>
           </dl>
         </aside></details>
+        <DecisionFeedback sessionId={sessionId} />
         <footer>
           <button type="button" className="is-primary" onClick={onRestart}>新开一局</button>
           <button type="button" onClick={() => navigate('/')}>返回首页</button>

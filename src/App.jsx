@@ -18,8 +18,7 @@ import { shouldShowGlobalCompass } from './game/layoutState';
 import { loadWithRetry } from './utils/lazyRetry';
 import Game from './pages/Game';
 import {
-  detectSharedDeviceMode,
-  handoffSharedDevice,
+  resetSharedDeviceSession,
 } from './utils/sharedDeviceSession.js';
 
 /* 有限重试：失败后交给 ErrorBoundary，绝不留下永久加载态 */
@@ -73,6 +72,7 @@ const Dictionary = lazyRetry(() => import('./pages/Dictionary'));
 const Agents = lazyRetry(() => import('./pages/Agents'));
 const Legal = lazyRetry(() => import('./pages/Legal'));
 const Privacy = lazyRetry(() => import('./pages/Privacy'));
+const Ops = lazyRetry(() => import('./pages/Ops'));
 
 /* ErrorBoundary - 防止子组件抛错导致整页白屏 */
 class ErrorBoundary extends Component {
@@ -236,6 +236,7 @@ function AnimatedRoutes() {
               <Route path="/dictionary" element={<ErrorBoundary><Dictionary /></ErrorBoundary>} />
               <Route path="/legal" element={<ErrorBoundary><Legal /></ErrorBoundary>} />
               <Route path="/privacy" element={<ErrorBoundary><Privacy /></ErrorBoundary>} />
+              <Route path="/ops" element={<ErrorBoundary><Ops /></ErrorBoundary>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
@@ -243,30 +244,6 @@ function AnimatedRoutes() {
       </AnimatePresence>
       {shouldShowGlobalCompass(location.pathname) && <DraggableCompass />}
     </>
-  );
-}
-
-function SharedDeviceHandoff() {
-  const location = useLocation();
-  const enabled = detectSharedDeviceMode({ search: location.search });
-  if (!enabled) return null;
-
-  const handoff = () => {
-    const confirmed = window.confirm('交给下一位后，将清除本机当前访客的推演、命牌和匿名身份；设备外观与声音设置会保留。是否继续？');
-    if (confirmed) handoffSharedDevice();
-  };
-
-  return (
-    <button
-      type="button"
-      className="shared-device-handoff"
-      onClick={handoff}
-      title="清除本位访客数据，交给下一位体验"
-      aria-label="交给下一位体验"
-    >
-      <span aria-hidden="true" />
-      下一位体验
-    </button>
   );
 }
 
@@ -282,6 +259,11 @@ export default function App() {
       if (e.data?.type === 'TAB_OPEN' && e.data.url !== window.location.href) {
         console.warn('[Tab] 检测到另一个标签页打开');
       }
+      if (e.data?.type === 'KIOSK_HANDOFF') {
+        tracker.prepareForHandoff();
+        resetSharedDeviceSession();
+        window.location.replace('/sandbox?new=1&kiosk=1&handoff=1');
+      }
     };
     return () => bc.close();
   }, []);
@@ -291,6 +273,9 @@ export default function App() {
     fetchAgentPersonas();
     // 初始化 Web Vitals 性能监控
     initWebVitals();
+    if (new URLSearchParams(window.location.search).get('handoff') === '1') {
+      tracker.track('kiosk_handoff_completed');
+    }
   }, []);
 
   return (
@@ -301,7 +286,6 @@ export default function App() {
             <AuthProvider>
               <GameProvider>
                 <AnimatedRoutes />
-                <SharedDeviceHandoff />
                 <AchievementToast />
                 <FollowUpReminder />
                 {/* 已废弃：旧轨 <YanChat /> */}

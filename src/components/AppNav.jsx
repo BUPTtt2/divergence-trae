@@ -43,6 +43,10 @@ export default function AppNav({ variant = 'light' }) {
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
   const isActive = (path) => {
     if (path === '/') return location.pathname === '/';
     return location.pathname.startsWith(path);
@@ -57,7 +61,7 @@ export default function AppNav({ variant = 'light' }) {
         borderBottom: `1px solid ${scrolled ? borderColor : 'transparent'}`,
       }}
     >
-      <div className="max-w-[1200px] mx-auto px-6 h-14 flex items-center justify-between">
+      <div className="max-w-[1200px] mx-auto px-4 md:px-6 h-14 flex items-center justify-between">
         {/* Logo */}
         <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/')} role="link" aria-label="返回首页" tabIndex={0}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/'); } }}>
@@ -124,7 +128,7 @@ export default function AppNav({ variant = 'light' }) {
             立卦开演 →
           </motion.button>
 
-          <UserAvatar size={32} />
+          <UserAvatar size={32} showLabel />
 
           {/* Mobile menu toggle */}
           <button
@@ -134,7 +138,7 @@ export default function AppNav({ variant = 'light' }) {
             aria-label={mobileMenuOpen ? '关闭菜单' : '打开菜单'}
             aria-expanded={mobileMenuOpen}
           >
-            <span style={{ fontSize: 16 }}>{mobileMenuOpen ? '☰' : '☷'}</span>
+            <span style={{ fontSize: 18 }}>{mobileMenuOpen ? '×' : '☰'}</span>
           </button>
         </div>
       </div>
@@ -152,7 +156,7 @@ export default function AppNav({ variant = 'light' }) {
             borderTop: `1px solid ${borderColor}`,
           }}
         >
-          <div className="px-6 py-3 space-y-1">
+          <div className="px-4 py-3 grid grid-cols-2 gap-1.5 max-h-[calc(100dvh-56px)] overflow-y-auto">
             {NAV_ITEMS.map(item => (
               <button
                 key={item.path}
@@ -160,7 +164,7 @@ export default function AppNav({ variant = 'light' }) {
                   navigate(item.path);
                   setMobileMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-3 px-3 py-2 text-[12px] text-left rounded-sm"
+                className="w-full flex items-center gap-2 px-3 py-2.5 text-[12px] text-left rounded-sm"
                 style={{
                   color: isActive(item.path) ? T.accent : textColor,
                   backgroundColor: isActive(item.path) ? `${T.accent}10` : 'transparent',
@@ -170,6 +174,18 @@ export default function AppNav({ variant = 'light' }) {
                 {item.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                window.dispatchEvent(new CustomEvent('open-account-modal'));
+              }}
+              className="col-span-2 w-full flex items-center justify-center gap-2 px-3 py-2.5 text-[12px] rounded-sm"
+              style={{ color: T.paperLight, backgroundColor: T.ink }}
+            >
+              <span aria-hidden="true">我</span>
+              我的账号与偏好
+            </button>
           </div>
         </motion.div>
       )}

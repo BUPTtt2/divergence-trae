@@ -1,8 +1,13 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getUserProfile, updateUserProfile, getAvatarOptions, getColorOptions, regenerateNickname } from '../utils/userProfile';
-import { getUserStats, getLevelName, getLevelProgress, getAllAchievements, exportUserData, importUserData } from '../utils/userStats';
+import { getUserStats, getLevelName, getLevelProgress, getAllAchievements } from '../utils/userStats';
 import { useAuth } from '../context/AuthContext.jsx';
+import { isProfileModalControlled } from './account/accountUiModel.js';
+import { isImageAvatar, prepareAvatarImage } from './account/avatarImage.js';
+import { getAuthErrorMessage } from './account/authErrorMessage.js';
+import { createEscapeHandler, lockDocumentScroll } from './account/modalLifecycle.js';
 
 const T = {
   paper: '#F2EDE0',
@@ -13,7 +18,14 @@ const T = {
   accent: '#A8472E',
 };
 
-export default function UserAvatar({ size = 36, showModal = false, onModalClose, compactPreferences = false }) {
+function AvatarFace({ avatar, alt = '', className = '' }) {
+  if (isImageAvatar(avatar)) {
+    return <img src={avatar} alt={alt} className={`w-full h-full object-cover ${className}`} />;
+  }
+  return avatar;
+}
+
+export default function UserAvatar({ size = 36, showModal, onModalClose, compactPreferences = false, showLabel = false }) {
   const [localProfile, setLocalProfile] = useState(null);
   const [localShow, setLocalShow] = useState(false);
   const [editNickname, setEditNickname] = useState('');
@@ -26,39 +38,38 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
   const [stats, setStats] = useState(null);
   const [achievements, setAchievements] = useState([]);
   const [activeTab, setActiveTab] = useState('profile');
+  const [profileMessage, setProfileMessage] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [avatarPreparing, setAvatarPreparing] = useState(false);
+  const avatarInputRef = useRef(null);
 
-  const { status, user, login, register, logout, upgradeAccount, retryConnect } = useAuth();
+  const { status, user, login, register, logout, upgradeAccount, updateAccountProfile, retryConnect } = useAuth();
   const [authModal, setAuthModal] = useState(null);
 
   useEffect(() => {
     const handleOpenAuth = (e) => {
       openAuthModal(e.detail?.type || 'login');
     };
+    const handleOpenAccount = () => {
+      if (!isProfileModalControlled(showModal)) setLocalShow(true);
+    };
     window.addEventListener('open-auth-modal', handleOpenAuth);
-    return () => window.removeEventListener('open-auth-modal', handleOpenAuth);
-  }, []);
+    window.addEventListener('open-account-modal', handleOpenAccount);
+    return () => {
+      window.removeEventListener('open-auth-modal', handleOpenAuth);
+      window.removeEventListener('open-account-modal', handleOpenAccount);
+    };
+  }, [showModal]);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authNickname, setAuthNickname] = useState('');
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
-  const isControlled = showModal !== undefined;
+  const isControlled = isProfileModalControlled(showModal);
   const modalOpen = isControlled ? showModal : localShow;
 
-  const profile = useMemo(() => {
-    const local = localProfile || getUserProfile();
-    if (user && !user.offline) {
-      return {
-        ...local,
-        nickname: user.nickname || local.nickname,
-        avatar: user.avatar || local.avatar,
-        color: user.color || local.color,
-        bio: user.bio || local.bio,
-      };
-    }
-    return local;
-  }, [localProfile, user]);
+  const profile = localProfile || getUserProfile();
 
   useEffect(() => {
     const p = getUserProfile();
@@ -66,6 +77,24 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
     setStats(getUserStats());
     setAchievements(getAllAchievements());
   }, [modalOpen]);
+
+  useEffect(() => {
+    const remoteUser = user;
+    if (!remoteUser || remoteUser.offline) return;
+    const updates = {};
+    const remoteProfile = {
+      nickname: remoteUser.nickname,
+      avatar: remoteUser.avatar,
+      color: remoteUser.color,
+      bio: remoteUser.bio,
+    };
+    for (const [key, value] of Object.entries(remoteProfile)) {
+      if (value !== null && value !== undefined && value !== '') updates[key] = value;
+    }
+    if (Object.keys(updates).length > 0) {
+      setLocalProfile(updateUserProfile(updates));
+    }
+  }, [user]);
 
   useEffect(() => {
     if (profile) {
@@ -83,12 +112,14 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
     if (!isControlled) setLocalShow(true);
   };
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     if (isControlled && onModalClose) onModalClose();
     else setLocalShow(false);
-  };
+  }, [isControlled, onModalClose]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    setProfileMessage('');
+    setProfileSaving(true);
     const updated = updateUserProfile({
       nickname: editNickname.trim() || profile?.nickname,
       bio: editBio.trim(),
@@ -101,7 +132,42 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
       },
     });
     setLocalProfile(updated);
-    handleClose();
+    try {
+      if ((status === 'registered' || status === 'anonymous') && user && !user.offline) {
+        const syncedUser = await updateAccountProfile({
+          nickname: updated.nickname,
+          avatar: updated.avatar,
+          color: updated.color,
+          bio: updated.bio,
+        });
+        setLocalProfile(updateUserProfile({
+          nickname: syncedUser.nickname,
+          avatar: syncedUser.avatar,
+          color: syncedUser.color,
+          bio: syncedUser.bio || '',
+        }));
+      }
+      handleClose();
+    } catch (error) {
+      setProfileMessage(`已保存在本机；云端未同步：${error.message}`);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const handleAvatarFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setProfileMessage('');
+    setAvatarPreparing(true);
+    try {
+      setEditAvatar(await prepareAvatarImage(file));
+    } catch (error) {
+      setProfileMessage(error.message || '头像处理失败，请换一张重试');
+    } finally {
+      setAvatarPreparing(false);
+    }
   };
 
   const handleRegenerateNick = () => {
@@ -117,10 +183,15 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
     setAuthModal(type);
   };
 
-  const closeAuthModal = () => {
+  const closeAuthModal = useCallback(() => {
     setAuthModal(null);
     setAuthError('');
     setAuthLoading(false);
+  }, []);
+
+  const switchAuthModal = (type) => {
+    setAuthError('');
+    setAuthModal(type);
   };
 
   // 登录
@@ -131,7 +202,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
       await login({ email: authEmail.trim(), password: authPassword });
       closeAuthModal();
     } catch (e) {
-      setAuthError(e.message || '登录失败');
+      setAuthError(getAuthErrorMessage(e, '登录失败'));
     } finally {
       setAuthLoading(false);
     }
@@ -149,7 +220,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
       await register({ email: authEmail.trim(), password: authPassword, nickname: authNickname.trim() || undefined });
       closeAuthModal();
     } catch (e) {
-      setAuthError(e.message || '注册失败');
+      setAuthError(getAuthErrorMessage(e, '注册失败'));
     } finally {
       setAuthLoading(false);
     }
@@ -167,7 +238,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
       await upgradeAccount({ email: authEmail.trim(), password: authPassword, nickname: authNickname.trim() || undefined });
       closeAuthModal();
     } catch (e) {
-      setAuthError(e.message || '升级失败');
+      setAuthError(getAuthErrorMessage(e, '升级失败'));
     } finally {
       setAuthLoading(false);
     }
@@ -191,15 +262,42 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
     }
   };
 
+  const closeAllModals = () => {
+    closeAuthModal();
+    handleClose();
+  };
+
+  useEffect(() => {
+    if (!modalOpen && !authModal) return undefined;
+    const unlock = lockDocumentScroll(document);
+    const onEscape = createEscapeHandler(() => {
+      if (authModal) closeAuthModal();
+      else handleClose();
+    });
+    window.addEventListener('keydown', onEscape);
+    return () => {
+      window.removeEventListener('keydown', onEscape);
+      unlock();
+    };
+  }, [modalOpen, authModal, closeAuthModal, handleClose]);
+
   if (!profile) return null;
 
   return (
     <>
-      <div className="relative" style={{ width: size, height: size }}>
-        <button
-          onClick={handleOpen}
-          className="w-full h-full flex items-center justify-center font-serif font-bold transition-transform hover:scale-105 shrink-0"
+      <button
+        type="button"
+        onClick={handleOpen}
+        className="flex items-center gap-1.5 font-serif font-bold transition-transform hover:scale-[1.03] shrink-0"
+        style={{ color: T.ink, background: 'transparent', border: 0, padding: 0 }}
+        title={`${profile.nickname} · Lv.${stats?.level || 1}`}
+        aria-label={`打开我的账号：${profile.nickname}`}
+      >
+        <span
+          className="relative flex items-center justify-center overflow-visible shrink-0"
           style={{
+            width: size,
+            height: size,
             fontSize: size * 0.45,
             color: T.paperLight,
             backgroundColor: profile.color,
@@ -207,52 +305,63 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
             boxShadow: `0 0 12px ${profile.color}60`,
             border: `1px solid ${profile.color}`,
           }}
-          title={`${profile.nickname} · Lv.${stats?.level || 1}`}
         >
-          {profile.avatar}
-        </button>
-        {stats && stats.level > 1 && (
-          <div
-            className="absolute -bottom-1 -right-1 flex items-center justify-center font-mono font-bold"
-            style={{
-              width: size * 0.45,
-              height: size * 0.45,
-              fontSize: size * 0.28,
-              backgroundColor: T.ink,
-              color: T.gold || T.accent,
-              borderRadius: '50%',
-              border: `1px solid ${T.gold || T.accent}`,
-              lineHeight: 1,
-            }}
-          >
-            {stats.level}
-          </div>
-        )}
-      </div>
+          <span className="w-full h-full flex items-center justify-center overflow-hidden" style={{ borderRadius: 2 }}>
+            <AvatarFace avatar={profile.avatar} alt={`${profile.nickname}的头像`} />
+          </span>
+          {stats && stats.level > 1 && (
+            <span
+              className="absolute -bottom-1 -right-1 flex items-center justify-center font-mono font-bold"
+              style={{
+                width: size * 0.45,
+                height: size * 0.45,
+                fontSize: size * 0.28,
+                backgroundColor: T.ink,
+                color: T.accent,
+                borderRadius: '50%',
+                border: `1px solid ${T.accent}`,
+                lineHeight: 1,
+              }}
+            >
+              {stats.level}
+            </span>
+          )}
+        </span>
+        {showLabel && <span className="md:hidden text-[11px] font-medium whitespace-nowrap">我的</span>}
+      </button>
 
-      <AnimatePresence>
+      {typeof document !== 'undefined' && createPortal(<AnimatePresence>
         {modalOpen && (
           <div
-            className="fixed inset-0 z-[100] flex items-center justify-center"
+            role="presentation"
+            className="fixed inset-0 z-[120] flex items-stretch sm:items-center justify-center overscroll-contain sm:p-6"
             style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
             onClick={handleClose}
           >
             <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-label="我的账号与偏好"
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className={`p-6 ${compactPreferences ? 'w-[440px]' : 'w-[360px]'} max-w-[90vw] mx-4 max-h-[85vh] overflow-y-auto`}
-              style={{ backgroundColor: T.paperLight, borderRadius: 5, border: '1px solid ' + T.border }}
+              className={`px-4 pb-4 sm:px-6 sm:pb-6 ${compactPreferences ? 'sm:w-[440px]' : 'sm:w-[380px]'} w-full h-[100dvh] sm:h-auto sm:max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-none sm:rounded-[5px]`}
+              style={{ backgroundColor: T.paperLight, border: '1px solid ' + T.border, paddingTop: 'env(safe-area-inset-top)' }}
               onClick={(e) => e.stopPropagation()}
             >
-              <h3 className="text-[16px] font-serif font-semibold mb-1" style={{ color: T.ink }}>
-                {compactPreferences ? '我与偏好' : activeTab === 'profile' ? '我与偏好' : activeTab === 'achievements' ? '成就' : '推演统计'}
-              </h3>
-              <p className="text-[11px] mb-4" style={{ color: T.muted }}>
-                {compactPreferences ? '这里保存真实的本地资料、回答方式与记忆授权，不展示模拟等级或成就' : activeTab === 'profile' ? '身份、回答方式与记忆范围会真实保存到本机' :
-                 activeTab === 'achievements' ? `已解锁 ${achievements.filter(a => a.unlocked).length} / ${achievements.length} 项成就` :
-                 `等级 ${stats?.level || 1} · ${getLevelName(stats?.level || 1)}`}
-              </p>
+              <div className="sticky top-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-3 pb-3 mb-4 flex items-start gap-3" style={{ backgroundColor: T.paperLight, borderBottom: `1px solid ${T.border}` }}>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-[16px] font-serif font-semibold mb-1" style={{ color: T.ink }}>
+                    {compactPreferences ? '我与偏好' : activeTab === 'profile' ? '我与偏好' : activeTab === 'achievements' ? '成就' : '推演统计'}
+                  </h3>
+                  <p className="text-[11px]" style={{ color: T.muted }}>
+                    {compactPreferences ? '这里保存真实的资料、回答方式与记忆授权，不展示模拟等级或成就' : activeTab === 'profile' ? '身份、回答方式与记忆范围会保存；联网账号同步基础资料' :
+                     activeTab === 'achievements' ? `已解锁 ${achievements.filter(a => a.unlocked).length} / ${achievements.length} 项成就` :
+                     `等级 ${stats?.level || 1} · ${getLevelName(stats?.level || 1)}`}
+                  </p>
+                </div>
+                <button type="button" onClick={handleClose} className="w-9 h-9 shrink-0 text-[20px] leading-none" style={{ color: T.ink, background: T.paper, border: `1px solid ${T.border}`, borderRadius: 4 }} aria-label="关闭我的账号">×</button>
+              </div>
 
               {/* Tab 切换 */}
               {!compactPreferences && <div className="flex gap-1 mb-5" style={{ borderBottom: `1px solid ${T.border}` }}>
@@ -356,15 +465,24 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
                 {status === 'anonymous' && (
                   <>
                     <div className="text-[11px] mb-2" style={{ color: T.muted }}>
-                      匿名访客 · 当前资料与偏好保存在本机
+                      匿名访客 · 不注册也可以完整推演
                     </div>
-                    <button
-                      onClick={() => openAuthModal('upgrade')}
-                      className="w-full py-1.5 text-[11px] font-medium"
-                      style={{ color: T.paperLight, backgroundColor: T.accent, borderRadius: 3, border: 'none' }}
-                    >
-                      升级账号
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => openAuthModal('login')}
+                        className="flex-1 py-1.5 text-[11px]"
+                        style={{ color: T.ink, backgroundColor: 'transparent', borderRadius: 3, border: `1px solid ${T.border}` }}
+                      >
+                        登录已有账号
+                      </button>
+                      <button
+                        onClick={() => openAuthModal('upgrade')}
+                        className="flex-1 py-1.5 text-[11px] font-medium"
+                        style={{ color: T.paperLight, backgroundColor: T.accent, borderRadius: 3, border: 'none' }}
+                      >
+                        注册并同步
+                      </button>
+                    </div>
                   </>
                 )}
                 {status === 'registered' && (
@@ -392,7 +510,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
                 <>
                   <div className="flex justify-center mb-4">
                     <div
-                      className="w-14 h-14 flex items-center justify-center text-xl font-serif font-bold"
+                      className="w-16 h-16 flex items-center justify-center text-xl font-serif font-bold overflow-hidden"
                       style={{
                         color: T.paperLight,
                         backgroundColor: editColor,
@@ -401,7 +519,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
                         border: `1.5px solid ${editColor}`,
                       }}
                     >
-                      {editAvatar}
+                      <AvatarFace avatar={editAvatar} alt="头像预览" />
                     </div>
                   </div>
 
@@ -445,6 +563,31 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
                         </button>
                       ))}
                     </div>
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={handleAvatarFile}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => avatarInputRef.current?.click()}
+                      disabled={avatarPreparing}
+                      className="mt-2 w-full py-2 text-[11px]"
+                      style={{
+                        color: T.ink,
+                        backgroundColor: T.paper,
+                        border: `1px dashed ${T.accent}70`,
+                        borderRadius: 3,
+                        opacity: avatarPreparing ? 0.6 : 1,
+                      }}
+                    >
+                      {avatarPreparing ? '正在处理图片…' : '上传自己的头像'}
+                    </button>
+                    <div className="mt-1 text-[9px]" style={{ color: T.muted }}>
+                      支持 JPG、PNG、WebP，自动裁成方形并缩小
+                    </div>
                   </div>
 
                   <div className="mb-3">
@@ -471,7 +614,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
                     <textarea
                       value={editBio}
                       onChange={(e) => setEditBio(e.target.value)}
-                      maxLength={30}
+                      maxLength={80}
                       rows={2}
                       className="w-full px-3 py-2 text-[12px] outline-none resize-none"
                       style={{ backgroundColor: T.paper, border: `1px solid ${T.border}`, borderRadius: 3, color: T.ink }}
@@ -557,7 +700,13 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
                 </div>
               )}
 
-              <div className="flex items-center gap-3">
+              {profileMessage && (
+                <div className="mb-3 text-[11px] p-2" style={{ color: T.accent, backgroundColor: T.accent + '10', borderRadius: 3, border: `1px solid ${T.accent}30` }}>
+                  {profileMessage}
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 sticky bottom-0 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-3" style={{ backgroundColor: T.paperLight, paddingBottom: 'max(12px, env(safe-area-inset-bottom))', borderTop: `1px solid ${T.border}` }}>
                 <button
                   onClick={handleClose}
                   className="flex-1 py-2 text-[11px]"
@@ -568,44 +717,51 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
                 {(compactPreferences || activeTab === 'profile') && (
                   <button
                     onClick={handleSave}
+                    disabled={profileSaving || avatarPreparing}
                     className="flex-1 py-2 text-[11px] font-medium"
-                    style={{ color: T.paperLight, backgroundColor: T.ink, borderRadius: 3 }}
+                    style={{ color: T.paperLight, backgroundColor: profileSaving ? T.muted : T.ink, borderRadius: 3, opacity: avatarPreparing ? 0.6 : 1 }}
                   >
-                    保存
+                    {profileSaving ? '保存中…' : '保存'}
                   </button>
                 )}
               </div>
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>, document.body)}
 
       {/* 登录 / 注册 / 升级 弹窗 */}
-      <AnimatePresence>
+      {typeof document !== 'undefined' && createPortal(<AnimatePresence>
         {authModal && (
           <div
-            className="fixed inset-0 z-[200] flex items-center justify-center"
+            role="presentation"
+            className="fixed inset-0 z-[140] flex items-stretch sm:items-center justify-center overscroll-contain sm:p-6"
             style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
             onClick={closeAuthModal}
           >
             <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-label={authModal === 'login' ? '登录账号' : authModal === 'register' ? '注册账号' : '升级账号'}
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="p-6 w-[340px] max-w-[90vw] mx-4"
-              style={{ backgroundColor: T.paperLight, borderRadius: 5, border: '1px solid ' + T.border }}
+              className="px-4 pb-4 sm:px-6 sm:pb-6 w-full sm:w-[360px] h-[100dvh] sm:h-auto sm:max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-none sm:rounded-[5px]"
+              style={{ backgroundColor: T.paperLight, border: '1px solid ' + T.border, paddingTop: 'env(safe-area-inset-top)' }}
               onClick={(e) => e.stopPropagation()}
             >
-              <h3 className="text-[15px] font-serif font-semibold mb-1" style={{ color: T.ink }}>
-                {authModal === 'login' ? '登录账号' :
-                 authModal === 'register' ? '注册账号' :
-                 '升级账号'}
-              </h3>
-              <p className="text-[11px] mb-4" style={{ color: T.muted }}>
-                {authModal === 'login' ? '登录后数据云端同步，跨设备可用' :
-                 authModal === 'register' ? '注册后享云端同步与多端协作' :
-                 '注册账号后，匿名数据将自动迁移到新账号'}
-              </p>
+              <div className="sticky top-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-3 pb-3 mb-4 flex items-center gap-2" style={{ backgroundColor: T.paperLight, borderBottom: `1px solid ${T.border}` }}>
+                <button type="button" onClick={closeAuthModal} className="px-2 h-9 text-[11px] shrink-0" style={{ color: T.ink, background: T.paper, border: `1px solid ${T.border}`, borderRadius: 4 }} aria-label="返回我的账号">← 返回</button>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-[15px] font-serif font-semibold mb-0.5" style={{ color: T.ink }}>
+                    {authModal === 'login' ? '登录账号' : authModal === 'register' ? '注册账号' : '升级账号'}
+                  </h3>
+                  <p className="text-[10px] truncate" style={{ color: T.muted }}>
+                    {authModal === 'login' ? '登录后跨设备同步' : authModal === 'register' ? '注册后开始同步' : '保留本机资料并开始同步'}
+                  </p>
+                </div>
+                <button type="button" onClick={closeAllModals} className="w-9 h-9 shrink-0 text-[20px] leading-none" style={{ color: T.ink, background: T.paper, border: `1px solid ${T.border}`, borderRadius: 4 }} aria-label="关闭账号窗口">×</button>
+              </div>
 
               {authModal !== 'login' && (
                 <div className="mb-3">
@@ -661,7 +817,16 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
                 </div>
               )}
 
-              <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => switchAuthModal(authModal === 'login' ? (status === 'anonymous' ? 'upgrade' : 'register') : 'login')}
+                className="w-full mb-3 py-1 text-[10px]"
+                style={{ color: T.accent, background: 'transparent', border: 0 }}
+              >
+                {authModal === 'login' ? '没有账号？注册并同步' : '已有账号？直接登录'}
+              </button>
+
+              <div className="flex items-center gap-3 sticky bottom-0 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-3" style={{ backgroundColor: T.paperLight, paddingBottom: 'max(12px, env(safe-area-inset-bottom))', borderTop: `1px solid ${T.border}` }}>
                 <button
                   onClick={closeAuthModal}
                   className="flex-1 py-2 text-[11px]"
@@ -694,7 +859,7 @@ export default function UserAvatar({ size = 36, showModal = false, onModalClose,
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>, document.body)}
     </>
   );
 }

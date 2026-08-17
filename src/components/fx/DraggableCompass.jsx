@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import UserAvatar from '../UserAvatar';
+import { sessionEntryAction } from '../../game/sessionEntryModel.js';
+import { detectSharedDeviceMode, handoffSharedDevice } from '../../utils/sharedDeviceSession.js';
+import { chooseHorizontalPlacement, clampFloatingPosition } from './floatingPlacement.js';
+import { tracker } from '../../services/tracker.js';
 
 /* =================================================================
    可拖拽八卦罗盘 (悬浮在所有页面上)
@@ -52,7 +55,6 @@ const TOOLS = [
   { id: 'agents', label: '智囊阁', desc: '搜索、订阅与铸造智囊', rune: '智' },
   { id: 'cards', label: '锦囊', desc: '命牌、推演记录与回访', rune: '藏' },
   { id: 'memory', label: '系统记忆', desc: '查看真实本地偏好与事实', rune: '忆' },
-  { id: 'profile', label: '我与偏好', desc: '资料、回答方式与记忆范围', rune: '我' },
   { id: 'note', label: '落笔', desc: '保存一条本地笔记', rune: '笔' },
   { id: 'cast', label: '投卦', desc: '三枚铜钱立一卦', rune: '卦' },
   { id: 'lock', label: '镇纸', desc: '固定或解除悬浮位置', rune: '定' },
@@ -67,6 +69,8 @@ const DOUBLE_CLICK_MS = 300;
 export default function DraggableCompass() {
   const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   const navigate = useNavigate();
+  const location = useLocation();
+  const kiosk = detectSharedDeviceMode({ search: location.search });
 
   // 隐藏状态
   const [hidden, setHidden] = useState(() => {
@@ -77,7 +81,13 @@ export default function DraggableCompass() {
   const [pos, setPos] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
-      if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') return saved;
+      if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
+        return clampFloatingPosition({
+          position: saved,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+        });
+      }
     } catch {}
     return { x: (typeof window !== 'undefined' ? window.innerWidth : 1200) - 120, y: (typeof window !== 'undefined' ? window.innerHeight : 800) - 120 };
   });
@@ -93,7 +103,6 @@ export default function DraggableCompass() {
   const [locked, setLocked] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [unpackOpen, setUnpackOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [unpackQ, setUnpackQ] = useState('');
   const [noteText, setNoteText] = useState('');
@@ -101,6 +110,13 @@ export default function DraggableCompass() {
   const [pressed, setPressed] = useState(false);
   const [hasActiveSession, setHasActiveSession] = useState(() => {
     try { return Boolean(sessionStorage.getItem(ACTIVE_SESSION_KEY)); } catch { return false; }
+  });
+  const primarySessionAction = sessionEntryAction({ kiosk, hasActiveSession });
+  const compactMenu = typeof window !== 'undefined' && window.innerWidth < 440;
+  const menuPlacement = chooseHorizontalPlacement({
+    anchorX: pos.x,
+    viewportWidth: typeof window !== 'undefined' ? window.innerWidth : 1200,
+    panelWidth: 288,
   });
   const [capabilityStatus, setCapabilityStatus] = useState({ memories: 0, cards: 0, preferences: false });
   // 三连抽同卦彩蛋
@@ -119,6 +135,15 @@ export default function DraggableCompass() {
   useEffect(() => {
     try { localStorage.setItem(POS_KEY, JSON.stringify(pos)); } catch {}
   }, [pos]);
+  useEffect(() => {
+    const clampToViewport = () => setPos((current) => clampFloatingPosition({
+      position: current,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    }));
+    window.addEventListener('resize', clampToViewport);
+    return () => window.removeEventListener('resize', clampToViewport);
+  }, []);
   useEffect(() => {
     try { localStorage.setItem(MODE_KEY, mode); } catch {}
   }, [mode]);
@@ -156,8 +181,8 @@ export default function DraggableCompass() {
   }, []);
 
   useEffect(() => {
-    if (menuOpen || memoryOpen || profileOpen) refreshCapabilityStatus();
-  }, [menuOpen, memoryOpen, profileOpen, refreshCapabilityStatus]);
+    if (menuOpen || memoryOpen) refreshCapabilityStatus();
+  }, [menuOpen, memoryOpen, refreshCapabilityStatus]);
 
   useEffect(() => {
     const refresh = () => {
@@ -171,6 +196,12 @@ export default function DraggableCompass() {
     };
   }, []);
 
+  const showBubble = useCallback((t, ms = 2500) => {
+    setBubble(t);
+    if (showBubble._timer) clearTimeout(showBubble._timer);
+    showBubble._timer = setTimeout(() => setBubble(null), ms);
+  }, []);
+
   // Shift+H 恢复隐藏
   useEffect(() => {
     const handler = (e) => {
@@ -182,13 +213,7 @@ export default function DraggableCompass() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
-
-  const showBubble = useCallback((t, ms = 2500) => {
-    setBubble(t);
-    if (showBubble._timer) clearTimeout(showBubble._timer);
-    showBubble._timer = setTimeout(() => setBubble(null), ms);
-  }, []);
+  }, [showBubble]);
 
   const handleCast = useCallback(() => {
     setCasting(true);
@@ -350,7 +375,23 @@ export default function DraggableCompass() {
       setMenuOpen(false);
       navigate('/sandbox');
     } else if (toolId === 'new') {
+      if (primarySessionAction.mode === 'kiosk-handoff') {
+        const confirmed = window.confirm('将清除此设备上当前访客的推演、命牌和匿名身份，再交给下一位。设备外观与声音设置会保留。是否继续？');
+        if (!confirmed) return;
+        setMenuOpen(false);
+        tracker.track('kiosk_handoff_started', { phase: 'handoff' });
+        Promise.race([
+          tracker.flush(),
+          new Promise((resolve) => setTimeout(resolve, 250)),
+        ]).finally(() => handoffSharedDevice({ tracking: tracker }));
+        return;
+      }
+      if (hasActiveSession) {
+        const confirmed = window.confirm('当前进度会保留为未完成推演。确定新开一局吗？');
+        if (!confirmed) return;
+      }
       try { sessionStorage.removeItem(ACTIVE_SESSION_KEY); } catch {}
+      tracker.track('new_deliberation_requested', { phase: 'input', source: 'global_companion' });
       setMenuOpen(false);
       window.location.assign('/sandbox?new=1');
     } else if (toolId === 'home') {
@@ -368,9 +409,6 @@ export default function DraggableCompass() {
     } else if (toolId === 'note') {
       setMenuOpen(false);
       setNoteOpen(true);
-    } else if (toolId === 'profile') {
-      setMenuOpen(false);
-      setProfileOpen(true);
     } else if (toolId === 'lock') {
       const willLock = !locked;
       setLocked(willLock);
@@ -389,7 +427,7 @@ export default function DraggableCompass() {
         showBubble({ name: '归', trigram: '☰', element: '天', gloss: '自动召回。' }, 1500);
       }, 5000);
     }
-  }, [handleCast, showBubble, locked, navigate]);
+  }, [handleCast, hasActiveSession, locked, navigate, primarySessionAction.mode, showBubble]);
 
   const describeTool = (tool) => {
     if (tool.id === 'yan') return hasActiveSession ? '恢复当前本局' : '尚无本局，进入立案';
@@ -516,7 +554,7 @@ export default function DraggableCompass() {
         position: 'fixed',
         left: pos.x,
         top: pos.y,
-        zIndex: 9999,
+        zIndex: 90,
         touchAction: 'none',
         userSelect: 'none',
       }}
@@ -717,16 +755,18 @@ export default function DraggableCompass() {
       <AnimatePresence>
         {menuOpen && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.94, x: -8 }}
+            initial={{ opacity: 0, scale: 0.94, x: menuPlacement === 'left' ? 8 : -8 }}
             animate={{ opacity: 1, scale: 1, x: 0 }}
-            exit={{ opacity: 0, scale: 0.94, x: -8 }}
+            exit={{ opacity: 0, scale: 0.94, x: menuPlacement === 'left' ? 8 : -8 }}
             transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
             style={{
-              position: 'absolute',
-              left: 72,
-              top: 0,
+              position: compactMenu ? 'fixed' : 'absolute',
+              left: compactMenu ? 12 : menuPlacement === 'right' ? 72 : 'auto',
+              right: compactMenu ? 12 : menuPlacement === 'left' ? 72 : 'auto',
+              top: compactMenu ? 'auto' : 0,
+              bottom: compactMenu ? 92 : 'auto',
               padding: 10,
               display: 'grid', gridTemplateColumns: 'repeat(2, minmax(118px, 1fr))', gap: 6,
               background: 'linear-gradient(145deg, rgba(19,15,11,.97), rgba(8,7,6,.96))',
@@ -735,10 +775,14 @@ export default function DraggableCompass() {
               boxShadow: '0 18px 52px rgba(0,0,0,.46), inset 0 0 0 1px rgba(255,255,255,.025)',
               backdropFilter: 'blur(18px)',
               WebkitBackdropFilter: 'blur(18px)',
-              minWidth: 268,
+              minWidth: compactMenu ? 0 : 268,
             }}
           >
-            {TOOLS.map(t => (
+            {TOOLS.map((tool) => {
+              const t = tool.id === 'new'
+                ? { ...tool, label: primarySessionAction.label, desc: primarySessionAction.description }
+                : tool;
+              return (
               <button
                 key={t.id}
                 onClick={(e) => { e.stopPropagation(); handleTool(t.id); }}
@@ -757,7 +801,8 @@ export default function DraggableCompass() {
                 <span style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', fontSize: 14, color: t.primary ? '#efd47d' : '#b6a887', border: '1px solid rgba(213,177,88,.2)', fontFamily: '"Ma Shan Zheng", serif' }}>{t.rune}</span>
                 <span style={{ display: 'grid', fontSize: 12, color: t.primary ? '#f0dda0' : '#d2c8b8', fontFamily: '"Noto Serif SC", serif', letterSpacing: '0.08em' }}>{t.id === 'yan' && hasActiveSession ? '继续本局' : t.label}<small style={{ marginTop: 3, color: '#71695d', fontSize: 8, letterSpacing: 0 }}>{describeTool(t)}</small></span>
               </button>
-            ))}
+              );
+            })}
             {/* 锁定时, 镇纸按钮变成"解镇纸" */}
             {/* 隐藏时, 隐按钮变成"召回" - 但隐藏后整个组件消失, 这里只处理锁定 */}
             {locked && (
@@ -966,13 +1011,6 @@ export default function DraggableCompass() {
         )}
       </AnimatePresence>
 
-      {profileOpen && (
-        <UserAvatar
-          showModal={profileOpen}
-          onModalClose={() => setProfileOpen(false)}
-          compactPreferences
-        />
-      )}
       {memoryOpen && (() => {
         let memories = [];
         try {

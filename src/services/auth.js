@@ -19,6 +19,7 @@ import {
   getCurrentUserIdSync,
   isTokenExpiringSoonSync,
 } from './baseConfig.js';
+import { requestAccountProfileUpdate } from './accountProfileClient.js';
 
 const ACCESS_TOKEN_KEY = TOKEN_KEYS.ACCESS_TOKEN;
 const REFRESH_TOKEN_KEY = TOKEN_KEYS.REFRESH_TOKEN;
@@ -113,7 +114,7 @@ export async function register({ email, password, nickname }) {
     body: JSON.stringify({ email, password, nickname }),
   });
   const data = await resp.json();
-  if (!resp.ok) throw new Error(data.message || '注册失败');
+  if (!resp.ok) throw new Error(data.error || data.message || '注册失败');
   saveAuth(data);
   return data;
 }
@@ -128,9 +129,19 @@ export async function login({ email, password }) {
     body: JSON.stringify({ email, password }),
   });
   const data = await resp.json();
-  if (!resp.ok) throw new Error(data.message || '登录失败');
+  if (!resp.ok) throw new Error(data.error || data.message || '登录失败');
   saveAuth(data);
   return data;
+}
+
+export async function updateProfile(profile) {
+  const user = await requestAccountProfileUpdate({
+    apiBaseUrl: API_BASE_URL,
+    token: getAccessToken(),
+    profile,
+  });
+  storageSet(USER_KEY, user);
+  return user;
 }
 
 /**

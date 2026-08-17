@@ -85,7 +85,21 @@ export function resetSharedDeviceSession({
   return { localRemoved, sessionRemoved };
 }
 
-export function handoffSharedDevice() {
-  resetSharedDeviceSession();
-  window.location.replace('/sandbox?new=1&kiosk=1');
+export function handoffSharedDevice({
+  local = typeof window !== 'undefined' ? window.localStorage : null,
+  session = typeof window !== 'undefined' ? window.sessionStorage : null,
+  location = typeof window !== 'undefined' ? window.location : null,
+  channel = null,
+  tracking = null,
+} = {}) {
+  tracking?.prepareForHandoff?.();
+  resetSharedDeviceSession({ local, session });
+
+  let handoffChannel = channel;
+  if (!handoffChannel && typeof BroadcastChannel !== 'undefined') {
+    handoffChannel = new BroadcastChannel('yance-tab-sync');
+  }
+  handoffChannel?.postMessage?.({ type: 'KIOSK_HANDOFF' });
+  handoffChannel?.close?.();
+  location?.replace?.('/sandbox?new=1&kiosk=1&handoff=1');
 }

@@ -6,7 +6,7 @@ import { initDB } from './services/db.js';
 import { isLLMAvailable } from './services/llmRouter.js';
 import { providerRuntime } from './services/providerRuntime.js';
 import { persistUsageEntry } from './services/llmUsageService.js';
-import { info, logRequest, logResponse } from './services/logger.js';
+import { logRequest, logResponse } from './services/logger.js';
 
 // 路由
 import agentRoutes from './routes/agent.js';
@@ -25,7 +25,10 @@ import authRoutes from './routes/auth.js';
 import syncRoutes from './routes/sync.js';
 import trackRoutes from './routes/track.js';
 import deliberationRoutes from './routes/deliberation.js';
+import feedbackRoutes from './routes/feedback.js';
+import opsRoutes from './routes/ops.js';
 import { startErrorMonitor } from './middleware/errorMonitor.js';
+import { startAnalyticsRetention } from './services/analyticsRetention.js';
 
 // 初始化数据库（内存模式时安全，PostgreSQL时连接池）
 initDB();
@@ -118,9 +121,12 @@ app.use('/api/agent/session', sessionRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/track', trackRoutes);
 app.use('/api/deliberation', deliberationRoutes);
+app.use('/api/feedback', feedbackRoutes);
+app.use('/api/ops', opsRoutes);
 
 // 启动 LLM 错误率监控（每 5 分钟检查）
 startErrorMonitor();
+startAnalyticsRetention();
 
 // 错误处理
 app.use(notFound);

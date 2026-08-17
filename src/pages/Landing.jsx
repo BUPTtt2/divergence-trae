@@ -10,6 +10,8 @@ import SpotlightCard from '../components/fx/Spotlight';
 import ShinyText from '../components/fx/ShinyText';
 import Footer from '../components/layout/Footer';
 import AppNav from '../components/AppNav';
+import { useAuth } from '../context/AuthContext.jsx';
+import { getAccountEntry } from '../components/account/accountUiModel.js';
 
 
 /* ------------------------------------------------------------------
@@ -1143,6 +1145,8 @@ function PreviewLine({ agent, text, isUser, delay }) {
    ════════════════════════════════════════════════ */
 export default function Landing() {
   const navigate = useNavigate();
+  const { status: authStatus } = useAuth();
+  const accountEntry = getAccountEntry(authStatus);
   const reduce = useReducedMotion();
   const { scrollY } = useScroll();
   const heroY = useTransform(scrollY, [0, 600], [0, -60]);
@@ -1206,7 +1210,7 @@ export default function Landing() {
         <span className="text-[10px] font-mono tracking-wide">
           <span style={{ color: T.accentBright }}>开源 / MIT</span>
           <span className="mx-3" style={{ color: '#555' }}>|</span>
-          <span style={{ color: '#999' }}>数据云端同步，跨设备可用</span>
+          <span style={{ color: '#999' }}>无需登录即可体验 · 登录后跨设备同步</span>
           <span className="mx-3" style={{ color: '#555' }}>|</span>
           <button onClick={() => navigate('/scenarios')} className="hover:underline" style={{ color: T.accentBright }}>查看剧本 →</button>
         </span>
@@ -1224,7 +1228,7 @@ export default function Landing() {
           <Bagua size={680} spin={0} ink={T.ink} accent={T.ink} showLabels={false} />
         </div>
 
-        <motion.div style={reduce ? {} : { y: heroY }} className="relative max-w-[1200px] mx-auto px-6 pt-16 md:pt-24 pb-20 min-h-[calc(100dvh-104px)] flex items-center">
+        <motion.div style={reduce ? {} : { y: heroY }} className="relative max-w-[1200px] mx-auto px-5 md:px-6 pt-16 md:pt-24 pb-20 min-h-[calc(100dvh-104px)] flex items-center">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center w-full">
             {/* 左：文案 5/12 */}
             <div className="lg:col-span-5">
@@ -1283,13 +1287,13 @@ export default function Landing() {
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 1.25, duration: 0.6, ease: EASE }}
-                className="flex flex-wrap gap-3"
+                className="grid grid-cols-2 sm:flex sm:flex-wrap gap-3"
               >
                 <motion.button
                   whileHover={{ y: -2 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => navigate('/sandbox')}
-                  className="px-6 py-3 text-[12px] font-medium text-white"
+                  className="col-span-2 sm:col-span-1 px-6 py-3 text-[12px] font-medium text-white"
                   style={{ backgroundColor: T.ink, borderRadius: 3 }}
                 >
                   {hasActiveSession ? '继续上次推演' : '立卦开演'}
@@ -1306,14 +1310,12 @@ export default function Landing() {
                 <motion.button
                   whileHover={{ y: -2 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={() => {
-                    const event = new CustomEvent('open-auth-modal', { detail: { type: 'login' } });
-                    window.dispatchEvent(event);
-                  }}
-                  className="px-6 py-3 text-[12px] font-medium"
-                  style={{ backgroundColor: T.accent, color: T.paperLight, borderRadius: 3 }}
+                  onClick={() => window.dispatchEvent(new CustomEvent('open-account-modal'))}
+                  disabled={accountEntry.disabled}
+                  className="px-4 sm:px-6 py-3 text-[12px] font-medium"
+                  style={{ backgroundColor: T.accent, color: T.paperLight, borderRadius: 3, opacity: accountEntry.disabled ? 0.55 : 1 }}
                 >
-                  登录 / 注册
+                  {accountEntry.label}
                 </motion.button>
               </motion.div>
 
@@ -1650,6 +1652,26 @@ export default function Landing() {
               fontFamily: F.cursive,
             }}
           >
+            <button
+              type="button"
+              onClick={(event) => { event.stopPropagation(); finishGuide(); }}
+              style={{
+                position: 'absolute',
+                top: 'max(18px, env(safe-area-inset-top))',
+                right: 18,
+                zIndex: 2,
+                padding: '8px 12px',
+                color: '#F0D890',
+                background: 'rgba(0,0,0,0.28)',
+                border: '1px solid rgba(240,216,144,0.38)',
+                borderRadius: 20,
+                fontFamily: F.regular,
+                fontSize: 11,
+                letterSpacing: '0.12em',
+              }}
+            >
+              跳过引导
+            </button>
             {/* 步骤 1: 天光下注 - 一束光从天上落下 */}
             {guideStep >= 1 && (
               <motion.div

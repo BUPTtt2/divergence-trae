@@ -1,0 +1,45 @@
+.decision-feedback {
+  width: min(100%, 720px);
+  margin: 28px auto 4px;
+  padding: 20px;
+  border-block: 1px solid rgba(216, 189, 115, 0.28);
+  background: linear-gradient(90deg, transparent, rgba(216, 189, 115, 0.035) 18%, rgba(216, 189, 115, 0.035) 82%, transparent);
+  color: #eee4ca;
+}
+
+.decision-feedback header small,
+.decision-feedback legend,
+.decision-feedback__comment span {
+  color: #9e927b;
+  font: 500 11px/1.5 "Noto Serif SC", serif;
+  letter-spacing: .12em;
+}
+
+.decision-feedback h3 { margin: 5px 0 14px; font: 400 20px/1.4 "Noto Serif SC", serif; }
+.decision-feedback__helpfulness { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.decision-feedback button {
+  min-height: 44px;
+  border: 1px solid rgba(216, 189, 115, .28);
+  background: #100d0a;
+  color: #d8bd73;
+  font: 500 13px/1 "Noto Serif SC", serif;
+  cursor: pointer;
+}
+.decision-feedback button[aria-pressed="true"] { border-color: #a8472e; color: #eee4ca; box-shadow: inset 3px 0 #a8472e; }
+.decision-feedback button:focus-visible,
+.decision-feedback textarea:focus-visible { outline: 2px solid #d8bd73; outline-offset: 2px; }
+.decision-feedback fieldset { margin: 16px 0 0; padding: 0; border: 0; }
+.decision-feedback fieldset > div { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.decision-feedback fieldset label { min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid rgba(128, 120, 107, .32); color: #c9bfa9; font-size: 12px; }
+.decision-feedback__comment { display: grid; gap: 7px; margin-top: 16px; }
+.decision-feedback textarea { min-height: 92px; resize: vertical; padding: 11px; border: 1px solid rgba(216, 189, 115, .25); background: rgba(4, 3, 2, .58); color: #eee4ca; font: 13px/1.7 "Noto Serif SC", serif; }
+.decision-feedback footer { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.decision-feedback footer button { padding: 0 18px; }
+.decision-feedback footer span { color: #9e927b; font-size: 12px; }
+
+@media (max-width: 640px) {
+  .decision-feedback { margin-top: 20px; padding-inline: 4px; }
+  .decision-feedback__helpfulness { grid-template-columns: 1fr; }
+  .decision-feedback fieldset label { flex: 1 1 calc(50% - 8px); }
+  .decision-feedback footer { align-items: stretch; flex-direction: column; }
+}

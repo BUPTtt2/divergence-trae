@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import app from '../src/app.js';
+import { query } from '../src/services/db.js';
 
 async function withServer(run) {
   const server = app.listen(0);
@@ -23,6 +24,7 @@ test('product telemetry is persisted under the signed principal and isolated by 
   await withServer(async (base) => {
     const owner = await call(base, '/api/auth/anonymous', { method: 'POST', body: {} });
     const intruder = await call(base, '/api/auth/anonymous', { method: 'POST', body: {} });
+    await query({ table: 'deliberation_sessions', action: 'insert', data: { id: 'sess_observable', user_id: owner.body.user.id, session_id: 'sess_observable', state: 'WAIT', question: 'private' } });
     const tracked = await call(base, '/api/track', {
       method: 'POST',
       token: owner.body.accessToken,
@@ -37,5 +39,6 @@ test('product telemetry is persisted under the signed principal and isolated by 
 
     const metrics = await call(base, '/api/track/metrics', { token: owner.body.accessToken });
     assert.equal(metrics.body.counts.phaseEnterInput, 1);
+    await query({ table: 'deliberation_sessions', action: 'delete', id: 'sess_observable' });
   });
 });

@@ -26,6 +26,7 @@ import { uniqueMessages, uniqueRoles } from '../game/historyPresentation';
 import { buildArenaViewModel } from '../game/arenaViewModel';
 import SystemPulse from '../components/layout/SystemPulse';
 import SessionMeasurement from '../components/layout/SessionMeasurement';
+import { generateDestinyArtwork } from '../services/apiClient.js';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -208,6 +209,8 @@ export default function Game() {
   ));
   const [decisionArtifactOpen, setDecisionArtifactOpen] = useState(true);
   const [destinyArtwork, setDestinyArtwork] = useState(null);
+  const [artworkAttempt, setArtworkAttempt] = useState(0);
+  const artworkRequestRef = useRef('');
   const historyRoles = useMemo(() => uniqueRoles(
     VIRTUAL_ROLES,
     (activeAgents || []).filter((agent) => agent && agent.role !== 'master'),
@@ -282,9 +285,29 @@ export default function Game() {
   const presentationMode = shouldMuteArena({ phase, companionOpen, showHistoryPanel });
   const fateStage = ['path_reveal', 'committing', 'final'].includes(phase);
   const sceneOverlayMode = presentationMode && !fateStage;
+  const artifactWidth = phase === 'final' ? 'min(640px, 50vw)' : ['path_reveal', 'committing'].includes(phase) ? 'min(580px, 48vw)' : 'min(500px, 44vw)';
+
+  useEffect(() => {
+    const ticketId = fateContent?.ticketId || '';
+    const sessionId = flow.deliberationSessionId || '';
+    const requestKey = `${sessionId}:${ticketId}:${artworkAttempt}`;
+    if (phase !== 'final' || !sessionId || !ticketId || artworkRequestRef.current === requestKey) return undefined;
+    artworkRequestRef.current = requestKey;
+    let active = true;
+    setDestinyArtwork({ available: false, status: 'loading' });
+    generateDestinyArtwork(sessionId)
+      .then((result) => {
+        if (!active) return;
+        setDestinyArtwork(result?.available ? { ...result, status: 'ready' } : { ...result, status: 'fallback' });
+      })
+      .catch(() => {
+        if (active) setDestinyArtwork({ available: false, status: 'fallback', reason: 'request_failed' });
+      });
+    return () => { active = false; };
+  }, [artworkAttempt, fateContent?.ticketId, flow.deliberationSessionId, phase]);
 
   return (
-    <div className={`game-root ${layoutClass} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)', '--companion-width': `${companionWidth}px` }}>
+    <div className={`game-root ${layoutClass} h-screen flex flex-col overflow-hidden`} style={{ backgroundColor: 'var(--cyber-ink-2, #1A1410)', '--companion-width': `${companionWidth}px`, '--artifact-width': artifactWidth }}>
       <div className="crt-overlay" />
       <SystemPulse />
       <SessionMeasurement sessionId={flow.deliberationSessionId} phase={phase} artwork={destinyArtwork} />
@@ -562,8 +585,8 @@ export default function Game() {
 
         {['summary', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase) && !showHistoryPanel && decisionArtifactOpen && (
           <DecisionArtifact
-            phase={phase}
             sessionId={flow.deliberationSessionId}
+            phase={phase}
             inference={inference}
             choices={choices}
             selectedChoice={selectedChoice}
@@ -579,7 +602,8 @@ export default function Game() {
             onSave={handleSaveToCollection}
             onOpenHistory={() => openHistoryPanel(null)}
             onClose={() => setDecisionArtifactOpen(false)}
-            onArtworkChange={setDestinyArtwork}
+            artwork={destinyArtwork}
+            onRetryArtwork={() => setArtworkAttempt((value) => value + 1)}
           />
         )}
 

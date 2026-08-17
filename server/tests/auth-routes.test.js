@@ -24,6 +24,15 @@ async function post(base, path, body, headers = {}) {
   return { status: response.status, body: await response.json() };
 }
 
+async function patch(base, path, body, headers = {}) {
+  const response = await fetch(`${base}${path}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.json() };
+}
+
 test('registration hashes passwords and login verifies the supplied password', async () => {
   await withServer(async (base) => {
     const email = `identity-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
@@ -83,5 +92,62 @@ test('anonymous and refresh endpoints issue only signed tokens', async () => {
     });
     assert.equal(me.status, 200);
     assert.equal((await me.json()).user.id, anonymous.body.user.id);
+  });
+});
+
+test('authenticated users can update only validated public profile fields', async () => {
+  await withServer(async (base) => {
+    const email = `profile-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
+    const registered = await post(base, '/api/auth/register', {
+      email,
+      password: 'safe-password-123',
+      nickname: '旧昵称',
+    });
+    const avatar = 'data:image/webp;base64,AAAA';
+    const updated = await patch(base, '/api/auth/me', {
+      nickname: '新昵称',
+      avatar,
+      color: '#5078A8',
+      bio: '愿每次决策都有证据。',
+      email: 'cannot-change@example.test',
+      anonymous: true,
+    }, {
+      authorization: `Bearer ${registered.body.accessToken}`,
+    });
+
+    assert.equal(updated.status, 200);
+    assert.equal(updated.body.user.id, registered.body.user.id);
+    assert.equal(updated.body.user.email, email);
+    assert.equal(updated.body.user.anonymous, false);
+    assert.equal(updated.body.user.nickname, '新昵称');
+    assert.equal(updated.body.user.avatar, avatar);
+    assert.equal(updated.body.user.color, '#5078A8');
+    assert.equal(updated.body.user.bio, '愿每次决策都有证据。');
+
+    const stored = await query({
+      table: 'users',
+      action: 'select',
+      filter: { id: registered.body.user.id },
+      queryOptions: { limit: 1 },
+    });
+    assert.equal(stored.rows[0].nickname, '新昵称');
+    assert.equal(stored.rows[0].email, email);
+    assert.equal(!!stored.rows[0].anonymous, false);
+  });
+});
+
+test('profile update rejects missing authentication and invalid uploaded avatars', async () => {
+  await withServer(async (base) => {
+    const unauthorized = await patch(base, '/api/auth/me', { nickname: '越权修改' });
+    assert.equal(unauthorized.status, 401);
+
+    const anonymous = await post(base, '/api/auth/anonymous', {});
+    const invalidAvatar = await patch(base, '/api/auth/me', {
+      avatar: 'data:image/gif;base64,AAAA',
+    }, {
+      authorization: `Bearer ${anonymous.body.accessToken}`,
+    });
+    assert.equal(invalidAvatar.status, 400);
+    assert.equal(invalidAvatar.body.error, 'INVALID_AVATAR');
   });
 });

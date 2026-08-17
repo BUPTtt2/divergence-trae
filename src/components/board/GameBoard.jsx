@@ -2,17 +2,24 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import Board3D from './Board3D';
 import ArenaHud from './ArenaHud';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 
-function CeremonyCameraRig({ active }) {
+function CeremonyCameraRig({ active, phase, interruptedRef }) {
   const { camera } = useThree();
   const position = useMemo(() => new THREE.Vector3(0, 2.45, 6.25), []);
   const target = useMemo(() => new THREE.Vector3(0.05, 1.02, 0.12), []);
+  const progressRef = useRef(1);
 
-  useFrame(() => {
-    if (!active) return;
-    camera.position.lerp(position, 0.085);
+  useEffect(() => {
+    progressRef.current = active ? 0 : 1;
+    if (active) interruptedRef.current = false;
+  }, [active, interruptedRef, phase]);
+
+  useFrame((_, delta) => {
+    if (!active || interruptedRef.current || progressRef.current >= 1) return;
+    progressRef.current = Math.min(1, progressRef.current + delta * 1.8);
+    camera.position.lerp(position, Math.min(1, delta * 5));
     camera.lookAt(target);
   });
   return null;
@@ -42,6 +49,7 @@ export default function GameBoard({
   presentationMode = false,
 }) {
   const [selectedArenaNode, setSelectedArenaNode] = useState(null);
+  const ceremonyInterruptedRef = useRef(false);
   // 移动端/iPad 3D性能降级
   const isMobile = typeof window !== 'undefined' && (window.innerWidth <= 768 || /iPad|iPhone|Android/i.test(navigator.userAgent));
   // iPad 单独降级：DPR 1.5（介于移动端1与桌面2之间）；抗锯齿随 isMobile 一并关闭
@@ -66,10 +74,10 @@ export default function GameBoard({
       >
         <color attach="background" args={['#100c09']} />
 
-        <CeremonyCameraRig active={ceremonyActive} />
+        <CeremonyCameraRig active={ceremonyActive} phase={phase} interruptedRef={ceremonyInterruptedRef} />
         <OrbitControls
-          enabled={!ceremonyActive}
-          enablePan={false}
+          enabled
+          enablePan
           enableZoom={true}
           minDistance={4}
           maxDistance={12}
@@ -79,6 +87,8 @@ export default function GameBoard({
           enableDamping
           dampingFactor={0.08}
           rotateSpeed={0.5}
+          panSpeed={0.65}
+          onStart={() => { ceremonyInterruptedRef.current = true; }}
         />
 
         <Board3D
