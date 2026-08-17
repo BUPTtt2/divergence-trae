@@ -1,28 +1,7 @@
-const FALLBACK_SOURCE = /fallback|preset|local|controlled|offline|rules/i;
-
-function clean(value, limit) {
-  const text = String(value || '')
-    .replace(/[_*#`]+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return text.slice(0, limit);
-}
+import { createFateTicketPresentation } from './fateTicketPresentation.js';
 
 function normalizeActions(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => clean(item?.label || item?.title || item?.text || item, 20))
-    .filter(Boolean)
-    .slice(0, 3);
-}
-
-function isFallbackResult(fateContent, inference) {
-  if (inference?.fallback === true || fateContent?.fallback === true) return true;
-  return FALLBACK_SOURCE.test([
-    fateContent?.source,
-    inference?.source,
-    inference?.plan?.recommendation?.source,
-  ].filter(Boolean).join(' '));
+  return Array.isArray(value) ? value : [];
 }
 
 export function buildFateCardPresentation({
@@ -31,21 +10,25 @@ export function buildFateCardPresentation({
   selectedChoice = null,
   question = '',
 } = {}) {
-  const fallback = isFallbackResult(fateContent, inference);
-  const choice = selectedChoice || fateContent?.path || null;
-  const actions = normalizeActions(
-    fateContent?.keyPoints
-      || fateContent?.actions
-      || choice?.keyPoints
-      || choice?.steps,
-  );
-
+  const ticket = {
+    ...(fateContent || {}),
+    question: fateContent?.question || question,
+    path: selectedChoice || fateContent?.path,
+    summary: fateContent?.cardCopy?.verdict || fateContent?.summary || inference?.masterSummary || inference?.summary,
+    source: fateContent?.source || inference?.source,
+    fallback: fateContent?.fallback === true || inference?.fallback === true,
+  };
+  const presentation = createFateTicketPresentation(ticket);
+  const hasTitle = Boolean(fateContent?.cardCopy?.sealTitle || fateContent?.choice || selectedChoice?.label || fateContent?.title);
+  const hasSummary = Boolean(ticket.summary);
   return {
-    question: clean(fateContent?.question || question || choice?.question, 32),
-    title: clean(fateContent?.cardCopy?.sealTitle || fateContent?.choice || choice?.label || fateContent?.title, 24),
-    summary: clean(fateContent?.cardCopy?.verdict || fateContent?.summary || inference?.masterSummary || inference?.summary, 56),
-    actions,
-    sourceMark: fallback ? '藏' : '灵',
-    sourceLabel: fallback ? '离线推演结果' : '由模型根据本局案卷生成',
+    question: presentation.question === '本局所问' ? '' : presentation.question.slice(0, 32),
+    title: hasTitle ? (fateContent?.cardCopy?.sealTitle ? presentation.sealTitle : presentation.decision) : '',
+    summary: hasSummary ? String(ticket.summary).replace(/[_*#`]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 56) : '',
+    actions: normalizeActions(presentation.actions),
+    sourceMark: presentation.sourceMark,
+    sourceLabel: presentation.sourceLabel,
   };
 }
+
+export default buildFateCardPresentation;

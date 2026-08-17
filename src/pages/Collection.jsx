@@ -23,6 +23,7 @@ import { createDestinyCardPresentation } from '../game/destinyCardPresentation.j
 import { mergeDecisionCards, readLocalDecisionCards, writeLocalDecisionCard } from '../game/decisionCollectionStore.js';
 import ReplayTimeline from '../components/cards/ReplayTimeline.jsx';
 import { findReplayCard } from './collectionReplayModel.js';
+import { exportFateTicketPng } from '../game/fateTicketCanvas.js';
 import './collectionDestinyCard.css';
 
 const T = {
@@ -640,26 +641,6 @@ function LegacyFatedCard({ card, index, isUser, isSelected = false, onSave, onDe
   );
 }
 
-function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 2) {
-  const chars = Array.from(String(text || ''));
-  const lines = [];
-  let line = '';
-  chars.forEach((char) => {
-    const next = line + char;
-    if (ctx.measureText(next).width > maxWidth && line) {
-      lines.push(line);
-      line = char;
-    } else {
-      line = next;
-    }
-  });
-  if (line) lines.push(line);
-  lines.slice(0, maxLines).forEach((item, index) => {
-    const clipped = index === maxLines - 1 && lines.length > maxLines ? `${item.slice(0, -1)}…` : item;
-    ctx.fillText(clipped, x, y + index * lineHeight);
-  });
-}
-
 function FatedCard({ card: rawCard, index, isUser, isSelected = false, onSave, onDelete, onShare, onOpenNotes, onReplay, onScheduleFollowUp }) {
   const card = useMemo(() => normalizeDecisionCard(rawCard), [rawCard]);
   const [showTools, setShowTools] = useState(false);
@@ -714,70 +695,8 @@ function FatedCard({ card: rawCard, index, isUser, isSelected = false, onSave, o
     setIsEditing(false);
   };
 
-  const generateShareImage = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 1200;
-    canvas.height = 1600;
-    const ctx = canvas.getContext('2d');
-    const gradient = ctx.createLinearGradient(0, 0, 1200, 1600);
-    gradient.addColorStop(0, '#18130b');
-    gradient.addColorStop(0.55, '#090806');
-    gradient.addColorStop(1, '#020302');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 1200, 1600);
-    ctx.strokeStyle = 'rgba(229,196,113,.7)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(46, 46, 1108, 1508);
-    ctx.strokeStyle = 'rgba(229,196,113,.22)';
-    ctx.strokeRect(66, 66, 1068, 1468);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#bfa765';
-    ctx.font = '22px serif';
-    ctx.fillText(`演策命牌 · ${presentation.archiveId}`, 600, 125);
-    ctx.font = '72px "Ma Shan Zheng", serif';
-    ctx.fillStyle = '#f2dfa7';
-    ctx.fillText(presentation.sealTitle, 600, 330);
-    ctx.font = '30px "Noto Serif SC", serif';
-    ctx.fillStyle = '#d8c9a5';
-    wrapCanvasText(ctx, presentation.verse, 600, 390, 800, 44, 2);
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#a88d53';
-    ctx.font = '20px "Noto Serif SC", serif';
-    ctx.fillText('所问', 160, 600);
-    ctx.fillStyle = '#ece3d0';
-    ctx.font = '28px "Noto Serif SC", serif';
-    wrapCanvasText(ctx, presentation.question, 270, 600, 760, 43, 2);
-    ctx.fillStyle = '#a88d53';
-    ctx.font = '20px "Noto Serif SC", serif';
-    ctx.fillText('所择', 160, 750);
-    ctx.fillStyle = '#ece3d0';
-    ctx.font = '28px "Noto Serif SC", serif';
-    wrapCanvasText(ctx, presentation.decision, 270, 750, 760, 43, 2);
-    ctx.fillStyle = '#a88d53';
-    ctx.font = '20px "Noto Serif SC", serif';
-    ctx.fillText('本局断语', 160, 900);
-    ctx.fillStyle = '#ece3d0';
-    ctx.font = '28px "Noto Serif SC", serif';
-    wrapCanvasText(ctx, presentation.verdict, 300, 900, 730, 43, 3);
-    presentation.anchors.forEach((anchor, anchorIndex) => {
-      const x = 155 + anchorIndex * 310;
-      ctx.strokeStyle = 'rgba(218,179,82,.35)';
-      ctx.strokeRect(x, 1110, 270, 190);
-      ctx.fillStyle = '#c95d45';
-      ctx.font = '40px "Ma Shan Zheng", serif';
-      ctx.fillText(anchor.label, x + 24, 1165);
-      ctx.fillStyle = '#cfc2a8';
-      ctx.font = '23px "Noto Serif SC", serif';
-      wrapCanvasText(ctx, anchor.text, x + 24, 1225, 220, 34, 2);
-    });
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#8c8069';
-    ctx.font = '18px monospace';
-    ctx.fillText(`${presentation.hexagram} · ${presentation.date} · ${presentation.copySource}`, 600, 1470);
-    const link = document.createElement('a');
-    link.download = `演策命牌-${presentation.archiveId}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
+  const generateShareImage = async () => {
+    await exportFateTicketPng(presentation);
     onShare?.(card.id);
   };
 

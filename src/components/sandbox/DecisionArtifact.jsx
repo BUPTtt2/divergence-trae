@@ -8,6 +8,7 @@ import { hexagramName } from '../../game/decisionCardContract.js';
 import { resolveHexagramName } from '../../game/destinyCeremonyModel.js';
 import { sanitizeDecisionDisplayText } from '../../utils/helpers.js';
 import DecisionFeedback from './DecisionFeedback.jsx';
+import { exportFateTicketPng } from '../../game/fateTicketCanvas.js';
 
 const KNOWLEDGE_LABEL = {
   verified: '已证',
@@ -71,6 +72,7 @@ export default function DecisionArtifact({
 }) {
   const navigate = useNavigate();
   const [saveState, setSaveState] = useState('idle');
+  const [exportState, setExportState] = useState('idle');
   const artifact = createDecisionArtifact(inference, choices);
   const isDecisionPhase = ['summary', 'branch_select'].includes(phase);
   const isCommitPhase = ['path_reveal', 'committing'].includes(phase);
@@ -103,6 +105,16 @@ export default function DecisionArtifact({
       setSaveState(result?.mode === 'local' ? 'local' : 'saved');
     } catch {
       setSaveState('error');
+    }
+  };
+  const exportFateCard = async () => {
+    if (exportState === 'exporting') return;
+    setExportState('exporting');
+    try {
+      await exportFateTicketPng(cardPresentation);
+      setExportState('done');
+    } catch {
+      setExportState('error');
     }
   };
   if (artifact.blocked && !isFinal) return (
@@ -276,6 +288,7 @@ export default function DecisionArtifact({
           <button type="button" onClick={() => navigate('/')}>返回首页</button>
           <button type="button" onClick={() => navigate('/cards')}>查看命牌库</button>
           <button type="button" onClick={onOpenHistory}>查看完整过程</button>
+          <button type="button" onClick={exportFateCard} disabled={exportState === 'exporting'}>{exportState === 'exporting' ? '正在生成 PNG…' : exportState === 'error' ? '导出失败 · 重试' : '导出命牌 PNG'}</button>
           <button type="button" onClick={saveFateCard} disabled={saveState === 'saving' || saveState === 'saved'}>
             {saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已存入命牌库' : saveState === 'local' ? '已存本机 · 重试云端' : saveState === 'error' ? '保存失败 · 重试' : '收藏命牌'}
           </button>
