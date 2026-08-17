@@ -7,11 +7,11 @@
 - 项目目标：为“演策”复赛提供可公开体验的决策推演产品，并为运营者提供匿名访问、推演漏斗、可靠性与反馈证据。
 - 目标用户与核心任务：评委/观众匿名完成一局推演；运营者通过受保护的 `/ops` 判断访问、完成、失败与反馈。
 - 目标交付级别：Release Candidate / Production Learning
-- 当前生命周期阶段：已部署基线重建与发布前审计
-- 当前 Gate：部署源码可追溯、核心测试可复现、关键体验风险完成实机验收
+- 当前生命周期阶段：多人上线与商业运营收口设计复核
+- 当前 Gate：Release Candidate 设计确认后进入分阶段实施
 - 当前 Gate 状态：CONDITIONAL
 - 更新时间与核验人：2026-08-17，Codex
-- 权威需求 / 设计 / Contract：`HANDOVER/13-2026-08-12-演策完整交接与下一对话入口.md`、`HANDOVER/14-复赛运营后台与匿名体验接入.md`、`docs/superpowers/specs/2026-08-12-competition-operations-analytics-and-session-entry-design.md`
+- 权威需求 / 设计 / Contract：`docs/superpowers/specs/2026-08-17-production-commercial-readiness-design.md`、`HANDOVER/13-2026-08-12-演策完整交接与下一对话入口.md`、`HANDOVER/14-复赛运营后台与匿名体验接入.md`
 
 ## 已证实事实
 
@@ -48,7 +48,7 @@
 ## Current Design
 
 - Capability Boundary：匿名用户无需注册即可推演；账号为跨设备持久化升级路径；运营数据仅授权运营者可见。
-- Product & UX State：线上为 643159 竞赛版本；当前只建立可信基线，尚未合入主仓库 2026-08-16 的 UI 改动。
+- Product & UX State：线上为 643159 竞赛版本；已选择 Vercel 单一发布链路设计；只人工重做旧主仓库中被验证的命牌效果，不整体合入 2026-08-16 UI 改动。
 - Agent / Workflow：澄清问题 → 智囊选择/辩论 → 路径选择 → 决策命牌 → 反馈/复盘。
 - Multi-Agent Decision：多个智囊是同一推演内的并行观点，不把预设文案伪装成真实模型成功。
 - Data Sources：服务端会话/账户/运营数据；浏览器本地匿名副本与恢复信息。
@@ -81,6 +81,7 @@
 |---|---|---|---|
 | 对问题清单采用“真实降级”还是“预设结果伪成功” | 用户/产品 | 实施 Agent 容错前 | 不能把兜底模板当成真实智囊输出 |
 | 何时从本基线重新发布线上 | 用户 | 修复、测试、预览验收后 | 不能覆盖当前线上版本 |
+| 多人上线与商业运营收口设计是否确认 | 用户 | 写实施计划前 | 不能开始产品行为与数据合同改造 |
 
 ## 下一条最短验证路径
 
