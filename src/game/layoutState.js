@@ -10,6 +10,11 @@ export function initialCompanionOpen() {
   return false;
 }
 
+export function shouldAutoOpenDecisionArtifact({ phase, viewportWidth = 1024 } = {}) {
+  if (!DECISION_PHASES.has(phase)) return false;
+  return !(phase === 'final' && viewportWidth <= 760);
+}
+
 export function shouldMuteArena({ phase, companionOpen = false, showHistoryPanel = false } = {}) {
   return showHistoryPanel || isPresentationPhase(phase) || (companionOpen && CONVERSATION_PHASES.has(phase));
 }

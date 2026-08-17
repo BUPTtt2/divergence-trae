@@ -15,6 +15,14 @@ test('decision phases reserve one dock while keeping the 3D stage visible', () =
   assert.equal(sandboxLayoutClass('final', false, false), '');
 });
 
+test('the completed destiny card starts folded on a phone so the 3D ceremony is visible', () => {
+  assert.equal(typeof layoutState.shouldAutoOpenDecisionArtifact, 'function');
+  assert.equal(layoutState.shouldAutoOpenDecisionArtifact({ phase: 'final', viewportWidth: 390 }), false);
+  assert.equal(layoutState.shouldAutoOpenDecisionArtifact({ phase: 'final', viewportWidth: 1280 }), true);
+  assert.equal(layoutState.shouldAutoOpenDecisionArtifact({ phase: 'committing', viewportWidth: 390 }), true);
+  assert.equal(layoutState.shouldAutoOpenDecisionArtifact({ phase: 'agent_debate', viewportWidth: 390 }), false);
+});
+
 test('conversation phases only reserve the companion dock while it is open', () => {
   assert.equal(sandboxLayoutClass('clarify_loop', true), 'companion-is-open');
   assert.equal(sandboxLayoutClass('agent_debate', false), '');

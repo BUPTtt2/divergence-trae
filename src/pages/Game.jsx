@@ -16,6 +16,7 @@ import {
   companionDockOpen,
   sandboxLayoutClass,
   shouldAutoOpenCompanion,
+  shouldAutoOpenDecisionArtifact,
   shouldMuteArena,
   shouldShowCompanion,
 } from '../game/layoutState';
@@ -195,7 +196,12 @@ export default function Game() {
   const previousDecisionPhaseRef = useRef('');
   useEffect(() => {
     const decisionPhase = ['summary', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase);
-    if (decisionPhase && previousDecisionPhaseRef.current !== phase) setDecisionArtifactOpen(true);
+    if (decisionPhase && previousDecisionPhaseRef.current !== phase) {
+      setDecisionArtifactOpen(shouldAutoOpenDecisionArtifact({
+        phase,
+        viewportWidth: typeof window === 'undefined' ? 1024 : window.innerWidth,
+      }));
+    }
     previousDecisionPhaseRef.current = decisionPhase ? phase : '';
   }, [phase]);
   const handleCompanionOpenChange = useCallback((nextOpen) => {
