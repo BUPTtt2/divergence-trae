@@ -370,7 +370,7 @@ git commit -m "feat: operate artwork versions and metrics"
 - Consumes: all previous tasks.
 - Produces: current evidence, remaining risks, Preview deployment inputs and rollback identity.
 
-- [ ] **Step 1: Run full automated verification**
+- [x] **Step 1: Run full automated verification**
 
 Run: `node --test src/**/*.test.js`
 
@@ -384,17 +384,17 @@ Record exact exit codes; do not hide historical or new failures.
 
 At 1440×900 and 390×844 verify: complete replay, 3D reveal/flip/final hover, PNG, system artwork fallback, job refresh recovery, regeneration version selection, and `/ops` aggregate metrics.
 
-- [ ] **Step 3: Validate Agent product artifacts**
+- [x] **Step 3: Validate Agent product artifacts**
 
 Run: `python /Users/yegua/.codex/plugins/cache/personal/agent-product-os/0.4.1+codex.20260814093424/skills/ship-agent-products/scripts/validate_agent_product.py -- /Users/yegua/vibe/个人Trae赛/divergence-trae-deployed-643159`
 
 Expected: no structural Errors; Warnings have an owner and shortest verification action.
 
-- [ ] **Step 4: Update authority files**
+- [x] **Step 4: Update authority files**
 
 Promote each capability only to the maturity proven by code/test/browser evidence. Keep Gate `CONDITIONAL` until real provider, object storage, Vercel Preview and phone acceptance are current.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add PROJECT_STATE.md docs/superpowers/specs/2026-08-17-production-commercial-readiness-design.md docs/superpowers/plans/2026-08-17-destiny-replay-artwork-operations.md
