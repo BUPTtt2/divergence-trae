@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import Bagua from '../components/fx/Bagua';
 import NoteModal from '../components/NoteModal';
 import {
@@ -21,6 +21,8 @@ import '../components/cards/decisionCardIdentity.css';
 import { normalizeDecisionCard } from '../game/decisionCardContract.js';
 import { createDestinyCardPresentation } from '../game/destinyCardPresentation.js';
 import { mergeDecisionCards, readLocalDecisionCards, writeLocalDecisionCard } from '../game/decisionCollectionStore.js';
+import ReplayTimeline from '../components/cards/ReplayTimeline.jsx';
+import { findReplayCard } from './collectionReplayModel.js';
 import './collectionDestinyCard.css';
 
 const T = {
@@ -835,7 +837,7 @@ function FatedCard({ card: rawCard, index, isUser, isSelected = false, onSave, o
           <motion.div className="collection-destiny-card__tools" onClick={(event) => event.stopPropagation()} initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
             {isUser && <button type="button" onClick={() => setIsEditing(true)}>编辑题名</button>}
             {isUser && <button type="button" onClick={() => onOpenNotes?.(card)}>笔记</button>}
-            {(card.yanSummary || card.agentNotes?.length > 0) && <button type="button" onClick={() => onReplay?.(card)}>回看推演</button>}
+            {(card.replay.events.length > 0 || card.yanSummary || card.agentNotes?.length > 0) && <button type="button" onClick={() => onReplay?.(card)}>完整过程</button>}
             <button type="button" onClick={generateShareImage}>保存分享图</button>
             {isUser && <select value={followUpDays} onChange={(event) => setFollowUpDays(Number(event.target.value))} aria-label="回访时间">{[3, 7, 30, 90].map((days) => <option key={days} value={days}>{days}天回访</option>)}</select>}
             {isUser && <button type="button" onClick={() => onScheduleFollowUp?.(card, followUpDays)}>设回访</button>}
@@ -854,6 +856,7 @@ function FatedCard({ card: rawCard, index, isUser, isSelected = false, onSave, o
 
 export default function Collection() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [userCards, setUserCards] = useState([]);
   const [collectionFilter, setCollectionFilter] = useState('all');
   const [achievements, setAchievements] = useState({});
@@ -871,6 +874,18 @@ export default function Collection() {
   const [reviewingId, setReviewingId] = useState(null);
   const [outcomeText, setOutcomeText] = useState('');
   const [outcomeStatus, setOutcomeStatus] = useState('neutral');
+
+  const handleOpenReplay = useCallback((card) => {
+    const identity = card?.id || card?.sourceSessionId || card?.source_session_id || card?.ticketId;
+    setReplayCard(card);
+    if (identity) navigate(`/cards?card=${encodeURIComponent(identity)}&view=replay`);
+  }, [navigate]);
+
+  const handleCloseReplay = useCallback(() => {
+    setReplayCard(null);
+    const params = new URLSearchParams(location.search);
+    if (params.get('view') === 'replay') navigate('/cards', { replace: true });
+  }, [location.search, navigate]);
 
   const handleOpenNotes = useCallback((card) => {
     setNoteModalCard(card);
@@ -922,6 +937,13 @@ export default function Collection() {
       setAchievements(savedAchievements);
     } catch (e) { /* ignore */ }
   }, [loadCards, loadFollowUps]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('view') !== 'replay') return;
+    const card = findReplayCard(userCards, params.get('card'));
+    if (card) setReplayCard(card);
+  }, [location.search, userCards]);
 
   const handleSubmitOutcome = useCallback(async (id) => {
     if (!outcomeText.trim()) return;
@@ -1358,7 +1380,7 @@ export default function Collection() {
                   onDelete={handleDeleteCard}
                   onShare={handleShareCard}
                   onOpenNotes={handleOpenNotes}
-                  onReplay={setReplayCard}
+                  onReplay={handleOpenReplay}
                   onScheduleFollowUp={handleScheduleFollowUp}
                 />
               </motion.div>
@@ -1464,7 +1486,7 @@ export default function Collection() {
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[60] flex items-center justify-center p-6"
             style={{ backgroundColor: 'rgba(20,16,12,0.75)', backdropFilter: 'blur(8px)' }}
-            onClick={() => setReplayCard(null)}
+            onClick={handleCloseReplay}
           >
             <motion.div
               initial={{ scale: 0.92, y: 20, opacity: 0 }}
@@ -1483,7 +1505,7 @@ export default function Collection() {
             >
               {/* 关闭按钮 */}
               <button
-                onClick={() => setReplayCard(null)}
+                onClick={handleCloseReplay}
                 className="absolute top-3 right-3 text-[14px]"
                 style={{ color: T.muted, background: 'transparent', border: 'none', cursor: 'pointer' }}
               >
@@ -1504,6 +1526,10 @@ export default function Collection() {
                   </div>
                 </div>
               </div>
+
+              <ReplayTimeline card={normalizeDecisionCard(replayCard)} />
+
+              {normalizeDecisionCard(replayCard).replay.events.length === 0 && <>
 
               {/* 原问题 */}
               {replayCard.question && (
@@ -1594,10 +1620,11 @@ export default function Collection() {
                   </div>
                 </div>
               )}
+              </>}
 
               {/* 底部 AI 标识 */}
               <div className="text-center pt-3 mt-3 text-[9px]" style={{ color: T.muted, borderTop: `1px solid ${T.border}`, letterSpacing: '0.25em' }}>
-                AI 生成内容，仅供参考 · 演策
+                原始问答按本局归档 · 智囊内容可能由 AI 生成 · 演策
               </div>
             </motion.div>
           </motion.div>
