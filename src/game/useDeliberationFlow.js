@@ -39,6 +39,7 @@ import { loadCouncilCatalog } from '../services/advisorClient';
 import { createCouncilModel } from './councilModel';
 import { emitRuntimeStatus } from '../services/runtimeStatus.js';
 import { advancePhaseTelemetry, createTelemetryState } from './deliberationTelemetry.js';
+import { buildReplayTimeline } from './replayTimeline.js';
 
 const PHASE = {
   IDLE: 'idle',
@@ -866,6 +867,22 @@ export function useDeliberationFlow(initialQuestion = "") {
         note: finding.excerpt,
         perspective: finding.perspective,
       }));
+      const replayAgents = [...(councilCatalog?.catalog || []), ...(plannedAgents || [])]
+        .filter((agent, index, all) => (
+          agent?.id
+          && selectedAgentIds.has(agent.id)
+          && all.findIndex((candidate) => candidate?.id === agent.id) === index
+        ));
+      const replay = buildReplayTimeline({
+        question: ticket.question || userInput,
+        answeredRounds: yanQuestionRounds,
+        caseFile: inference?.caseFile || inference?.plan?.caseFile,
+        agentDialogues,
+        activeAgents: replayAgents,
+        selectedChoice,
+        currentCommit: ticket.feedback || currentCommit,
+        ticket,
+      });
 
       const card = {
         sessionId: deliberationSessionId,
@@ -903,6 +920,7 @@ export function useDeliberationFlow(initialQuestion = "") {
             : []),
         contextIndex: Array.isArray(ticket.contextIndex) ? ticket.contextIndex : [],
         artwork: artworkOverride || ticket.artwork || { source: 'archive' },
+        replay,
       };
 
       const savedResult = await persistDecisionCard(card);
@@ -919,7 +937,7 @@ export function useDeliberationFlow(initialQuestion = "") {
       showFloatTip('保存失败，请重试');
       throw e;
     }
-  }, [deliberationCommitResult, deliberationSessionId, inference, selectedChoice, currentCommit, showFloatTip, LOG]);
+  }, [agentDialogues, councilCatalog, currentCommit, deliberationCommitResult, deliberationSessionId, inference, plannedAgents, selectedAgentIds, selectedChoice, showFloatTip, userInput, yanQuestionRounds, LOG]);
 
   const handleExecuteDebate = useCallback(async (roundOverride = debateRound, agentIdsOverride = null, intent = 'execute') => {
     if (!deliberationSessionId) {

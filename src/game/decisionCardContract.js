@@ -1,4 +1,5 @@
 import { sanitizeDecisionDisplayText } from '../utils/helpers.js';
+import { normalizeReplay } from './replayTimeline.js';
 
 const MIRROR_DISCLAIMER = '认知镜面用于换角度审视，不替代事实和用户决定。';
 
@@ -40,6 +41,7 @@ export function normalizeDecisionCard(card = {}) {
     nextActions: cleanList(card.next_actions ?? card.nextActions),
     evidence: parseStructuredValue(card.evidence, []),
     artwork: parseStructuredValue(card.artwork, {}),
+    replay: normalizeReplay(card.replay),
     hexagrams,
     powerfulQuestion: clean(card.powerfulQuestion || card.powerful_question || ''),
     date: card.date || (createdAt ? String(createdAt).slice(0, 10) : ''),

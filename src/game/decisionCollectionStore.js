@@ -7,6 +7,11 @@ function cardIdentity(card = {}) {
   return card.sourceSessionId || card.source_session_id || card.ticketId || card.id;
 }
 
+function replayScore(replay = {}) {
+  const completeness = { partial: 0, local_only: 1, complete: 2 }[replay.completeness] ?? 0;
+  return completeness * 100000 + (Array.isArray(replay.events) ? replay.events.length : 0);
+}
+
 export function readLocalDecisionCards() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
@@ -22,7 +27,9 @@ export function mergeDecisionCards(remote = [], local = []) {
     const card = normalizeDecisionCard(raw);
     const identity = cardIdentity(card);
     if (!identity) return;
-    merged.set(identity, { ...(merged.get(identity) || {}), ...card });
+    const existing = merged.get(identity) || {};
+    const replay = replayScore(card.replay) >= replayScore(existing.replay) ? card.replay : existing.replay;
+    merged.set(identity, { ...existing, ...card, replay });
   });
   return [...merged.values()].sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')));
 }

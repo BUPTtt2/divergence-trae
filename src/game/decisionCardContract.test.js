@@ -42,3 +42,24 @@ test('decision card treats a null oracle as an unfinished mirror instead of cras
     opposite: '',
   });
 });
+
+test('decision card normalizes Replay V2 and marks historical cards as partial', () => {
+  const current = normalizeDecisionCard({
+    id: 'card-with-replay',
+    replay: JSON.stringify({
+      schemaVersion: 2,
+      completeness: 'complete',
+      events: [{ id: 'evt-1', seq: 1, kind: 'user_question', speakerName: '我', text: '要不要换工作？' }],
+    }),
+  });
+  const historical = normalizeDecisionCard({ id: 'card-without-replay' });
+
+  assert.equal(current.replay.schemaVersion, 2);
+  assert.equal(current.replay.completeness, 'complete');
+  assert.equal(current.replay.events[0].text, '要不要换工作？');
+  assert.deepEqual(historical.replay, {
+    schemaVersion: 1,
+    completeness: 'partial',
+    events: [],
+  });
+});
