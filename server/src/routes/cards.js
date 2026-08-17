@@ -4,6 +4,7 @@ import { generateUUID } from '../utils/id.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requireUser } from '../middleware/auth.js';
 import { requirePrincipal } from '../middleware/principal.js';
+import { normalizeCardReplay, replayColumns, requireAppendOnlyReplay } from '../services/cardReplayService.js';
 
 const router = Router();
 
@@ -85,6 +86,12 @@ router.post(
   asyncHandler(async (req, res) => {
     const lenErr = validateLength(req.body, MAX_LEN);
     if (lenErr) return res.status(400).json({ error: lenErr });
+    let replay;
+    try {
+      replay = normalizeCardReplay(req.body.replay, { required: req.body.replay !== undefined });
+    } catch (error) {
+      return res.status(400).json({ error: error.message, errorCode: error.code || 'INVALID_REPLAY' });
+    }
     const sourceSessionId = typeof req.body.sessionId === 'string'
       ? req.body.sessionId.trim().slice(0, 120)
       : '';
@@ -122,6 +129,7 @@ router.post(
       next_actions: JSON.stringify(req.body.nextActions || []),
       evidence: JSON.stringify(req.body.evidence || []),
       artwork: JSON.stringify(req.body.artwork || {}),
+      ...replayColumns(replay),
       created_at: new Date().toISOString(),
     };
 
@@ -162,6 +170,14 @@ router.put(
     if (req.body.advisors) updates.advisors = JSON.stringify(req.body.advisors);
     if (req.body.pillars) updates.pillars = JSON.stringify(req.body.pillars);
     if (req.body.artwork) updates.artwork = JSON.stringify(req.body.artwork);
+    if (req.body.replay !== undefined) {
+      try {
+        Object.assign(updates, replayColumns(requireAppendOnlyReplay(existing.rows[0].replay, req.body.replay)));
+      } catch (error) {
+        const status = error.code === 'REPLAY_NOT_APPEND_ONLY' ? 409 : 400;
+        return res.status(status).json({ error: error.message, errorCode: error.code || 'INVALID_REPLAY' });
+      }
+    }
 
     const result = await query({
       table: TABLE,
