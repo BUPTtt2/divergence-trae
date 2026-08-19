@@ -119,6 +119,23 @@ export async function register({ email, password, nickname }) {
   return data;
 }
 
+export async function upgradeAccount({ email, password, nickname }) {
+  const accessToken = getAccessToken();
+  const refreshToken = getRefreshToken();
+  const resp = await fetch(`${API_BASE_URL}/api/auth/upgrade`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify({ email, password, nickname, refreshToken }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || data.message || '升级账号失败');
+  saveAuth(data);
+  return data;
+}
+
 /**
  * 登录
  */

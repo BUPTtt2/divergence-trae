@@ -331,7 +331,7 @@ function buildHexagramFromLines(lines) {
 function displayHexagramName(hexagram) {
   const lower = String(hexagram?.lower?.name || '').trim();
   const upper = String(hexagram?.upper?.name || '').trim();
-  return lower && lower === upper ? lower : `${lower}${upper}`;
+  return lower && lower === upper ? lower : `${upper}${lower}`;
 }
 
 function matchTrigram(lines3) {
@@ -357,13 +357,11 @@ function buildReviewLensText(oracle) {
   const primaryName = displayHexagramName(oracle.primary);
   const changedName = displayHexagramName(oracle.changed);
   const dynamicStr = oracle.dynamics.length > 0
-    ? `${oracle.dynamics.map((i) => i + 1).join('、')}爻动`
-    : '无动爻';
-  const stateCounts = oracle.lineMeta.reduce((counts, line) => {
-    counts[line.knowledgeState] += 1;
-    return counts;
-  }, { verified: 0, unknown: 0, contested: 0 });
-  return `【${primaryName}】本轮审查镜头由${stateCounts.verified}项已验证、${stateCounts.unknown}项未知和${stateCounts.contested}项冲突构成。${dynamicStr}，备选镜头为${changedName}。请逐项补证并检查反转变量；事实、风险与审批边界保持不变。`;
+    ? `${oracle.dynamics.map((i) => ['初', '二', '三', '四', '五', '上'][i]).join('、')}爻动，之卦为${changedName}。`
+    : '此局为静卦，无动爻；先以本卦照见当前结构。';
+  const upper = oracle.primary?.upper || {};
+  const lower = oracle.primary?.lower || {};
+  return `【${primaryName}】本卦上${upper.name || '未定'}${upper.symbol || ''}、下${lower.name || '未定'}${lower.symbol || ''}。${dynamicStr}互卦${displayHexagramName(oracle.mutual)}，错卦${displayHexagramName(oracle.opposite)}。用互卦看内在牵动，用错卦查反证；卦象不替代事实、风险与审批边界。`;
 }
 
 function reviewLensContext(oracle) {
@@ -374,24 +372,27 @@ function reviewLensContext(oracle) {
   return {
     primaryName: displayHexagramName(oracle.primary),
     changedName: displayHexagramName(oracle.changed),
+    primaryStructure: `上${oracle.primary?.upper?.name || '未定'}${oracle.primary?.upper?.symbol || ''}、下${oracle.primary?.lower?.name || '未定'}${oracle.primary?.lower?.symbol || ''}`,
     dynamicStr: oracle.dynamics.length > 0
-      ? `${oracle.dynamics.map((i) => i + 1).join('、')}爻动`
-      : '无动爻',
+      ? `${oracle.dynamics.map((i) => ['初', '二', '三', '四', '五', '上'][i]).join('、')}爻动，之卦为${displayHexagramName(oracle.changed)}。`
+      : '此局为静卦，无动爻；先以本卦照见当前结构。',
+    mutualName: displayHexagramName(oracle.mutual),
+    oppositeName: displayHexagramName(oracle.opposite),
     ...stateCounts,
   };
 }
 
 const REVIEW_LENS_TEMPLATES = Object.freeze({
   'standard-v1': Object.freeze({
-    knowledge_state: (ctx) => `【${ctx.primaryName}】本轮审查镜头由${ctx.verified}项已验证、${ctx.unknown}项未知和${ctx.contested}项冲突构成。`,
-    counterfactual: (ctx) => `${ctx.dynamicStr}，备选镜头为${ctx.changedName}。`,
-    verification: () => '请逐项补证并检查反转变量；',
-    boundary_guard: () => '事实、风险与审批边界保持不变。',
+    knowledge_state: (ctx) => `【${ctx.primaryName}】本卦${ctx.primaryStructure}。`,
+    counterfactual: (ctx) => `${ctx.dynamicStr}互卦${ctx.mutualName}，错卦${ctx.oppositeName}。`,
+    verification: () => '用互卦看内在牵动，用错卦查反证；',
+    boundary_guard: () => '卦象不替代事实、风险与审批边界。',
   }),
   'concise-v1': Object.freeze({
-    knowledge_state: (ctx) => `【${ctx.primaryName}】审查概览：已验证${ctx.verified}项，未知${ctx.unknown}项，冲突${ctx.contested}项。`,
-    counterfactual: (ctx) => `反转观察：${ctx.dynamicStr}，对照${ctx.changedName}镜头。`,
-    verification: () => '下一步仅补证未知、核验冲突与反转条件。',
+    knowledge_state: (ctx) => `【${ctx.primaryName}】${ctx.primaryStructure}。`,
+    counterfactual: (ctx) => `${ctx.dynamicStr}互卦${ctx.mutualName}，错卦${ctx.oppositeName}。`,
+    verification: () => '案卷证据另列，卦象只作反向检查。',
     boundary_guard: () => '边界先行：事实、风险与审批要求保持不变。',
   }),
 });

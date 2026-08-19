@@ -157,6 +157,7 @@ export default function DeliberationConversation({
   history = {},
   clarifyRound = 1,
   maxClarifyRounds = 2,
+  questionProvenance = null,
 }) {
   const [mode, setMode] = useState('SUPPLEMENT');
   const [workbenchTab, setWorkbenchTab] = useState('judgement');
@@ -260,7 +261,9 @@ export default function DeliberationConversation({
           )}
           {isClarify && pendingQuestions.length > 0 && <aside className="deliberation-conversation__clarify-guide">
             <strong>关键校正 · 第 {Math.min(Number(clarifyRound) || 1, Number(maxClarifyRounds) || 2)} / {Number(maxClarifyRounds) || 2} 批</strong>
+            <span className="deliberation-conversation__source" data-source={questionProvenance?.kind || 'unknown'}>{questionProvenance?.label || '来源待核验'}</span>
             <p>这一批共 {pendingQuestions.length} 项。回答后若关键事实已经足够会直接进入案卷；仍有阻断性缺口时，最多再追加一批，不会按固定题库循环。</p>
+            {questionProvenance?.detail && <p>{questionProvenance.detail}</p>}
           </aside>}
           {isClarify && pendingQuestions.map((item, index) => (
             <article className="deliberation-conversation__message is-agent" aria-live="polite" key={`${item.question}-${index}`}>

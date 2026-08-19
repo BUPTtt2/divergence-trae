@@ -1,5 +1,6 @@
 import { providerRuntime } from './providerRuntime.js';
 import { getLLMUsageContext } from './llmUsageContext.js';
+import { reserveLlmBudget } from './llmBudgetService.js';
 
 /**
  * LLM 多提供商路由
@@ -97,6 +98,24 @@ function usageContext(options = {}, attempt = 1) {
     stage: options.stage || active.stage || active.actionId || 'llm',
     attempt,
   };
+}
+
+async function passBudgetGate(messages, options = {}) {
+  const context = usageContext(options, 1);
+  const reserveBudgetFn = options.reserveBudgetFn || reserveLlmBudget;
+  try {
+    await reserveBudgetFn({
+      messages,
+      maxTokens: options.maxTokens,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      stage: context.stage,
+    });
+    return true;
+  } catch (error) {
+    providerRuntime.recordFailure('budget-gate', error, { ...context, model: 'capacity-policy' });
+    return false;
+  }
 }
 
 /**
@@ -218,6 +237,8 @@ async function callProvider(provider, messages, options = {}) {
  */
 export async function callLLM(messages, options = {}) {
   const providers = getProviders();
+  if (providers.length === 0) return null;
+  if (!(await passBudgetGate(messages, options))) return null;
   let attempt = 0;
 
   for (const provider of providers) {
@@ -268,10 +289,15 @@ export async function callLLMWithTools({
   userId,
   agentId,
   stage,
+  reserveBudgetFn,
 }) {
   const providers = getProviders();
   if (providers.length === 0) {
     return { content: '', tool_calls: null, provider: null, error: 'no_provider' };
+  }
+  const budgetOptions = { maxTokens, sessionId, userId, agentId, stage, reserveBudgetFn };
+  if (!(await passBudgetGate(messages, budgetOptions))) {
+    return { content: '', tool_calls: null, provider: null, error: 'budget_exceeded' };
   }
 
   let attempt = 0;
@@ -328,6 +354,17 @@ export async function callLLMStream(messages, options = {}, res) {
     timeout = DEFAULT_TIMEOUT_MS * 2, // 流式超时放宽到 60s（Vercel Edge 30s + 推理缓冲）
     alreadyStreaming = false,
   } = options;
+
+  if (providers.length === 0 || !(await passBudgetGate(messages, { ...options, maxTokens }))) {
+    if (!alreadyStreaming) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+    }
+    res.write(`event: error\ndata: ${JSON.stringify({ error: providers.length === 0 ? '未配置模型提供商' : '当前推演席位暂满或今日名额已用完，已开始的推演不受影响', code: providers.length === 0 ? 'no_provider' : 'budget_exceeded' })}\n\n`);
+    res.end();
+    return null;
+  }
 
   // 设置 SSE headers + 发送 start 事件（工具流程下跳过）
   if (!alreadyStreaming) {

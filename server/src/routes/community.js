@@ -3,6 +3,8 @@ import { query } from '../services/db.js';
 import { generateUUID } from '../utils/id.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requireUser } from '../middleware/auth.js';
+import { policyMiddlewares } from '../security/abusePolicies.js';
+import { createCommunityReport } from '../services/communityReportService.js';
 
 const router = Router();
 
@@ -76,6 +78,7 @@ router.get(
 router.post(
   '/posts',
   requireUser,
+  ...policyMiddlewares('communityPost'),
   asyncHandler(async (req, res) => {
     const { title, content, tag = '综合', trigram = '☰' } = req.body;
     if (!title || !content) {
@@ -110,6 +113,28 @@ router.post(
   })
 );
 
+router.post(
+  '/reports',
+  requireUser,
+  ...policyMiddlewares('communityReport'),
+  asyncHandler(async (req, res) => {
+    try {
+      const report = await createCommunityReport({
+        reporterUserId: req.userId,
+        targetType: req.body?.targetType,
+        targetId: req.body?.targetId,
+        reason: req.body?.reason,
+        details: req.body?.details,
+      });
+      return res.status(201).json({ report: { id: report.id, status: report.status } });
+    } catch (error) {
+      if (error?.code === '23505') return res.status(409).json({ error: 'REPORT_ALREADY_EXISTS' });
+      const status = error?.code === 'REPORT_TARGET_NOT_FOUND' ? 404 : 400;
+      return res.status(status).json({ error: error?.code || 'REPORT_FAILED' });
+    }
+  })
+);
+
 /**
  * POST /api/community/posts/:id/replies
  * 回复帖子
@@ -118,6 +143,7 @@ router.post(
 router.post(
   '/posts/:id/replies',
   requireUser,
+  ...policyMiddlewares('communityReply'),
   asyncHandler(async (req, res) => {
     const { content } = req.body;
     const postId = req.params.id;
@@ -183,6 +209,7 @@ router.get(
 router.post(
   '/posts/:id/like',
   requireUser,
+  ...policyMiddlewares('communityLike'),
   asyncHandler(async (req, res) => {
     const postId = req.params.id;
     const userId = req.userId;

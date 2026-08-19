@@ -41,6 +41,7 @@ import { routeConversationHybrid } from '../services/conversationRouter.js';
 import { callLLM, isLLMAvailable } from '../services/llmRouter.js';
 import { contextLedgerIndex, selectContextEntries } from '../services/contextLedger.js';
 import { getSessionUsage } from '../services/llmUsageService.js';
+import { releaseLlmSessionBudget, settleLlmSessionBudget } from '../services/llmBudgetService.js';
 import { withLLMUsageContext } from '../services/llmUsageContext.js';
 import { generateDestinyArtwork } from '../services/destinyArtworkService.js';
 import { query } from '../services/db.js';
@@ -49,6 +50,7 @@ import {
   normalizeExecuteResponse,
   parseExecuteRequest,
 } from '../contracts/deliberationContract.js';
+import { policyMiddlewares } from '../security/abusePolicies.js';
 
 const router = Router();
 
@@ -90,6 +92,7 @@ router.get('/health', asyncHandler(async (req, res) => {
 router.post(
   '/route',
   requirePrincipal,
+  ...policyMiddlewares('deliberationRoute'),
   asyncHandler(async (req, res) => {
     const { question } = req.body || {};
     if (!question || typeof question !== 'string') {
@@ -203,6 +206,7 @@ router.delete(
 router.post(
   '/start',
   requirePrincipal,
+  ...policyMiddlewares('deliberationStart'),
   asyncHandler(async (req, res) => {
     const { question, deferPlanning, intentFrame } = req.body || {};
 
@@ -300,6 +304,7 @@ router.post(
   '/:sessionId/plan',
   requirePrincipal,
   requireOwnedDeliberation,
+  ...policyMiddlewares('deliberationPlan'),
   asyncHandler(async (req, res) => {
     const result = await runWithSessionUsage(req, 'plan', () => deliberationEngine.plan(
       req.params.sessionId,
@@ -346,6 +351,7 @@ router.post(
   '/:sessionId/destiny-art',
   requirePrincipal,
   requireOwnedDeliberation,
+  ...policyMiddlewares('destinyArtwork'),
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) return next('route');
@@ -424,6 +430,7 @@ router.post(
   '/:sessionId/answer',
   requirePrincipal,
   requireOwnedDeliberation,
+  ...policyMiddlewares('deliberationPlan'),
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -442,6 +449,7 @@ router.post(
   '/:sessionId/confirm-case',
   requirePrincipal,
   requireOwnedDeliberation,
+  ...policyMiddlewares('deliberationPlan'),
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) return next('route');
@@ -485,6 +493,7 @@ router.post(
   '/:sessionId/execute',
   requirePrincipal,
   requireOwnedDeliberation,
+  ...policyMiddlewares('deliberationExecute'),
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -515,6 +524,7 @@ router.post(
   '/:sessionId/commit',
   requirePrincipal,
   requireOwnedDeliberation,
+  ...policyMiddlewares('deliberationCommit'),
   asyncHandler(async (req, res, next) => {
     const { sessionId } = req.params;
     if (isReservedSegment(sessionId)) { return next('route'); }
@@ -531,6 +541,9 @@ router.post(
         memoryConsent: memoryConsent === true,
       },
     ));
+    await settleLlmSessionBudget(sessionId).catch((error) => {
+      console.warn('[Capacity] 推演已提交，容量结算将由过期回收兜底', { sessionId, code: error.code || 'settlement_failed' });
+    });
     res.json(result);
   })
 );
@@ -568,6 +581,11 @@ router.post(
     if (isReservedSegment(sessionId)) { return next('route'); }
     if (!sessionId) return res.status(400).json({ error: '缺少 sessionId 参数' });
     const result = await deliberationEngine.resume(sessionId, { userId: req.principal.userId });
+    if (result.state === 'FAILED') {
+      await releaseLlmSessionBudget(sessionId, 'terminal_failure').catch((error) => {
+        console.warn('[Capacity] 终止推演的席位将由过期回收兜底', { sessionId, code: error.code || 'release_failed' });
+      });
+    }
     if (result.state === 'FAILED') {
       return res.status(410).json({ error: result.reason || '暂停超时', ...result });
     }

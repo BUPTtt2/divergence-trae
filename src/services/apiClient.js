@@ -696,8 +696,13 @@ export async function createArtworkJob(cardId, { styleId, idempotencyKey }) {
   return request(`/api/cards/${encodeURIComponent(cardId)}/artwork-jobs`, {
     method: 'POST',
     body: JSON.stringify({ styleId, idempotencyKey }),
-    timeout: 95000,
+    timeout: 115000,
   });
+}
+
+export async function getArtworkEntitlement() {
+  const result = await request('/api/cards/artwork-entitlement');
+  return result?.entitlement || { plan: 'free', artworkCredits: 0 };
 }
 
 export async function getArtworkJob(cardId, jobId) {
@@ -808,6 +813,13 @@ export async function replyPost(postId, reply) {
 export async function likePost(postId) {
   return request(`/api/community/posts/${encodeURIComponent(postId)}/like`, {
     method: 'POST',
+  });
+}
+
+export async function reportCommunityContent(report) {
+  return request('/api/community/reports', {
+    method: 'POST',
+    body: JSON.stringify(report),
   });
 }
 

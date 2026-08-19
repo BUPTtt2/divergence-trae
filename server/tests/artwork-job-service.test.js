@@ -41,16 +41,38 @@ const card = {
 test('first included generation creates one recoverable version and idempotent retries do not charge twice', async () => {
   const repository = repositoryFixture();
   const generator = async () => ({ available: true, url: 'https://provider.example.test/temp.png', source: 'seedream', model: 'seedream-4' });
-  const first = await runArtworkJob({ card, userId: 'user-1', styleId: 'ink_landscape', idempotencyKey: 'request-1' }, { repository, generator, now: () => 1000 });
-  const replay = await runArtworkJob({ card, userId: 'user-1', styleId: 'ink_landscape', idempotencyKey: 'request-1' }, { repository, generator, now: () => 2000 });
+  const storage = async () => ({ url: 'https://blob.example.test/stable.png', contentType: 'image/png', size: 400 });
+  const first = await runArtworkJob({ card, userId: 'user-1', styleId: 'ink_landscape', idempotencyKey: 'request-1' }, { repository, generator, storage, now: () => 1000 });
+  const replay = await runArtworkJob({ card, userId: 'user-1', styleId: 'ink_landscape', idempotencyKey: 'request-1' }, { repository, generator, storage, now: () => 2000 });
 
   assert.equal(first.job.status, 'ready');
   assert.equal(first.job.creditConsumed, true);
-  assert.equal(first.version.persistent, false);
+  assert.equal(first.version.persistent, true);
+  assert.equal(first.version.url, 'https://blob.example.test/stable.png');
   assert.equal(first.version.selected, false);
   assert.equal(replay.job.id, first.job.id);
   assert.equal(repository.jobs.length, 1);
   assert.equal(repository.versions.length, 1);
+});
+
+test('storage failure never records a temporary provider URL and refunds regeneration credit', async () => {
+  const repository = repositoryFixture();
+  repository.versions.push({ id: 'existing-version', card_id: 'card-1', user_id: 'user-1' });
+  const calls = [];
+  const result = await runArtworkJob({ card, userId: 'user-1', styleId: 'ink_landscape', idempotencyKey: 'storage-fail' }, {
+    repository,
+    generator: async () => ({ available: true, url: 'https://provider.example/temp.png', source: 'seedream' }),
+    storage: async () => { const error = new Error('blob unavailable'); error.code = 'ARTWORK_STORAGE_UNAVAILABLE'; throw error; },
+    entitlements: {
+      async reserve() { calls.push('reserve'); },
+      async refund() { calls.push('refund'); },
+    },
+  });
+
+  assert.equal(result.job.status, 'failed');
+  assert.equal(result.job.errorCode, 'ARTWORK_STORAGE_UNAVAILABLE');
+  assert.equal(repository.versions.length, 1);
+  assert.deepEqual(calls, ['reserve', 'refund']);
 });
 
 test('provider failure preserves the included credit and never creates a version', async () => {
@@ -75,6 +97,23 @@ test('regeneration requires entitlement after the included successful version', 
     () => runArtworkJob({ card, userId: 'user-1', styleId: 'mineral_color', idempotencyKey: 'request-2' }, { repository, generator: async () => ({ available: true }) }),
     (error) => error.code === 'ARTWORK_CREDIT_REQUIRED',
   );
+});
+
+test('regeneration reserves a server credit and provider failure refunds it', async () => {
+  const repository = repositoryFixture();
+  repository.versions.push({ id: 'existing-version', card_id: 'card-1', user_id: 'user-1' });
+  const calls = [];
+  const entitlements = {
+    async reserve(input) { calls.push(['reserve', input]); return { artworkCredits: 0 }; },
+    async refund(input) { calls.push(['refund', input]); return { artworkCredits: 1 }; },
+  };
+  const result = await runArtworkJob({ card, userId: 'user-1', styleId: 'minimal_xuan', idempotencyKey: 'paid-fail' }, {
+    repository,
+    entitlements,
+    generator: async () => ({ available: false, reason: 'provider_error' }),
+  });
+  assert.equal(result.job.status, 'failed');
+  assert.deepEqual(calls.map(([operation]) => operation), ['reserve', 'refund']);
 });
 
 test('version selection is owner-scoped and explicit', async () => {

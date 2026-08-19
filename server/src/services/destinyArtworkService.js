@@ -1,4 +1,7 @@
 const DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
+const DEFAULT_TIMEOUT_MS = 105000;
+const MAX_TIMEOUT_MS = 110000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 78000;
 
 function safeText(value, maxLength = 80) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
@@ -28,43 +31,105 @@ export function buildSeedreamRequest(model, prompt, options = {}) {
   };
 }
 
+export function resolveSeedreamTimeoutMs(value = process.env.SEEDREAM_TIMEOUT_MS) {
+  const requested = Number(value);
+  if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_TIMEOUT_MS;
+  return Math.min(MAX_TIMEOUT_MS, Math.max(10000, Math.round(requested)));
+}
+
+function listModels(value) {
+  if (Array.isArray(value)) return value;
+  return String(value || '').split(',');
+}
+
+export function resolveSeedreamModels(options = {}) {
+  const primary = options.model
+    ?? process.env.SEEDREAM_ENDPOINT_ID
+    ?? process.env.SEEDREAM_MODEL
+    ?? '';
+  const fallbacks = options.fallbackModels
+    ?? process.env.SEEDREAM_FALLBACK_MODELS
+    ?? '';
+  return [...new Set([primary, ...listModels(fallbacks)]
+    .map((model) => String(model || '').trim())
+    .filter(Boolean))].slice(0, 4);
+}
+
+function failureForStatus(status) {
+  if (status === 401 || status === 403) {
+    return { reason: 'authentication_failed', retryable: false };
+  }
+  if (status === 429) return { reason: 'quota_exceeded', retryable: true };
+  if (status >= 500) return { reason: 'provider_error', retryable: true };
+  return { reason: 'client_error', retryable: false };
+}
+
 export async function generateDestinyArtwork(ticket, options = {}) {
   const apiKey = options.apiKey ?? process.env.ARK_API_KEY ?? '';
-  const model = options.model ?? process.env.SEEDREAM_ENDPOINT_ID ?? process.env.SEEDREAM_MODEL ?? '';
-  if (!apiKey || !model) return { available: false, reason: 'not_configured' };
+  const models = resolveSeedreamModels(options);
+  if (!apiKey || models.length === 0) return { available: false, reason: 'not_configured' };
 
   const fetchImpl = options.fetchImpl || fetch;
   const size = options.size || process.env.SEEDREAM_SIZE || '1K';
   const baseUrl = String(options.baseUrl || process.env.ARK_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, '');
-  try {
-    const response = await fetchImpl(`${baseUrl}/images/generations`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(buildSeedreamRequest(model, buildDestinyArtworkPrompt(ticket), { size })),
-      // Keep the image request inside the 60s Vercel function ceiling.
-      signal: options.signal || AbortSignal.timeout(48000),
-    });
-    if (!response.ok) {
-      const status = Number(response.status) || 502;
-      return { available: false, reason: status === 429 ? 'quota_exceeded' : 'provider_error', status };
+  const totalTimeoutMs = resolveSeedreamTimeoutMs(options.timeoutMs);
+  const deadline = Date.now() + totalTimeoutMs;
+  const attempts = [];
+  let lastFailure = { available: false, reason: 'provider_error' };
+
+  for (const model of models) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs < 1000) break;
+    try {
+      const attemptTimeoutMs = Math.min(
+        remainingMs,
+        Number(options.attemptTimeoutMs) > 0
+          ? Number(options.attemptTimeoutMs)
+          : DEFAULT_ATTEMPT_TIMEOUT_MS,
+      );
+      const response = await fetchImpl(`${baseUrl}/images/generations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(buildSeedreamRequest(model, buildDestinyArtworkPrompt(ticket), { size })),
+        signal: options.signal || AbortSignal.timeout(attemptTimeoutMs),
+      });
+      if (!response.ok) {
+        const status = Number(response.status) || 502;
+        const failure = failureForStatus(status);
+        attempts.push({ model, outcome: failure.reason, status });
+        lastFailure = { available: false, reason: failure.reason, status };
+        if (!failure.retryable) break;
+        continue;
+      }
+      const payload = await response.json();
+      const image = Array.isArray(payload?.data) ? payload.data.find((item) => item?.url) : null;
+      if (!image?.url) {
+        attempts.push({ model, outcome: 'empty_result' });
+        lastFailure = { available: false, reason: 'empty_result' };
+        continue;
+      }
+      attempts.push({ model, outcome: 'success' });
+      return {
+        available: true,
+        url: image.url,
+        size: image.size || size,
+        source: 'seedream',
+        model: payload.model || model,
+        usage: payload.usage || null,
+        fallbackUsed: attempts.length > 1,
+        attempts,
+      };
+    } catch (error) {
+      const isTimeout = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+      const reason = isTimeout ? 'timeout' : 'request_failed';
+      attempts.push({ model, outcome: reason });
+      lastFailure = { available: false, reason };
     }
-    const payload = await response.json();
-    const image = Array.isArray(payload?.data) ? payload.data.find((item) => item?.url) : null;
-    if (!image?.url) return { available: false, reason: 'empty_result' };
-    return {
-      available: true,
-      url: image.url,
-      size: image.size || size,
-      source: 'seedream',
-      model: payload.model || model,
-      usage: payload.usage || null,
-    };
-  } catch (error) {
-    return { available: false, reason: error?.name === 'TimeoutError' ? 'timeout' : 'request_failed' };
   }
+  return { ...lastFailure, attempts };
 }
 
 export default generateDestinyArtwork;

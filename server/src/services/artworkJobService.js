@@ -56,7 +56,7 @@ function requireOwnedCard(card, userId) {
 
 export async function runArtworkJob(input, dependencies = {}) {
   const { card, userId, styleId, idempotencyKey, entitlement = false } = input || {};
-  const { repository, generator, now = () => Date.now() } = dependencies;
+  const { repository, generator, storage, entitlements, now = () => Date.now() } = dependencies;
   requireOwnedCard(card, userId);
   if (!repository || typeof generator !== 'function') {
     throw serviceError('ARTWORK_SERVICE_UNAVAILABLE', '专属画境服务暂不可用');
@@ -75,8 +75,16 @@ export async function runArtworkJob(input, dependencies = {}) {
   }
 
   const readyCount = await repository.countReadyVersions(card.id, userId);
-  if (readyCount > 0 && entitlement !== true) {
-    throw serviceError('ARTWORK_CREDIT_REQUIRED', '本命牌的免费专属画境已使用');
+  let paidRegeneration = false;
+  if (readyCount > 0) {
+    if (entitlement === true) {
+      paidRegeneration = true;
+    } else if (entitlements?.reserve) {
+      await entitlements.reserve({ userId, idempotencyKey: requestKey });
+      paidRegeneration = true;
+    } else {
+      throw serviceError('ARTWORK_CREDIT_REQUIRED', '本命牌的免费专属画境已使用');
+    }
   }
 
   const createdAt = timestamp(now);
@@ -108,6 +116,9 @@ export async function runArtworkJob(input, dependencies = {}) {
   }
 
   if (!generated?.available || !generated?.url) {
+    if (paidRegeneration && entitlements?.refund) {
+      await entitlements.refund({ userId, idempotencyKey: requestKey, reason: generated?.reason || 'empty_result' });
+    }
     const failed = await repository.updateJob(storedJob.id, {
       status: 'failed',
       credit_consumed: false,
@@ -117,17 +128,40 @@ export async function runArtworkJob(input, dependencies = {}) {
     return { job: publicJob(failed), version: null };
   }
 
+  const versionId = `artver_${generateUUID()}`;
+  let storedArtwork;
+  try {
+    if (typeof storage !== 'function') throw serviceError('ARTWORK_STORAGE_UNAVAILABLE', '永久画境存储暂不可用');
+    storedArtwork = await storage({
+      sourceUrl: generated.url,
+      cardId: card.id,
+      jobId: storedJob.id,
+      versionId,
+    });
+  } catch (error) {
+    if (paidRegeneration && entitlements?.refund) {
+      await entitlements.refund({ userId, idempotencyKey: requestKey, reason: error?.code || 'storage_failed' });
+    }
+    const failed = await repository.updateJob(storedJob.id, {
+      status: 'failed',
+      credit_consumed: false,
+      error_code: error?.code || 'ARTWORK_STORAGE_UPLOAD_FAILED',
+      updated_at: timestamp(now),
+    });
+    return { job: publicJob(failed), version: null };
+  }
+
   const version = await repository.insertVersion({
-    id: `artver_${generateUUID()}`,
+    id: versionId,
     card_id: card.id,
     user_id: userId,
     job_id: storedJob.id,
     style_id: styleId,
-    url: String(generated.url),
+    url: String(storedArtwork.url),
     source: generated.source || 'generated',
     model: generated.model || null,
     size: generated.size || null,
-    persistent: generated.persistent === true,
+    persistent: true,
     selected: false,
     created_at: timestamp(now),
   });

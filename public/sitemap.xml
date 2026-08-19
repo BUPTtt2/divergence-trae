@@ -1,57 +1,57 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://yance-bagua.surge.sh/</loc>
+    <loc>https://yanceai.online/</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/sandbox</loc>
+    <loc>https://yanceai.online/sandbox</loc>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/scenarios</loc>
+    <loc>https://yanceai.online/scenarios</loc>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/agents</loc>
+    <loc>https://yanceai.online/agents</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/daily</loc>
+    <loc>https://yanceai.online/daily</loc>
     <changefreq>daily</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/cards</loc>
+    <loc>https://yanceai.online/cards</loc>
     <changefreq>weekly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/community</loc>
+    <loc>https://yanceai.online/community</loc>
     <changefreq>daily</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/dictionary</loc>
+    <loc>https://yanceai.online/dictionary</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/calendar</loc>
+    <loc>https://yanceai.online/calendar</loc>
     <changefreq>daily</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/legal</loc>
+    <loc>https://yanceai.online/legal</loc>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://yance-bagua.surge.sh/privacy</loc>
+    <loc>https://yanceai.online/privacy</loc>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>

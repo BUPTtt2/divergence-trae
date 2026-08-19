@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildProviderRequestBody, getConfiguredProviders } from '../src/services/llmRouter.js';
+import { buildProviderRequestBody, callLLM, getConfiguredProviders } from '../src/services/llmRouter.js';
 
 test('智谱 GLM-4.7 Flash 默认关闭思考，避免短输出预算被推理占满', () => {
   const body = buildProviderRequestBody(
@@ -67,6 +67,29 @@ test('ark models are ordered primary then unique fallbacks with isolated circuit
     assert.deepEqual(providers.map((item) => item.model), ['deepseek-v4-flash-ga-260731', 'glm-5-2-260617']);
     assert.deepEqual(providers.map((item) => item.name), ['ark-primary', 'ark-fallback-1']);
   } finally {
+    for (const key of keys) {
+      if (previous[key] == null) delete process.env[key]; else process.env[key] = previous[key];
+    }
+  }
+});
+
+test('budget rejection prevents every provider request instead of falling through the model list', async () => {
+  const keys = ['ARK_API_KEY', 'ARK_PRIMARY_MODEL', 'ARK_FALLBACK_MODELS'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const previousFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  process.env.ARK_API_KEY = 'server-secret';
+  process.env.ARK_PRIMARY_MODEL = 'model-primary';
+  process.env.ARK_FALLBACK_MODELS = 'model-fallback';
+  globalThis.fetch = async () => { fetchCalls += 1; throw new Error('provider must not be called'); };
+  try {
+    const result = await callLLM([{ role: 'user', content: '高成本请求' }], {
+      reserveBudgetFn: async () => { throw Object.assign(new Error('budget exceeded'), { code: 'LLM_BUDGET_EXCEEDED' }); },
+    });
+    assert.equal(result, null);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
     for (const key of keys) {
       if (previous[key] == null) delete process.env[key]; else process.env[key] = previous[key];
     }

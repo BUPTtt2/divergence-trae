@@ -8,6 +8,13 @@ import { normalizeCardReplay, replayColumns, requireAppendOnlyReplay } from '../
 import { createArtworkRepository } from '../services/artworkRepository.js';
 import { runArtworkJob, selectArtworkVersion, serializeArtworkJob, serializeArtworkVersion } from '../services/artworkJobService.js';
 import { generateDestinyArtwork } from '../services/destinyArtworkService.js';
+import { persistArtwork } from '../services/artworkStorageService.js';
+import { distributedRateLimit } from '../middleware/distributedRateLimit.js';
+import {
+  consumeArtworkCredit,
+  getArtworkEntitlement,
+  refundArtworkCredit,
+} from '../services/artworkEntitlementService.js';
 
 const router = Router();
 
@@ -69,6 +76,14 @@ router.get(
     });
     res.json({ cards: result.rows, total: result.rowCount });
   })
+);
+
+router.get(
+  '/artwork-entitlement',
+  requireUser,
+  asyncHandler(async (req, res) => {
+    res.json({ entitlement: await getArtworkEntitlement(req.userId) });
+  }),
 );
 
 /**
@@ -162,6 +177,7 @@ router.post(
 router.post(
   '/:id/artwork-jobs',
   requireUser,
+  distributedRateLimit({ scope: 'seedream_artwork', limit: 4, windowSeconds: 3600 }),
   asyncHandler(async (req, res) => {
     const card = await findOwnedCard(req.params.id, req.userId);
     if (!card) return res.status(404).json({ error: '命牌不存在' });
@@ -174,7 +190,15 @@ router.post(
         idempotencyKey,
         // 付费权益只能由服务端订单/订阅状态注入，绝不信任客户端请求体。
         entitlement: false,
-      }, { repository: artworkRepository, generator: generateDestinyArtwork });
+      }, {
+        repository: artworkRepository,
+        generator: generateDestinyArtwork,
+        storage: persistArtwork,
+        entitlements: {
+          reserve: consumeArtworkCredit,
+          refund: refundArtworkCredit,
+        },
+      });
       res.status(result.idempotentReplay ? 200 : 201).json({ ...result, idempotencyKey });
     } catch (error) {
       res.status(artworkErrorStatus(error.code)).json({ error: error.message, errorCode: error.code || 'ARTWORK_REQUEST_FAILED' });

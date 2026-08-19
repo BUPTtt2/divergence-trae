@@ -7,6 +7,7 @@ import { isLLMAvailable } from './services/llmRouter.js';
 import { providerRuntime } from './services/providerRuntime.js';
 import { persistUsageEntry } from './services/llmUsageService.js';
 import { logRequest, logResponse } from './services/logger.js';
+import { distributedRateLimit } from './middleware/distributedRateLimit.js';
 
 // 路由
 import agentRoutes from './routes/agent.js';
@@ -106,7 +107,7 @@ app.get('/', (req, res) => {
 
 // 路由注册
 app.use('/api/auth', authRoutes);
-app.use('/api/agent', agentRoutes);
+app.use('/api/agent', distributedRateLimit({ scope: 'agent_api', limit: 36, windowSeconds: 60 }), agentRoutes);
 app.use('/api/divination', divinationRoutes);
 app.use('/api/cards', cardRoutes);
 app.use('/api/community', communityRoutes);

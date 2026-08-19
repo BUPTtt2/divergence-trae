@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ARTWORK_STYLES, createArtworkStudioState } from '../../game/artworkJobModel.js';
-import { createArtworkJob, getArtworkVersions, selectArtworkVersion, selectSystemArtwork } from '../../services/apiClient.js';
+import { createArtworkJob, getArtworkEntitlement, getArtworkVersions, selectArtworkVersion, selectSystemArtwork } from '../../services/apiClient.js';
 import tracker from '../../services/tracker.js';
 import './artworkStudio.css';
 
@@ -20,14 +20,17 @@ export default function ArtworkStudio({ card, onClose, onArtworkSelected }) {
   const [versions, setVersions] = useState(initial.versions);
   const [selectedStyle, setSelectedStyle] = useState(ARTWORK_STYLES[0].id);
   const [job, setJob] = useState(initial.job);
+  const [entitlement, setEntitlement] = useState({ plan: 'free', artworkCredits: 0 });
   const [message, setMessage] = useState('系统典藏画境始终免费可用。每张命牌含一次专属画境生成。');
   const busy = job?.status === 'queued' || job?.status === 'generating';
   const hasIncludedVersion = versions.length > 0;
+  const canGenerate = !hasIncludedVersion || entitlement.artworkCredits > 0;
 
   const load = useCallback(async () => {
     try {
-      const remote = await getArtworkVersions(card.id);
+      const [remote, account] = await Promise.all([getArtworkVersions(card.id), getArtworkEntitlement()]);
       setVersions(remote);
+      setEntitlement(account);
     } catch {
       setMessage('这张命牌尚未同步到云端；系统画境和 PNG 导出仍可正常使用。');
     }
@@ -36,30 +39,32 @@ export default function ArtworkStudio({ card, onClose, onArtworkSelected }) {
   useEffect(() => { load(); }, [load]);
 
   const generate = async () => {
-    if (busy || hasIncludedVersion) return;
+    if (busy || !canGenerate) return;
+    const usesPaidCredit = hasIncludedVersion;
     const startedAt = Date.now();
     const idempotencyKey = requestId();
     setJob({ status: 'generating' });
     setMessage('正在生成专属画境。即使网络中断，已落库的任务状态也不会冒充成功。');
-    tracker.track('artwork_job_started', { cardId: card.id, styleId: selectedStyle, includedCredit: true });
+    tracker.track('artwork_job_started', { cardId: card.id, styleId: selectedStyle, includedCredit: !usesPaidCredit });
     try {
       const result = await createArtworkJob(card.id, { styleId: selectedStyle, idempotencyKey });
       setJob(result.job);
       if (result.version) setVersions((current) => current.some((item) => item.id === result.version.id) ? current : [result.version, ...current]);
       const ready = result.job?.status === 'ready';
+      if (ready && usesPaidCredit) setEntitlement((current) => ({ ...current, artworkCredits: Math.max(0, current.artworkCredits - 1) }));
       setMessage(ready
         ? result.version?.persistent ? '专属画境已生成并持久保存。请选择后设为当前画境。' : '专属画境已生成。当前为供应商临时地址，请尽快导出保存。'
         : '画境服务本次未成功，免费次数未扣除，可以稍后重试。');
       tracker.track('artwork_job_completed', {
         cardId: card.id, styleId: selectedStyle, success: ready,
         durationMs: Date.now() - startedAt, errorCode: result.job?.errorCode || '',
-        persistent: result.version?.persistent === true, includedCredit: true,
+        persistent: result.version?.persistent === true, includedCredit: !usesPaidCredit,
       });
     } catch (error) {
       const code = errorCode(error);
       setJob({ status: 'failed', errorCode: code });
-      setMessage(code === 'ARTWORK_CREDIT_REQUIRED' ? '本张命牌的一次免费生成已使用；追加生成将在付费能力接通后开放。' : '专属画境暂时不可用，系统画境不受影响。');
-      tracker.track('artwork_job_completed', { cardId: card.id, styleId: selectedStyle, success: false, durationMs: Date.now() - startedAt, errorCode: code, includedCredit: true });
+      setMessage(code === 'ARTWORK_CREDIT_REQUIRED' ? '本张命牌的一次免费生成已使用；当前没有可用的追加画境积分。' : '专属画境暂时不可用，系统画境不受影响；积分不会被扣除。');
+      tracker.track('artwork_job_completed', { cardId: card.id, styleId: selectedStyle, success: false, durationMs: Date.now() - startedAt, errorCode: code, includedCredit: !usesPaidCredit });
     }
   };
 
@@ -99,8 +104,8 @@ export default function ArtworkStudio({ card, onClose, onArtworkSelected }) {
         <div className="artwork-studio__styles" aria-label="画境风格">
           {ARTWORK_STYLES.map((style) => <button key={style.id} type="button" aria-pressed={selectedStyle === style.id} onClick={() => setSelectedStyle(style.id)}><strong>{style.name}</strong><span>{style.description}</span></button>)}
         </div>
-        <button className="artwork-studio__generate" type="button" onClick={generate} disabled={busy || hasIncludedVersion}>
-          {busy ? '正在生成…' : hasIncludedVersion ? '免费生成已使用 · 追加生成待开放' : '免费生成本命牌专属画境'}
+        <button className="artwork-studio__generate" type="button" onClick={generate} disabled={busy || !canGenerate}>
+          {busy ? '正在生成…' : hasIncludedVersion ? entitlement.artworkCredits > 0 ? `使用 1 积分重新生成 · 剩余 ${entitlement.artworkCredits}` : '免费生成已使用 · 暂无追加积分' : '免费生成本命牌专属画境'}
         </button>
         {versions.length > 0 && <div className="artwork-studio__versions">
           <h3>生成版本</h3>

@@ -1,9 +1,22 @@
 import express from 'express';
 import { query } from '../services/db.js';
 import { generateUUID } from '../utils/id.js';
-import { issueTokenPair, verifyToken } from '../services/authTokenService.js';
+import { verifyToken } from '../services/authTokenService.js';
 import { hashPassword, verifyPassword } from '../services/passwordService.js';
 import { requirePrincipal } from '../middleware/principal.js';
+import {
+  consumeRefreshSession,
+  createAuthSession,
+  revokeAllRefreshSessions,
+  revokeRefreshSession,
+} from '../services/refreshSessionService.js';
+import { createAccountActionToken, consumeAccountActionToken, hashRecoveryRequest } from '../services/accountRecoveryService.js';
+import { getExternalProviderCapabilities } from '../services/externalProviderRegistry.js';
+import { sendAccountActionEmail } from '../services/emailDeliveryService.js';
+import { passwordPolicyMessage, validatePassword } from '../services/passwordPolicy.js';
+import { policyMiddlewares } from '../security/abusePolicies.js';
+import { recordSecurityTelemetry } from '../services/securityTelemetryService.js';
+import { exportAccountData } from '../services/accountDataService.js';
 
 const router = express.Router();
 
@@ -37,12 +50,118 @@ function publicUser(u) {
     level: u.level || 1,
     xp: u.xp || 0,
     streakDays: u.streak_days || 0,
+    emailVerified: !!u.email_verified_at,
     createdAt: u.created_at,
   };
 }
 
+function rejectUnsafePassword(res, password) {
+  const result = validatePassword(password);
+  if (result.valid) return false;
+  res.status(400).json({ error: result.error, message: passwordPolicyMessage(result.error) });
+  return true;
+}
+
+async function deliverAccountEmail({ user, purpose, token, expiresAt }) {
+  try {
+    await sendAccountActionEmail({ to: user.email, purpose, token, expiresAt });
+    await recordSecurityTelemetry({
+      event: 'account_email_delivery',
+      principalId: user.id,
+      properties: { purpose, success: true, errorCode: '' },
+    });
+  } catch (error) {
+    await recordSecurityTelemetry({
+      event: 'account_email_delivery',
+      principalId: user.id,
+      properties: { purpose, success: false, errorCode: error.code || 'delivery_failed' },
+    });
+    throw error;
+  }
+}
+
+router.get('/capabilities', (req, res) => {
+  res.json({ providers: getExternalProviderCapabilities() });
+});
+
+router.post('/request-password-reset', ...policyMiddlewares('passwordResetRequest'), async (req, res) => {
+  const capabilities = getExternalProviderCapabilities();
+  if (!capabilities.email.enabled) return res.status(503).json({ error: 'EMAIL_DELIVERY_UNAVAILABLE' });
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const result = await query({ table: 'users', action: 'select', filter: { email }, queryOptions: { limit: 1 } });
+  const user = result.rows[0];
+  if (user && !user.anonymous) {
+    const issued = await createAccountActionToken({
+      userId: user.id,
+      purpose: 'reset_password',
+      requestHash: hashRecoveryRequest(req.ip || req.socket?.remoteAddress),
+    });
+    try {
+      await deliverAccountEmail({ user, purpose: 'reset_password', token: issued.token, expiresAt: issued.expiresAt });
+    } catch {
+      // Keep the public response indistinguishable so an attacker cannot enumerate accounts.
+    }
+  }
+  return res.status(202).json({ ok: true, message: '如果该邮箱存在，我们会发送重置邮件' });
+});
+
+router.post('/reset-password', ...policyMiddlewares('accountTokenConsume'), async (req, res) => {
+  try {
+    const password = String(req.body?.password || '');
+    if (rejectUnsafePassword(res, password)) return;
+    const consumed = await consumeAccountActionToken({ token: req.body?.token, purpose: 'reset_password' });
+    const user = await query({ table: 'users', action: 'select', filter: { id: consumed.userId }, queryOptions: { limit: 1 } });
+    if (!user.rows[0] || user.rows[0].anonymous) return res.status(400).json({ error: 'ACCOUNT_TOKEN_INVALID' });
+    await query({ table: 'users', action: 'update', id: consumed.userId, data: { password_hash: await hashPassword(password) } });
+    await revokeAllRefreshSessions(consumed.userId);
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(400).json({ error: error.code || 'ACCOUNT_TOKEN_INVALID' });
+  }
+});
+
+router.post('/request-email-verification', requirePrincipal, ...policyMiddlewares('emailVerificationRequest'), async (req, res) => {
+  const capabilities = getExternalProviderCapabilities();
+  if (!capabilities.email.enabled) return res.status(503).json({ error: 'EMAIL_DELIVERY_UNAVAILABLE' });
+  const result = await query({ table: 'users', action: 'select', filter: { id: req.principal.userId }, queryOptions: { limit: 1 } });
+  const user = result.rows[0];
+  if (!user || user.anonymous || !user.email) return res.status(400).json({ error: 'REGISTERED_ACCOUNT_REQUIRED' });
+  if (user.email_verified_at) return res.json({ ok: true, emailVerified: true });
+  const issued = await createAccountActionToken({ userId: user.id, purpose: 'verify_email', requestHash: hashRecoveryRequest(req.ip || req.socket?.remoteAddress) });
+  try {
+    await deliverAccountEmail({ user, purpose: 'verify_email', token: issued.token, expiresAt: issued.expiresAt });
+  } catch {
+    return res.status(503).json({ error: 'EMAIL_DELIVERY_FAILED', message: '验证邮件暂未送达，请稍后重试' });
+  }
+  return res.status(202).json({ ok: true });
+});
+
+router.post('/verify-email', ...policyMiddlewares('accountTokenConsume'), async (req, res) => {
+  try {
+    const consumed = await consumeAccountActionToken({ token: req.body?.token, purpose: 'verify_email' });
+    await query({ table: 'users', action: 'update', id: consumed.userId, data: { email_verified_at: new Date().toISOString() } });
+    return res.json({ ok: true, emailVerified: true });
+  } catch (error) {
+    return res.status(400).json({ error: error.code || 'ACCOUNT_TOKEN_INVALID' });
+  }
+});
+
+router.post('/change-password', requirePrincipal, ...policyMiddlewares('passwordChange'), async (req, res) => {
+  const currentPassword = String(req.body?.currentPassword || '');
+  const password = String(req.body?.password || '');
+  if (rejectUnsafePassword(res, password)) return;
+  const result = await query({ table: 'users', action: 'select', filter: { id: req.principal.userId }, queryOptions: { limit: 1 } });
+  const user = result.rows[0];
+  if (!user || user.anonymous || !(await verifyPassword(currentPassword, user.password_hash))) {
+    return res.status(401).json({ error: '当前密码错误' });
+  }
+  await query({ table: 'users', action: 'update', id: user.id, data: { password_hash: await hashPassword(password) } });
+  await revokeAllRefreshSessions(user.id);
+  return res.json({ ok: true });
+});
+
 function tokenPairFor(user) {
-  return issueTokenPair({
+  return createAuthSession({
     userId: user.id,
     kind: user.anonymous ? 'anonymous' : 'registered',
   });
@@ -55,7 +174,7 @@ function handleAuthError(res, error) {
   return res.status(500).json({ error: '认证服务异常' });
 }
 
-router.post('/register', async (req, res) => {
+router.post('/register', ...policyMiddlewares('register'), async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
@@ -63,9 +182,7 @@ router.post('/register', async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ error: '邮箱和密码必填' });
     }
-    if (password.length < 8 || password.length > 200) {
-      return res.status(400).json({ error: '密码长度必须为8-200字符' });
-    }
+    if (rejectUnsafePassword(res, password)) return;
 
     const existing = await query({
       table: 'users',
@@ -108,14 +225,14 @@ router.post('/register', async (req, res) => {
     const user = { id, anonymous: false, email };
     res.status(201).json({
       user: publicUser({ id, anonymous: 0, email, nickname: resolvedNickname, created_at: now }),
-      ...tokenPairFor(user),
+      ...await tokenPairFor(user),
     });
   } catch (e) {
     handleAuthError(res, e);
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', ...policyMiddlewares('login'), async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
@@ -149,14 +266,14 @@ router.post('/login', async (req, res) => {
 
     res.json({
       user: publicUser({ ...user, last_login_date: today }),
-      ...tokenPairFor(user),
+      ...await tokenPairFor(user),
     });
   } catch (e) {
     handleAuthError(res, e);
   }
 });
 
-router.post('/anonymous', async (req, res) => {
+router.post('/anonymous', ...policyMiddlewares('anonymousIdentity'), async (req, res) => {
   try {
     const id = generateUUID();
     const now = new Date().toISOString();
@@ -185,13 +302,13 @@ router.post('/anonymous', async (req, res) => {
     });
 
     const user = { id, anonymous: true, nickname, avatar, color, created_at: now };
-    res.status(201).json({ user: publicUser(user), ...tokenPairFor(user) });
+    res.status(201).json({ user: publicUser(user), ...await tokenPairFor(user) });
   } catch (e) {
     handleAuthError(res, e);
   }
 });
 
-router.post('/refresh', async (req, res) => {
+router.post('/refresh', ...policyMiddlewares('refresh'), async (req, res) => {
   try {
     const { refreshToken } = req.body;
     if (!refreshToken) {
@@ -200,7 +317,7 @@ router.post('/refresh', async (req, res) => {
 
     let claims;
     try {
-      claims = verifyToken(refreshToken, 'refresh');
+      claims = await consumeRefreshSession(refreshToken);
     } catch (error) {
       if (error?.code === 'AUTH_NOT_CONFIGURED') {
         return res.status(503).json({ error: 'AUTH_NOT_CONFIGURED' });
@@ -221,7 +338,7 @@ router.post('/refresh', async (req, res) => {
 
     res.json({
       user: publicUser(user),
-      ...tokenPairFor(user),
+      ...await tokenPairFor(user),
     });
   } catch (e) {
     handleAuthError(res, e);
@@ -229,7 +346,70 @@ router.post('/refresh', async (req, res) => {
 });
 
 router.post('/logout', async (req, res) => {
+  try {
+    await revokeRefreshSession(req.body?.refreshToken);
+  } catch {
+    // Logout is intentionally idempotent and never reveals token validity.
+  }
   res.json({ ok: true });
+});
+
+router.post('/upgrade', requirePrincipal, ...policyMiddlewares('register'), async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const nickname = String(req.body?.nickname || '').trim();
+    if (!email || !password) {
+      return res.status(400).json({ error: '邮箱和密码必填' });
+    }
+    if (rejectUnsafePassword(res, password)) return;
+
+    const current = await query({
+      table: 'users',
+      action: 'select',
+      filter: { id: req.principal.userId },
+      queryOptions: { limit: 1 },
+    });
+    const user = current.rows[0];
+    if (!user) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    if (!user.anonymous) return res.status(409).json({ error: 'ACCOUNT_ALREADY_REGISTERED' });
+
+    const existing = await query({
+      table: 'users',
+      action: 'select',
+      filter: { email },
+      queryOptions: { limit: 1 },
+    });
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: '该邮箱已注册' });
+    }
+
+    const now = new Date().toISOString();
+    const updated = await query({
+      table: 'users',
+      action: 'compare-and-set',
+      id: user.id,
+      data: {
+        anonymous: false,
+        email,
+        password_hash: await hashPassword(password),
+        nickname: nickname || user.nickname || generateNickname(),
+        last_login_date: now.split('T')[0],
+      },
+      expected: { anonymous: true },
+    });
+    if (updated.rowCount !== 1) {
+      return res.status(409).json({ error: 'ACCOUNT_ALREADY_REGISTERED' });
+    }
+    await revokeRefreshSession(req.body?.refreshToken);
+    const registeredUser = updated.rows[0];
+    return res.json({
+      user: publicUser(registeredUser),
+      ...await tokenPairFor(registeredUser),
+    });
+  } catch (error) {
+    return handleAuthError(res, error);
+  }
 });
 
 router.get('/me', async (req, res) => {
@@ -259,6 +439,20 @@ router.get('/me', async (req, res) => {
       return res.status(503).json({ error: 'AUTH_NOT_CONFIGURED' });
     }
     res.status(401).json({ error: 'AUTH_REQUIRED' });
+  }
+});
+
+router.get('/export-data', requirePrincipal, ...policyMiddlewares('accountExport'), async (req, res) => {
+  try {
+    const archive = await exportAccountData(req.principal.userId);
+    res.setHeader('Content-Disposition', 'attachment; filename="yance-account-export.json"');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(archive);
+  } catch (error) {
+    if (error?.code === 'REGISTERED_ACCOUNT_REQUIRED') {
+      return res.status(400).json({ error: error.code });
+    }
+    return res.status(500).json({ error: 'ACCOUNT_EXPORT_FAILED' });
   }
 });
 

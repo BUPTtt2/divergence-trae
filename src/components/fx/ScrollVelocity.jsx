@@ -1,5 +1,6 @@
 import { useRef } from 'react';
-import { motion, useScroll, useTransform, useReducedMotion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
+import { createScrollVelocityAnimation } from './scrollVelocityModel.js';
 
 /**
  * ScrollVelocity - 滚动速度驱动的横向文字带 (React Bits 风格)
@@ -12,35 +13,28 @@ import { motion, useScroll, useTransform, useReducedMotion } from 'framer-motion
  */
 export default function ScrollVelocity({
   items,
-  baseVelocity = 3,
+  baseVelocity = 1.4,
   direction = 1,
   className = '',
   separator = '·',
 }) {
   const ref = useRef(null);
   const reduce = useReducedMotion();
-  const { scrollYProgress } = useScroll({
-    target: ref,
-    offset: ['start end', 'end start'],
-  });
-
-  // scrollYProgress 0->1 映射到速度倍率
-  const velocity = useTransform(scrollYProgress, [0, 0.5, 1], [baseVelocity, baseVelocity * 2, baseVelocity]);
-  const x = useTransform(velocity, (v) => `-${v * 40}px`);
+  const animation = createScrollVelocityAnimation({ baseVelocity, direction, reducedMotion: reduce });
 
   if (reduce) {
     return (
-      <div ref={ref} className={className}>
-        {items.join(` ${separator} `)}
+      <div ref={ref} className={className} style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '.55rem 1rem' }}>
+        {items.map((item) => <span key={item}>{item}</span>)}
       </div>
     );
   }
 
-  const row = [...items, ...items, ...items, ...items];
+  const row = [...items, ...items];
 
   return (
     <div ref={ref} className={className} style={{ overflow: 'hidden' }}>
-      <motion.div style={{ x, display: 'flex', gap: '2.5rem', whiteSpace: 'nowrap', willChange: 'transform' }}>
+      <motion.div {...animation} style={{ width: 'max-content', display: 'flex', gap: '2.5rem', whiteSpace: 'nowrap', willChange: 'transform' }}>
         {row.map((item, i) => (
           <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '2.5rem' }}>
             <span>{item}</span>

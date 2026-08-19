@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { query } from './db.js';
+import { query, useMemory } from './db.js';
+import { getLlmCapacitySummary } from './llmBudgetService.js';
 
 const clean = (value, max = 120) => String(value || '').trim().slice(0, max);
 const number = (value) => Math.max(0, Number(value) || 0);
@@ -79,30 +80,50 @@ export function summarizeUsageEntries(entries = []) {
 
 export async function persistUsageEntry(input = {}) {
   const entry = normalizeUsageEntry(input);
-  await query({
-    table: 'llm_usage_events',
-    action: 'insert',
-    data: {
-      id: entry.id,
-      session_id: entry.sessionId,
-      user_id: entry.userId,
-      provider: entry.provider,
-      model: entry.model,
-      stage: entry.stage,
-      agent_id: entry.agentId,
-      status: entry.status,
-      attempt: entry.attempt,
-      prompt_tokens: entry.usage?.prompt_tokens || 0,
-      completion_tokens: entry.usage?.completion_tokens || 0,
-      total_tokens: entry.usage?.total_tokens || 0,
-      usage_missing: entry.usageMissing,
-      latency_ms: entry.latencyMs,
-      estimated_cost_cny: entry.estimatedCostCny,
-      error_status: entry.error?.status || 0,
-      error_code: entry.error?.code || null,
-      created_at: entry.timestamp,
-    },
-  });
+  const data = {
+    id: entry.id,
+    session_id: entry.sessionId,
+    user_id: entry.userId,
+    provider: entry.provider,
+    model: entry.model,
+    stage: entry.stage,
+    agent_id: entry.agentId,
+    status: entry.status,
+    attempt: entry.attempt,
+    prompt_tokens: entry.usage?.prompt_tokens || 0,
+    completion_tokens: entry.usage?.completion_tokens || 0,
+    total_tokens: entry.usage?.total_tokens || 0,
+    usage_missing: entry.usageMissing,
+    latency_ms: entry.latencyMs,
+    estimated_cost_cny: entry.estimatedCostCny,
+    error_status: entry.error?.status || 0,
+    error_code: entry.error?.code || null,
+    created_at: entry.timestamp,
+  };
+  if (useMemory) {
+    await query({ table: 'llm_usage_events', action: 'insert', data });
+  } else {
+    const values = Object.values(data);
+    await query({
+      action: 'raw',
+      sql: `WITH inserted AS (
+        INSERT INTO llm_usage_events
+          (id, session_id, user_id, provider, model, stage, agent_id, status, attempt,
+           prompt_tokens, completion_tokens, total_tokens, usage_missing, latency_ms,
+           estimated_cost_cny, error_status, error_code, created_at)
+        VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')})
+        RETURNING session_id, status, total_tokens
+      )
+      UPDATE llm_capacity_reservations reservation
+      SET actual_tokens = reservation.actual_tokens + inserted.total_tokens, updated_at = NOW()
+      FROM inserted
+      WHERE reservation.session_id = inserted.session_id
+        AND inserted.status = 'success'
+        AND inserted.total_tokens > 0
+        AND reservation.status IN ('active', 'settled')`,
+      params: values,
+    });
+  }
   return entry;
 }
 
@@ -138,4 +159,35 @@ export async function getSessionUsage(sessionId) {
   return { sessionId, summary: summarizeUsageEntries(entries), entries };
 }
 
-export default { normalizeUsageEntry, summarizeUsageEntries, persistUsageEntry, getSessionUsage };
+export async function getOpsUsageSummary(range = {}, options = {}) {
+  const from = new Date(range.from).toISOString();
+  const to = new Date(range.to).toISOString();
+  const queryImpl = options.queryImpl || query;
+  const result = options.queryImpl || !useMemory
+    ? await queryImpl({
+      action: 'raw',
+      sql: `SELECT id, provider, model, stage, agent_id, status, attempt,
+        prompt_tokens, completion_tokens, total_tokens, usage_missing,
+        latency_ms, estimated_cost_cny, error_status, error_code, created_at
+        FROM llm_usage_events
+        WHERE created_at >= $1 AND created_at <= $2
+        ORDER BY created_at ASC
+        LIMIT 10000`,
+      params: [from, to],
+    })
+    : await queryImpl({
+      table: 'llm_usage_events',
+      action: 'select',
+      queryOptions: { greaterThan: { created_at: from }, orderBy: 'created_at:asc', limit: 200 },
+    });
+  const rows = (result.rows || []).filter((row) => new Date(row.created_at).getTime() <= new Date(to).getTime());
+  const env = options.env || process.env;
+  return {
+    from,
+    to,
+    summary: summarizeUsageEntries(rows.map(rowToEntry)),
+    capacity: await getLlmCapacitySummary({ from, to }, { queryImpl, env }),
+  };
+}
+
+export default { normalizeUsageEntry, summarizeUsageEntries, persistUsageEntry, getSessionUsage, getOpsUsageSummary };

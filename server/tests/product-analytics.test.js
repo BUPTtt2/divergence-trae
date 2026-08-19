@@ -92,6 +92,28 @@ test('analytics separates release and kiosk filters without inventing zero-sampl
   assert.deepEqual(aggregateProductAnalytics([], {}).completionRate, { numerator: 0, denominator: 0, rate: null });
 });
 
+test('security and account email events keep only aggregate-safe properties', () => {
+  const limited = normalizeProductEvent({
+    event: 'security_rate_limited',
+    properties: {
+      scope: 'password_reset_email_hour', retryAfter: 120,
+      email: 'private@example.com', ip: '198.51.100.8', token: 'secret',
+    },
+  }, { principalId: 'security-public', now: 1 });
+  const email = normalizeProductEvent({
+    event: 'account_email_delivery',
+    properties: { purpose: 'reset_password', success: false, errorCode: 'EMAIL_DELIVERY_FAILED', email: 'private@example.com' },
+  }, { principalId: 'security-public', now: 2 });
+
+  assert.deepEqual(limited.properties, { scope: 'password_reset_email_hour', retryAfter: 120 });
+  assert.deepEqual(email.properties, { purpose: 'reset_password', success: false, errorCode: 'EMAIL_DELIVERY_FAILED' });
+  const metrics = aggregateProductAnalytics([limited, email]);
+  assert.equal(metrics.visitors, 0);
+  assert.equal(metrics.reliability.rateLimited, 1);
+  assert.equal(metrics.reliability.accountEmailRequests, 1);
+  assert.equal(metrics.reliability.accountEmailFailures, 1);
+});
+
 function row(userId, visitId, sessionId, eventName, occurredAt, properties = {}) {
   return {
     id: `${sessionId}-${eventName}-${occurredAt}`,

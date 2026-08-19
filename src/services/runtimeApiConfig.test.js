@@ -17,5 +17,5 @@ test('loopback hosts use the same-origin development proxy', () => {
 });
 
 test('non-loopback hosts keep the production API base', () => {
-  assert.equal(configuredBase('example.com'), 'https://yance-bagua-engine.vercel.app');
+  assert.equal(configuredBase('example.com'), 'https://api.yanceai.online');
 });

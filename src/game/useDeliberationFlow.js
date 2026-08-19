@@ -968,7 +968,10 @@ export function useDeliberationFlow(initialQuestion = "") {
       });
       pendingActionIdsRef.current.complete(deliberationSessionId, actionKey);
       lastFailedActionRef.current = null;
-      emitRuntimeStatus({ type: 'work:progress', latencyMs: performance.now() - startedAt });
+      const executionProvenance = result.fallback === true
+        ? 'controlled-fallback'
+        : result.plan?.caseAnalysis?.source || result.source || 'model';
+      emitRuntimeStatus({ type: 'work:progress', provenance: executionProvenance, latencyMs: performance.now() - startedAt });
 
       setDeliberationFindings(result.findings);
       setDeliberationOracle(result.oracle);

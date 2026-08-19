@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import app from '../src/app.js';
 import { query } from '../src/services/db.js';
 import { verifyToken } from '../src/services/authTokenService.js';
+import { createAccountActionToken } from '../src/services/accountRecoveryService.js';
 
 async function withServer(run) {
   const server = app.listen(0);
@@ -87,11 +88,155 @@ test('anonymous and refresh endpoints issue only signed tokens', async () => {
     assert.equal(refreshed.status, 200);
     assert.equal(verifyToken(refreshed.body.accessToken, 'access').sub, anonymous.body.user.id);
 
+    const replayed = await post(base, '/api/auth/refresh', {
+      refreshToken: anonymous.body.refreshToken,
+    });
+    assert.equal(replayed.status, 401);
+
+    const rotated = await post(base, '/api/auth/refresh', {
+      refreshToken: refreshed.body.refreshToken,
+    });
+    assert.equal(rotated.status, 200);
+
     const me = await fetch(`${base}/api/auth/me`, {
-      headers: { authorization: `Bearer ${refreshed.body.accessToken}` },
+      headers: { authorization: `Bearer ${rotated.body.accessToken}` },
     });
     assert.equal(me.status, 200);
     assert.equal((await me.json()).user.id, anonymous.body.user.id);
+  });
+});
+
+test('anonymous account upgrade preserves the same user and all owned records', async () => {
+  await withServer(async (base) => {
+    const anonymous = await post(base, '/api/auth/anonymous', {});
+    const userId = anonymous.body.user.id;
+    await query({
+      table: 'cards',
+      action: 'insert',
+      data: { id: `upgrade-card-${Date.now()}`, user_id: userId, title: '保留的命签' },
+    });
+    const email = `upgrade-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
+    const upgraded = await post(base, '/api/auth/upgrade', {
+      email,
+      password: 'safe-password-123',
+      nickname: '升级用户',
+    }, {
+      authorization: `Bearer ${anonymous.body.accessToken}`,
+    });
+
+    assert.equal(upgraded.status, 200);
+    assert.equal(upgraded.body.user.id, userId);
+    assert.equal(upgraded.body.user.anonymous, false);
+    assert.equal(upgraded.body.user.email, email);
+    assert.equal(verifyToken(upgraded.body.accessToken, 'access').kind, 'registered');
+
+    const stored = await query({
+      table: 'users',
+      action: 'select',
+      filter: { id: userId },
+      queryOptions: { limit: 1 },
+    });
+    assert.equal(stored.rows[0].email, email);
+    assert.equal(!!stored.rows[0].anonymous, false);
+    assert.match(stored.rows[0].password_hash, /^scrypt\$/);
+
+    const cards = await query({ table: 'cards', action: 'select', filter: { user_id: userId } });
+    assert.equal(cards.rows.some((card) => card.title === '保留的命签'), true);
+  });
+});
+
+test('account upgrade rejects registered principals and duplicate emails', async () => {
+  await withServer(async (base) => {
+    const email = `duplicate-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
+    const registered = await post(base, '/api/auth/register', {
+      email,
+      password: 'safe-password-123',
+    });
+    const registeredAttempt = await post(base, '/api/auth/upgrade', {
+      email: `other-${email}`,
+      password: 'safe-password-123',
+    }, {
+      authorization: `Bearer ${registered.body.accessToken}`,
+    });
+    assert.equal(registeredAttempt.status, 409);
+    assert.equal(registeredAttempt.body.error, 'ACCOUNT_ALREADY_REGISTERED');
+
+    const anonymous = await post(base, '/api/auth/anonymous', {});
+    const duplicateAttempt = await post(base, '/api/auth/upgrade', {
+      email,
+      password: 'safe-password-123',
+    }, {
+      authorization: `Bearer ${anonymous.body.accessToken}`,
+    });
+    assert.equal(duplicateAttempt.status, 409);
+    assert.equal(duplicateAttempt.body.error, '该邮箱已注册');
+  });
+});
+
+test('logout revokes the submitted refresh token and remains idempotent', async () => {
+  await withServer(async (base) => {
+    const anonymous = await post(base, '/api/auth/anonymous', {});
+    const firstLogout = await post(base, '/api/auth/logout', {
+      refreshToken: anonymous.body.refreshToken,
+    });
+    assert.equal(firstLogout.status, 200);
+    const secondLogout = await post(base, '/api/auth/logout', {
+      refreshToken: anonymous.body.refreshToken,
+    });
+    assert.equal(secondLogout.status, 200);
+    const refreshed = await post(base, '/api/auth/refresh', {
+      refreshToken: anonymous.body.refreshToken,
+    });
+    assert.equal(refreshed.status, 401);
+  });
+});
+
+test('password reset consumes one token and revokes every existing refresh session', async () => {
+  await withServer(async (base) => {
+    const email = `reset-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
+    const registered = await post(base, '/api/auth/register', { email, password: 'old-password-123' });
+    const issued = await createAccountActionToken({ userId: registered.body.user.id, purpose: 'reset_password' });
+    const reset = await post(base, '/api/auth/reset-password', { token: issued.token, password: 'new-password-456' });
+    assert.equal(reset.status, 200);
+    assert.equal((await post(base, '/api/auth/login', { email, password: 'old-password-123' })).status, 401);
+    assert.equal((await post(base, '/api/auth/login', { email, password: 'new-password-456' })).status, 200);
+    assert.equal((await post(base, '/api/auth/refresh', { refreshToken: registered.body.refreshToken })).status, 401);
+    assert.equal((await post(base, '/api/auth/reset-password', { token: issued.token, password: 'another-password-789' })).status, 400);
+  });
+});
+
+test('registered users can change a known password and email verification is one-time', async () => {
+  await withServer(async (base) => {
+    const email = `secure-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
+    const registered = await post(base, '/api/auth/register', { email, password: 'old-password-123' });
+    const authorization = { authorization: `Bearer ${registered.body.accessToken}` };
+    assert.equal((await post(base, '/api/auth/change-password', { currentPassword: 'wrong-password', password: 'new-password-456' }, authorization)).status, 401);
+    assert.equal((await post(base, '/api/auth/change-password', { currentPassword: 'old-password-123', password: 'new-password-456' }, authorization)).status, 200);
+    assert.equal((await post(base, '/api/auth/refresh', { refreshToken: registered.body.refreshToken })).status, 401);
+
+    const verification = await createAccountActionToken({ userId: registered.body.user.id, purpose: 'verify_email' });
+    const verified = await post(base, '/api/auth/verify-email', { token: verification.token });
+    assert.equal(verified.status, 200);
+    assert.equal(verified.body.emailVerified, true);
+    assert.equal((await post(base, '/api/auth/verify-email', { token: verification.token })).status, 400);
+  });
+});
+
+test('public auth capabilities expose availability without leaking provider secrets', async () => {
+  await withServer(async (base) => {
+    const previous = process.env.RESEND_API_KEY;
+    process.env.RESEND_API_KEY = 'must-not-leak';
+    try {
+      const response = await fetch(`${base}/api/auth/capabilities`);
+      const body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(JSON.stringify(body).includes('must-not-leak'), false);
+      assert.equal(typeof body.providers.email.enabled, 'boolean');
+      assert.equal(typeof body.providers.wechat.enabled, 'boolean');
+    } finally {
+      if (previous === undefined) delete process.env.RESEND_API_KEY;
+      else process.env.RESEND_API_KEY = previous;
+    }
   });
 });
 

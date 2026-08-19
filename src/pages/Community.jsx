@@ -10,7 +10,7 @@ import {
   unsubscribeAdvisorAsset,
 } from '../services/advisorClient';
 import { deleteAdvisor } from '../services/deliberationClient';
-import { createPost, getCommunityPosts, likePost } from '../services/apiClient';
+import { createPost, getCommunityPosts, likePost, reportCommunityContent } from '../services/apiClient';
 import { getUserProfile, updateUserProfile, getAvatarOptions, getColorOptions, regenerateNickname } from '../utils/userProfile';
 import { useAuth } from '../context/AuthContext.jsx';
 
@@ -82,6 +82,9 @@ export default function Community() {
   const [postTitle, setPostTitle] = useState('');
   const [postContent, setPostContent] = useState('');
   const [postTag, setPostTag] = useState('决策复盘');
+  const [reportTarget, setReportTarget] = useState('');
+  const [reportReason, setReportReason] = useState('spam');
+  const [reportDetails, setReportDetails] = useState('');
 
   // 市集推荐位：本周精选（订阅数最高3个）
   const featuredAgents = useMemo(() => {
@@ -166,6 +169,17 @@ export default function Community() {
       await refreshCommunityPosts();
     } catch (error) {
       setCommunityMessage(error?.message || '操作失败');
+    }
+  };
+
+  const handleReportPost = async () => {
+    try {
+      await reportCommunityContent({ targetType: 'post', targetId: reportTarget, reason: reportReason, details: reportDetails.trim() });
+      setCommunityMessage('举报已提交，运营者会在私有后台核验。');
+      setReportTarget('');
+      setReportDetails('');
+    } catch (error) {
+      setCommunityMessage(error?.message?.includes('REPORT_ALREADY_EXISTS') ? '你已经举报过这条内容。' : '举报提交失败，请稍后重试。');
     }
   };
 
@@ -329,10 +343,15 @@ export default function Community() {
                         </div>
                         <h3 className="text-[15px] font-semibold mb-2">{post.title}</h3>
                         <p className="text-[12px] leading-6 mb-4" style={{ color: T.muted }}>{post.content}</p>
-                        <div className="flex items-center justify-between text-[10px]" style={{ color: T.muted }}>
+                        <div className="flex items-center justify-between gap-2 text-[10px]" style={{ color: T.muted }}>
                           <span>{post.user_name || '匿名'} · {post.replies || 0} 条讨论</span>
-                          <button onClick={() => handleLikePost(post.id)} className="min-h-11 px-3" style={{ color: T.accent, border: `1px solid ${T.accent}30` }}>认同 {post.likes || 0}</button>
+                          <div className="flex gap-2"><button onClick={() => setReportTarget(reportTarget === post.id ? '' : post.id)} className="min-h-11 px-3" style={{ color: T.muted, border: `1px solid ${T.border}` }}>举报</button><button onClick={() => handleLikePost(post.id)} className="min-h-11 px-3" style={{ color: T.accent, border: `1px solid ${T.accent}30` }}>认同 {post.likes || 0}</button></div>
                         </div>
+                        {reportTarget === post.id && <div className="mt-3 p-3 grid gap-2" style={{ border: `1px solid ${T.border}`, background: T.paper }}>
+                          <label className="text-[10px]" style={{ color: T.muted }}>举报原因<select value={reportReason} onChange={(event) => setReportReason(event.target.value)} className="w-full min-h-11 mt-1 px-2" style={{ background: '#fff', border: `1px solid ${T.border}` }}><option value="spam">垃圾推广</option><option value="harassment">攻击骚扰</option><option value="privacy">泄露隐私</option><option value="misinformation">误导信息</option><option value="self_harm">人身安全风险</option><option value="other">其他</option></select></label>
+                          <textarea value={reportDetails} onChange={(event) => setReportDetails(event.target.value.slice(0, 500))} rows={2} placeholder="可选：说明具体位置，不要填写自己的敏感信息" className="w-full p-2 text-[11px]" style={{ background: '#fff', border: `1px solid ${T.border}` }} />
+                          <div className="flex gap-2"><button type="button" onClick={() => setReportTarget('')} className="min-h-11 flex-1" style={{ border: `1px solid ${T.border}` }}>取消</button><button type="button" onClick={handleReportPost} className="min-h-11 flex-1" style={{ color: T.paperLight, background: T.ink }}>提交举报</button></div>
+                        </div>}
                       </motion.article>
                     ))}
                     {communityPosts.length === 0 && (

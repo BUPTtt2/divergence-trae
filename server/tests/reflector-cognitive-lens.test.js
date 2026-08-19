@@ -157,7 +157,8 @@ test('Reflect 用已验证、未知和冲突生成中性 Lens，且不改写证�
   assert.deepEqual(result.session.cognitivePlan, result.cognitivePlan);
   assert.deepEqual(result.session.lensImpacts, result.lensImpacts);
   assert.doesNotMatch(result.oracle.text, FORBIDDEN_VERDICT);
-  assert.match(result.oracle.text, /审查镜头/);
+  assert.match(result.oracle.text, /本卦|认知镜面/);
+  assert.doesNotMatch(result.oracle.text, /已验证\d+项|未知\d+项|冲突\d+项/);
   assert.doesNotMatch(JSON.stringify({
     oracleText: result.oracle.text,
     cognitivePlan: result.cognitivePlan,
@@ -187,10 +188,8 @@ test('LLM 只能通过合法 template 和 clause ID 调整受控审查句式', a
   assert.equal(callCount, 1);
   assert.equal(receivedTimeout, 4000);
   assert.notEqual(selected.oracle.text, fallback.oracle.text);
-  assert.equal(
-    selected.oracle.text,
-    '边界先行：事实、风险与审批要求保持不变。【兑乾】审查概览：已验证4项，未知1项，冲突1项。反转观察：2爻动，对照震乾镜头。下一步仅补证未知、核验冲突与反转条件。',
-  );
+  assert.match(selected.oracle.text, /^边界先行：事实、风险与审批要求保持不变。【乾兑】上乾☰、下兑☱。二爻动，之卦为乾震。互卦.+，错卦.+。/);
+  assert.doesNotMatch(selected.oracle.text, /已验证\d+项|未知\d+项|冲突\d+项/);
   assert.doesNotMatch(selected.oracle.text, new RegExp(`${FORBIDDEN_VERDICT.source}|${INJECTED_DECISION.source}`));
   assert.deepEqual(selected.session.dynamicChoices, fallback.session.dynamicChoices);
   assert.equal(selected.session.masterSummary, fallback.session.masterSummary);
@@ -266,7 +265,7 @@ test('用户问题或 Agent 中的裁决措辞不得污染可提交的原问题�
     assert.equal(result.session.dynamicChoices.every((choice) => choice.generatedAdvice === null), true);
     assert.equal(result.session.dynamicChoices.some((choice) => choice.id.startsWith('lens_')), false);
     assert.ok(result.cognitivePlan.reviewTasks.length > 0);
-    assert.match(result.oracle.text, /审查镜头/);
+    assert.match(result.oracle.text, /本卦/);
   }
 });
 

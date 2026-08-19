@@ -8,9 +8,11 @@
     "start": "node index.js",
     "dev": "node --watch index.js",
     "build": "node scripts/migrate.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "load:smoke": "node scripts/load-smoke.mjs"
   },
   "dependencies": {
+    "@vercel/blob": "^2.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

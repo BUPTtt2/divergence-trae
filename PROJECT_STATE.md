@@ -7,19 +7,22 @@
 - 项目目标：为“演策”复赛提供可公开体验的决策推演产品，并为运营者提供匿名访问、推演漏斗、可靠性与反馈证据。
 - 目标用户与核心任务：评委/观众匿名完成一局推演；运营者通过受保护的 `/ops` 判断访问、完成、失败与反馈。
 - 目标交付级别：Release Candidate / Production Learning
-- 当前生命周期阶段：多人上线 Preview 验收
-- 当前 Gate：Preview 手机验收通过后才允许覆盖 Production
+- 当前生命周期阶段：Production Learning / 受控放量
+- 当前 Gate：真实手机完成一局、Seedream 失败切换与 `/ops` 入库验收后再扩大流量
 - 当前 Gate 状态：CONDITIONAL
-- 更新时间与核验人：2026-08-17，Codex
-- 权威需求 / 设计 / Contract：`docs/superpowers/specs/2026-08-17-production-commercial-readiness-design.md`、`HANDOVER/13-2026-08-12-演策完整交接与下一对话入口.md`、`HANDOVER/14-复赛运营后台与匿名体验接入.md`
+- 更新时间与核验人：2026-08-18，Codex
+- 权威需求 / 设计 / Contract：`docs/superpowers/specs/2026-08-17-production-commercial-readiness-design.md`、`docs/superpowers/specs/2026-08-17-production-infrastructure-closure-design.md`、`HANDOVER/13-2026-08-12-演策完整交接与下一对话入口.md`、`HANDOVER/14-复赛运营后台与匿名体验接入.md`
 
 ## 已证实事实
 
 | Current Fact | 当前证据 | 核验时间 | 易变性 |
 |---|---|---|---|
-| 当前线上前端为 `https://yance-bagua.surge.sh`，发布指纹为 `643159` | 线上 HTML/JS 与历史发布产物 SHA256 一致 | 2026-08-17 | 高 |
-| 当前线上后端别名为 `https://yance-bagua-engine.vercel.app` | Vercel deployment `dpl_8qXdq2yXyQZYGiiPSpAp7cxtZYGk` 状态 Ready | 2026-08-17 | 高 |
-| 本目录是线上 643159 源码的永久重建基线 | 部署分支已形成命牌/回放/运营候选；前端 185/185、后端 291/291、构建通过 | 2026-08-17 | 中 |
+| 当前正式前端为 `https://yanceai.online`，`www` 同样可达 | 阿里云 `@`/`www` A 记录均为 `76.76.21.21`；HTTPS 200；Vercel deployment `dpl_CnK5kFTYsTPFJUv9HnXPuXgpThzu` Ready；SPA 深层地址返回完整文档 | 2026-08-18 | 高 |
+| 当前正式后端为 `https://api.yanceai.online` | 阿里云 `api` A 记录为 `76.76.21.21`；Vercel 证书已签发；`/health` 200；deployment `dpl_9si5FZz573oTAGWywMt6h1CTSzVw` Ready | 2026-08-18 | 高 |
+| `yanceai.online` 已具备生产邮件发送能力 | Resend Tokyo 域名状态 `verified`；DKIM、SPF、MX、DMARC 权威 DNS 可查；Production capability 返回 `email.enabled=true`；`account@yanceai.online` 发出的重置邮件已向注册邮箱投递为 `delivered` | 2026-08-18 | 高 |
+| `https://yance-bagua.surge.sh` 仍在线且只作为回退入口 | 公网请求 HTTP 200；未下线、未覆盖 | 2026-08-18 | 高 |
+| Vercel Blob 已建立并连接后端 Production/Preview | store `yance-destiny-artwork` / `store_AMEEqP98zcOYzozS`，Billing Active，Public，iad1，生产环境变量已生成 | 2026-08-17 | 高 |
+| 本目录是线上 643159 源码的永久重建基线 | 账号恢复、永久画境、跨实例限流、供应商闸门、运营状态已实现；前端 193/193、后端 318/318、build/lint 通过 | 2026-08-17 | 中 |
 | 主仓库未提交 UI 改动不属于当前线上版本 | 主仓库分支与本基线隔离；线上资产哈希未变化 | 2026-08-17 | 高 |
 
 ## Implementation Coverage
@@ -29,9 +32,12 @@
 | 匿名评委推演 | PRODUCTION_PROVEN | INTEGRATED | Handover 13/14 | `sharedDeviceSession`、单一 Agent Runtime、Game flow | 前端 185 tests；build | 2026-08-17 11:46 CST，390×844 本地浏览器完成职业迁移案卷与组阁前路径 | 未配置模型的本地环境诚实停止，不伪造智囊结果 | PARTIAL | Preview 用真实模型完成一局并核对恢复 |
 | 运营后台 `/ops` | PRODUCTION_PROVEN | INTEGRATED | 运营后台 spec | Ops page/client/server routes/repository | 前后端测试覆盖 | Vercel Ready | 尚缺本轮手机登录实测 | PARTIAL | 使用实际管理员配置验证授权与指标 |
 | 行为分析与反馈 | PRODUCTION_PROVEN | INTEGRATED | 运营后台 spec | tracker、feedback、analytics services | 相关单测通过 | 发布产物包含实现 | 尚未证明真实样本持续入库 | PARTIAL | 产生一局样本并在 `/ops` 核对 |
-| 账号与手机弹窗 | USER_VERIFIED | INTEGRATED | account/mobile specs | account components、AuthContext | 相关单测与 build 通过 | 发布产物包含实现 | 历史手机截图曾暴露弹窗边界问题 | PARTIAL | 当前线上手机回归 |
+| 账号与手机弹窗 | USER_VERIFIED | INTEGRATED | account/mobile + infrastructure specs | 匿名原位升级、scrypt、refresh 轮换/撤销、修改密码、一次性邮箱验证/重置 token、Portal 弹窗 | 认证与恢复测试通过；前端账号操作页已构建 | Resend 域名 verified；Production 邮件 capability 开启；真实重置邮件 delivered | 邮件供应商链路已闭合，尚缺手机端验证链接与重置完成验收 | PARTIAL | 真实手机完成“收信→打开正式域名链接→验证邮箱/重置密码→重新登录” |
 | 完整过程回放 | PRODUCTION_PROVEN | INTEGRATED | Replay V2 plan | 只追加事件、所有权校验、筛选和导出 | 前后端路由/模型测试 | 2026-08-17 11:46 CST，390×844 实测 8 条原话、系统问答、智囊、选择与承诺 | 本地命牌完整显示且不补写旧记录 | PARTIAL | Preview 核对真实一局 |
-| 命牌与专属画境 | PRODUCTION_PROVEN | INTEGRATED | Destiny plan | 统一表现模型、PNG、3D 揭牌、画境任务/版本 | 状态机、3D、构建测试 | 2026-08-17 11:46 CST，390×844 实测 3D 命牌先展示、案卷可开合；系统画境与失败不扣次数 | 对象存储和供应商尚未配置 | PARTIAL | 接对象存储和生图供应商后验收成功版本 |
+| 命牌与专属画境 | PRODUCTION_PROVEN | INTEGRATED | Destiny + infrastructure specs | 3D 揭牌、PNG、四模型切换、积分/失败退还、生成后校验并转存 Vercel Blob | 存储/任务测试；Blob store 已连接；migration/build 成功 | Seedream 5.0 Pro 历史真实成功；Production Ready | 尚未取得“Seedream → Blob → 命牌”本轮线上真实版本 | PARTIAL | 手机生成一次并确认版本 URL 为 Blob；再制造主模型失败验收切换 |
+| 商业权益与支付合同 | PRODUCTION_PROVEN | IMPLEMENTED | commercial + infrastructure specs | 服务端余额/幂等扣退、管理员发放、验签支付事件与防重复到账合同 | 服务测试与 migration 028 | 权益账本已生产迁移；支付 provider 未配置 | 尚无真实商户订单、webhook、退款对账 | PARTIAL | 取得商户后实现 provider 验签适配和真实小额订单 |
+| 跨实例保护与放量 | PRODUCTION_PROVEN | INTEGRATED | infrastructure spec | PostgreSQL 固定窗口/HMAC 主体摘要；Agent 与 Seedream 独立策略 | 共享计数测试；100 请求/10 并发健康烟测 100%，P95 9ms | migration 028 与生产 secret 已部署 | 未做真实 Agent/Seedream 成本压测与持续 SLO | PARTIAL | 设定成本上限后做 5-10 用户真实并发及 429/恢复验收 |
+| QQ/微信身份 | USER_VERIFIED | DOCUMENTED | infrastructure spec | 服务端 capability registry 在回调适配器缺失时强制 disabled；前端不展示假入口 | registry 测试 | Production 设计态保持 disabled（线上接口受当前网络限制未读取） | 缺开放平台应用、审核、回调域名及具体 token exchange 适配器 | BLOCKED | 外部 Owner 提供应用资质后实现并验收真实 OAuth 回调与绑定 |
 
 ## 历史证据
 
@@ -61,12 +67,13 @@
 
 ## Current Evidence
 
-- 可运行入口：Production `https://yance-bagua.surge.sh`；本轮公开 Preview `https://divergence-trae-deployed-643159-pu254hxbr-bupttt2s-projects.vercel.app`；后端 `https://yance-bagua-engine.vercel.app`；运营入口 `/ops`。
+- 可运行入口：正式前端 `https://yanceai.online`；后端 `https://api.yanceai.online`；运营入口 `https://yanceai.online/ops`；旧 Surge 仅作回退。
 - 核心业务闭环：匿名进入、案卷澄清、组阁、命牌、完整回放、反馈和运营漏斗已实现；本地无模型时不伪造完成。
-- Tests / Build：前端 Node tests 185/185、后端 291/291 通过；Vite build 与 lint（仅存非阻断历史 warnings）成功；前后端 production dependency audit 均为 0 漏洞。
+- Tests / Build：后端 318/318、前端 193/193 通过；Vite build 成功；lint 0 error（保留历史 warnings）；依赖安装审计 0 漏洞。
 - Eval：暂无独立 Agent 质量 Eval；当前主要为确定性单测与产品漏斗证据。
 - Trace / Observability：产品事件、可靠性事件、反馈与运营聚合已实现；真实线上采集需重验。
-- Git / Release / Deployment：本分支 `codex/deployed-643159-baseline` 从 `987437b` 重建；Vercel Preview `dpl_62Nb6ZyYneYyxY4ajgLcws37KP39` 于 2026-08-17 11:50 CST Ready，预览项目访问保护已关闭；Production 仍是 2026-08-12 版本，未覆盖。
+- Load：本地 `/health` 100 请求、并发 10，成功率 100%，P50 2.1ms、P95 9ms；错误使用 `/api/health` 曾得到 100 个 404，已修正脚本默认路径。该烟测不证明 Agent/Seedream 容量。
+- Git / Release / Deployment：当前机器受 Apple Command Line Tools 许可状态影响，未声称 Git 提交；后端 `dpl_9si5FZz573oTAGWywMt6h1CTSzVw`、前端 `dpl_CnK5kFTYsTPFJUv9HnXPuXgpThzu` 均为 Ready。DNS、三张证书、正式首页、`/sandbox?new=1`、`/ops`、账号深层路由、后端 `/health`、CORS 预检与 Resend 真实投递已在公网通过；手机完整业务闭环仍需重验。
 
 ## Open Risks
 
@@ -75,22 +82,23 @@
 | 历史发布来自临时目录且源码未提交，产生源码/产物漂移 | 高 | 本分支重建并准备提交 | 是 | 再从临时目录直接发布 |
 | md 内 12 张 `com.miui.notes` 图片当前不可访问 | 中 | 只采用可复核文本；需要用户重新附件 | 否 | 声称已看见图片内容 |
 | 本轮移动端及真实 `/ops` 授权未验收 | 高 | 安排线上手机/浏览器验收 | 是 | 宣称已生产验证 |
-| 专属画境没有稳定对象存储和已配置生图供应商 | 高 | 已有持久任务、版本历史、失败返还与系统画境保底 | 是 | 将供应商临时 URL 当永久命牌资源 |
-| 邮箱验证码、QQ/微信 OAuth 与支付订单尚无供应商配置 | 高 | 当前保留匿名体验和密码账号；所有增值文案明确为“待开放” | 是 | 从客户端请求体信任付费权益或宣称已可付费 |
+| 四模型授权不等于四条真实请求及 Blob 转存均成功 | 高 | 有序切换、Blob 持久化、失败退还和系统画境保底已部署 | 是 | 把控制台授权、单测或 Store Active 当真实命牌结果 |
+| QQ/微信和支付缺外部供应商/资质 | 高 | 邮件已真实开通；支付事件合同与 capability 闸门已实现；未接入能力继续保持关闭 | 是 | 伪造 OAuth、付款成功或绕过 webhook 验签 |
+| 只做了健康端点并发烟测，未做成本路径和持续观察 | 高 | PostgreSQL 全局限流与受控脚本已部署 | 是 | 宣称可承受无上限流量或直接进行大规模投放 |
 
 ## Decisions Needed
 
 | 决策 | 决策人 | 截止条件 | 未决时不能做什么 |
 |---|---|---|---|
 | 对问题清单采用“真实降级”还是“预设结果伪成功” | 用户/产品 | 实施 Agent 容错前 | 不能把兜底模板当成真实智囊输出 |
-| 何时从本基线重新发布线上 | 用户 | 修复、测试、预览验收后 | 不能覆盖当前线上版本 |
-| 是否把本 Preview 提升为 Production | 用户 | 手机完成真实一局并核对 `/ops` 后 | 不能覆盖当前 Production |
+| 采用哪个支付商户/provider | 用户 | 开启购买前 | 不能注册支付 webhook 或展示购买按钮 |
+| 微信/QQ 开放平台应用与回调域名 | 用户 | 开启社交登录前 | 不能展示微信/QQ 登录入口 |
 
 ## 下一条最短验证路径
 
-1. 手机打开 Vercel Preview，匿名完成一局并进入命牌库核对完整过程和 PNG。
-2. 用已配置的管理员身份打开 Preview `/ops`，核对这局漏斗、失败和反馈事件。
-3. 配置对象存储/生图供应商后验收一次成功画境；确认无误再人工提升 Production。
+1. 手机打开 Vercel 前端，匿名完成一局并生成画境；在命牌版本中确认 URL 域名为 `blob.vercel-storage.com`，再导出 PNG。
+2. 注册账号并执行一次“修改密码→旧 refresh 失效→重新登录”；用管理员进入 `/ops` 查看八项上线能力状态和本局运营事件。
+3. 制造主模型限额或临时失败，确认 5.0 Pro → 5.0 Lite → 4.5 → 4.0；随后在明确成本上限下完成 5-10 用户 Agent 并发。
 
 ## 新对话启动提示
 

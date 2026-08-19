@@ -58,3 +58,38 @@ test('session summary exposes calls whose token usage has no configured price', 
   assert.equal(summary.costMissingCalls, 1);
   assert.equal(summary.estimatedCostCny, 0);
 });
+
+test('ops usage summary returns aggregate billing evidence without prompts or response content', async () => {
+  const result = await usageService.getOpsUsageSummary({
+    from: '2026-08-18T00:00:00.000Z',
+    to: '2026-08-19T00:00:00.000Z',
+  }, {
+    env: {
+      LLM_SESSION_TOKEN_ENVELOPE: '250000', LLM_USER_DAILY_SESSION_LIMIT: '3',
+      LLM_GLOBAL_DAILY_SESSION_LIMIT: '100', LLM_MAX_ACTIVE_SESSIONS: '20',
+    },
+    queryImpl: async ({ action, sql, params }) => {
+      assert.equal(action, 'raw');
+      assert.deepEqual(params, ['2026-08-18T00:00:00.000Z', '2026-08-19T00:00:00.000Z']);
+      if (sql.includes('llm_capacity_reservations')) return { rows: [{
+        reservations: 4, active_sessions: 1, settled_sessions: 2, released_sessions: 1,
+        reserved_tokens: 1000000, actual_tokens: 390000, p50_actual_tokens: 130000, p90_actual_tokens: 150000,
+      }] };
+      return { rows: [{
+        id: 'usage-1', provider: 'ark-primary', model: 'm1', stage: 'planner', status: 'success', attempt: 1,
+        prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, usage_missing: false,
+        latency_ms: 90, estimated_cost_cny: 0.003, created_at: '2026-08-18T10:00:00.000Z',
+        prompt: 'must not appear', content: 'must not appear',
+      }] };
+    },
+  });
+
+  assert.equal(result.summary.tokens.total, 120);
+  assert.deepEqual(result.capacity.limits, {
+    sessionTokenEnvelope: 250000, userDailySessions: 3, globalDailySessions: 100,
+    maxActiveSessions: 20, userMaxActiveSessions: 1, sessionEmergencyTokenLimit: 1000000,
+  });
+  assert.equal(result.capacity.observed.actualTokens, 390000);
+  assert.equal(result.capacity.observed.p90ActualTokens, 150000);
+  assert.equal(JSON.stringify(result).includes('must not appear'), false);
+});

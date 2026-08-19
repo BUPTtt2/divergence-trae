@@ -8,6 +8,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sendOpsAlertEmail } from '../services/emailDeliveryService.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ALERT_LOG_PATH = join(__dirname, '..', '..', 'data_store', 'alerts.log');
@@ -19,6 +20,8 @@ const MIN_SAMPLES = 5; // 少于 5 次不告警，避免噪声
 // 最近的 LLM 调用结果记录：{ timestamp, success, errorType }
 const llmResults = [];
 let monitorStarted = false;
+let lastAlertAt = 0;
+const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 
 /**
  * 记录一次 LLM 调用结果（由 track.js 调用）
@@ -42,7 +45,7 @@ export function recordLLMResult(properties) {
 /**
  * 写入告警日志（文件）
  */
-async function writeAlert(message) {
+async function writeAlert(message, alert) {
   const line = `[${new Date().toISOString()}] ${message}\n`;
   console.error(message);
   try {
@@ -52,6 +55,34 @@ async function writeAlert(message) {
     // 文件写入失败不影响运行
     console.warn('[errorMonitor] 写入 alerts.log 失败:', e.message);
   }
+  if (alert && Date.now() - lastAlertAt >= ALERT_COOLDOWN_MS) {
+    try {
+      await sendOpsAlertEmail(alert);
+      lastAlertAt = Date.now();
+    } catch (error) {
+      console.warn('[errorMonitor] 告警邮件未送达:', error.code || error.message);
+    }
+  }
+}
+
+export function buildLLMErrorAlert(results = [], now = Date.now()) {
+  const cutoff = now - WINDOW_MS;
+  const recent = results.filter((result) => result.timestamp >= cutoff);
+  if (recent.length < MIN_SAMPLES) return null;
+  const failures = recent.filter((result) => !result.success);
+  const errorRate = failures.length / recent.length;
+  if (errorRate <= ERROR_RATE_THRESHOLD) return null;
+  const errorTypes = {};
+  for (const failure of failures) {
+    const type = String(failure.errorType || 'unknown').slice(0, 60);
+    errorTypes[type] = (errorTypes[type] || 0) + 1;
+  }
+  const detail = Object.entries(errorTypes).map(([type, count]) => `${type}=${count}`).join(', ');
+  return {
+    code: 'LLM_ERROR_RATE_HIGH',
+    title: '模型错误率超过公测阈值',
+    summary: `最近 5 分钟失败率 ${(errorRate * 100).toFixed(1)}%（${failures.length}/${recent.length}），错误分布：${detail}`,
+  };
 }
 
 /**
@@ -59,26 +90,8 @@ async function writeAlert(message) {
  */
 export function checkLLMErrorRate() {
   const now = Date.now();
-  const cutoff = now - WINDOW_MS;
-  const recent = llmResults.filter((r) => r.timestamp >= cutoff);
-  if (recent.length < MIN_SAMPLES) return;
-
-  const failures = recent.filter((r) => !r.success);
-  const errorRate = failures.length / recent.length;
-  if (errorRate > ERROR_RATE_THRESHOLD) {
-    // 错误类型分布
-    const errorTypes = {};
-    for (const f of failures) {
-      const t = f.errorType || 'unknown';
-      errorTypes[t] = (errorTypes[t] || 0) + 1;
-    }
-    const detail = Object.entries(errorTypes)
-      .map(([t, c]) => `${t}=${c}`)
-      .join(', ');
-    writeAlert(
-      `[LLM 告警] 最近 5 分钟错误率 ${(errorRate * 100).toFixed(1)}% (${failures.length}/${recent.length})，超过阈值 ${(ERROR_RATE_THRESHOLD * 100).toFixed(0)}%。错误分布: ${detail}`
-    );
-  }
+  const alert = buildLLMErrorAlert(llmResults, now);
+  if (alert) void writeAlert(`[LLM 告警] ${alert.summary}`, alert);
 }
 
 /**

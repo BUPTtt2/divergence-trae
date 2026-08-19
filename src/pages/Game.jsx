@@ -14,16 +14,19 @@ import useSandboxFlow from '../game/useSandboxFlow';
 import {
   initialCompanionOpen,
   companionDockOpen,
+  decisionArtifactLauncherLabel,
   sandboxLayoutClass,
   shouldAutoOpenCompanion,
   shouldAutoOpenDecisionArtifact,
   shouldMuteArena,
+  shouldRevealDestinyCard,
   shouldShowCompanion,
 } from '../game/layoutState';
 import { uniqueMessages, uniqueRoles } from '../game/historyPresentation';
 import { buildArenaViewModel } from '../game/arenaViewModel';
 import SystemPulse from '../components/layout/SystemPulse';
 import SessionMeasurement from '../components/layout/SessionMeasurement';
+import { clarificationProvenance } from '../game/clarificationProvenance';
 
 const BORDER_COLOR = 'var(--gold-deep, #C8A850)';
 const GLOW_COLOR = 'var(--gold-core, #F0D890)';
@@ -303,8 +306,8 @@ export default function Game() {
               } : null)}
               inference={inference}
               deliberationOracle={inference?.oracle || fateContent?.hexagram || null}
-              fateRevealed={fateRevealed}
-              destinyArtwork={null}
+              fateRevealed={shouldRevealDestinyCard({ phase, fateRevealed })}
+              destinyArtwork={fateContent?.artwork || null}
               arenaView={arenaView}
               directResult={directResult}
               onDirectChoice={handleDirectChoice}
@@ -364,6 +367,7 @@ export default function Game() {
             history={agentDialogues?.history || {}}
             clarifyRound={inference?.round || 1}
             maxClarifyRounds={inference?.maxRound || 2}
+            questionProvenance={clarificationProvenance(inference)}
           />
         )}
 
@@ -571,7 +575,7 @@ export default function Game() {
 
         {['summary', 'branch_select', 'path_reveal', 'committing', 'final'].includes(phase) && !showHistoryPanel && !decisionArtifactOpen && (
           <button type="button" className="decision-artifact-launcher" onClick={() => setDecisionArtifactOpen(true)} aria-label="重新打开本局决策案卷">
-            <span aria-hidden="true">命</span>打开命牌
+            <span aria-hidden="true">{phase === 'final' ? '命' : '卷'}</span>{decisionArtifactLauncherLabel(phase)}
           </button>
         )}
 

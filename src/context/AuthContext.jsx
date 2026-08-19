@@ -20,6 +20,7 @@ import {
   anonymousLogin,
   login as apiLogin,
   register as apiRegister,
+  upgradeAccount as apiUpgradeAccount,
   logout as apiLogout,
   updateProfile as apiUpdateProfile,
   getCachedUser,
@@ -190,8 +191,7 @@ export function AuthProvider({ children }) {
 
   // 匿名用户升级为注册账号
   const upgradeAccount = useCallback(async ({ email, password, nickname }) => {
-    const data = await apiRegister({ email, password, nickname });
-    // 升级后保留旧 ID 的数据归属（后端 /api/users/upgrade 处理）
+    const data = await apiUpgradeAccount({ email, password, nickname });
     setState({
       status: 'registered',
       user: data.user,

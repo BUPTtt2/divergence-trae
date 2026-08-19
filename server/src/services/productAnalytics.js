@@ -39,6 +39,8 @@ const EVENT_PROPERTIES = Object.freeze({
   feedback_submitted: ['helpfulness', 'tags', 'feedbackId'],
   ops_accessed: ['surface'],
   feedback_reviewed: ['reviewStatus'],
+  security_rate_limited: ['scope', 'retryAfter'],
+  account_email_delivery: ['purpose', 'success', 'errorCode'],
   phase_enter: ['phase'],
   phase_exit: ['phase'],
   llm_call: ['agentId'],
@@ -144,7 +146,12 @@ export function aggregateProductAnalytics(rows = [], options = {}) {
       && (!options.mode || row.mode === options.mode)
       && (!options.releaseId || row.release_id === options.releaseId);
   });
-  const experienceRows = filtered.filter((row) => !['ops_accessed', 'feedback_reviewed'].includes(row.event_name));
+  const experienceRows = filtered.filter((row) => ![
+    'ops_accessed',
+    'feedback_reviewed',
+    'security_rate_limited',
+    'account_email_delivery',
+  ].includes(row.event_name));
   const visitors = new Set(experienceRows.map((row) => row.user_id).filter(Boolean));
   const visits = new Set(experienceRows.map((row) => row.analytics_session_id).filter(Boolean));
   const started = new Set();
@@ -152,7 +159,19 @@ export function aggregateProductAnalytics(rows = [], options = {}) {
   const phaseSessions = new Map(FUNNEL_PHASES.map((phase) => [phase, new Set()]));
   const durationBySession = new Map();
   const releases = new Map();
-  const reliability = { llmRequests: 0, llmFailures: 0, artworkRequests: 0, artworkFailures: 0, artworkSelections: 0, artworkTemporaryResults: 0, fallbacks: 0, clientErrors: 0 };
+  const reliability = {
+    llmRequests: 0,
+    llmFailures: 0,
+    artworkRequests: 0,
+    artworkFailures: 0,
+    artworkSelections: 0,
+    artworkTemporaryResults: 0,
+    fallbacks: 0,
+    clientErrors: 0,
+    rateLimited: 0,
+    accountEmailRequests: 0,
+    accountEmailFailures: 0,
+  };
   let handoffs = 0;
   let feedback = 0;
 
@@ -183,6 +202,11 @@ export function aggregateProductAnalytics(rows = [], options = {}) {
     if (event === 'artwork_version_selected') reliability.artworkSelections += 1;
     if (event === 'fallback_activated') reliability.fallbacks += 1;
     if (event === 'client_error' || event === 'error') reliability.clientErrors += 1;
+    if (event === 'security_rate_limited') reliability.rateLimited += 1;
+    if (event === 'account_email_delivery') {
+      reliability.accountEmailRequests += 1;
+      if (properties.success === false) reliability.accountEmailFailures += 1;
+    }
 
     const releaseId = row.release_id || 'unknown';
     if (!releases.has(releaseId)) releases.set(releaseId, { releaseId, events: 0, sessions: new Set() });

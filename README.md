@@ -37,7 +37,7 @@ cd server && npm install && npm run dev    # → http://localhost:3001
 ## 技术栈
 
 - **前端**：React 19 + Vite 8 + Three.js（3D 推演台）+ Framer Motion + Tailwind CSS
-- **后端**：Express + Railway（`server/` 目录）
+- **后端**：Express + Vercel + PostgreSQL（`server/` 目录）
 - **LLM**：智谱 GLM-4-Flash
 - **备用后端**：Hono + Cloudflare Workers（`worker/` 目录，不启用）
 
@@ -61,17 +61,16 @@ cd server && npm install && npm run dev    # → http://localhost:3001
 
 ## 部署
 
-### 前端（Surge）
+### 前端（Vercel）
 ```bash
 npm run build
-npx surge dist yance-bagua.surge.sh
+vercel deploy --prod
 ```
 
-### 后端（Railway）
+### 后端（Vercel）
 ```bash
 cd server
-railway login
-railway up
+vercel deploy --prod
 ```
 
 详见 [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
@@ -82,8 +81,10 @@ railway up
 
 | 组件 | 地址 |
 |------|------|
-| 前端 | https://yance-bagua.surge.sh |
-| 后端 | https://yance-bagua-engine-production.up.railway.app |
+| 前端 | https://yanceai.online |
+| 后端 | https://api.yanceai.online |
+| 运营后台 | https://yanceai.online/ops |
+| 回退前端 | https://yance-bagua.surge.sh |
 
 ---
 
@@ -96,7 +97,7 @@ sandbox-app/
 │   ├── components/   # board/(3D场景) / agent/ / fate/ / fx/ / layout/
 │   ├── services/     # inferenceEngine(核心推理) / apiClient / memoryStore / multiAgentFramework
 │   └── data/         # agents(智囊定义) / wisdomHexagrams(卦象库)
-├── server/           # 后端（Express + Railway）
+├── server/           # 后端（Express + Vercel）
 │   └── src/
 │       ├── routes/   # agent / yan / divination / cards / advisors / daily / followUp
 │       └── services/ # agentEngine(LLM编排) / yanChatService / yiJingEngine / memoryService

@@ -10,10 +10,19 @@ import {
 import './systemPulse.css';
 
 const LABELS = {
-  checking: ['引擎连接中', '正在核验真实推演服务'],
-  online: ['推演引擎在线', '真实模型链路可用'],
-  degraded: ['链路有波动', '最近一次请求未完成'],
-  offline: ['推演引擎离线', '连续请求失败，请稍后重试'],
+  checking: ['推演服务核验中', '正在检查后端连接'],
+  online: ['推演服务可连接', '此状态只表示演策后端可访问'],
+  degraded: ['推演服务有波动', '最近一次连接未完成'],
+  offline: ['推演服务不可连接', '连续连接失败，请稍后重试'],
+};
+
+const EXECUTION_LABELS = {
+  idle: '尚未核验本次模型执行',
+  running: '本次工作执行中',
+  model: '本次工作包含模型生成',
+  fallback: '本次工作使用规则保底',
+  failed: '本次工作尚未完成',
+  rate_limited: '本次工作触发容量保护',
 };
 
 export default function SystemPulse() {
@@ -74,6 +83,7 @@ export default function SystemPulse() {
         <div className="system-pulse__panel" role="status">
           <div><span className="system-pulse__mini-dot" /> <strong>{title}</strong></div>
           <p>{detail}</p>
+          <p>{EXECUTION_LABELS[status.execution] || EXECUTION_LABELS.idle}</p>
           <dl><div><dt>延迟</dt><dd>{latency}</dd></div><div><dt>核验</dt><dd>{time}</dd></div></dl>
           <button type="button" onClick={() => { emitRuntimeStatus({ type: 'probe:start' }); check(); }}>重新核验</button>
         </div>

@@ -4,11 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { createDecisionArtifact } from '../../game/decisionArtifactModel.js';
 import { createDestinyCardPresentation } from '../../game/destinyCardPresentation.js';
 import './decisionArtifact.css';
-import { hexagramName } from '../../game/decisionCardContract.js';
 import { resolveHexagramName } from '../../game/destinyCeremonyModel.js';
 import { sanitizeDecisionDisplayText } from '../../utils/helpers.js';
 import DecisionFeedback from './DecisionFeedback.jsx';
 import { exportFateTicketPng } from '../../game/fateTicketCanvas.js';
+import { createYiJingMirror } from '../../game/yiJingMirrorModel.js';
 
 const KNOWLEDGE_LABEL = {
   verified: '已证',
@@ -39,14 +39,6 @@ function readableCardText(value, fallback = '') {
     .replace(/\s+/g, ' ')
     .trim();
   return text || fallback;
-}
-
-function readableOracleText(value, oracle) {
-  const text = String(value || '').trim();
-  const lower = String(oracle?.primary?.lower?.name || '').trim();
-  const upper = String(oracle?.primary?.upper?.name || '').trim();
-  if (!text || !lower || lower !== upper) return text;
-  return text.replaceAll(`${lower}${upper}`, lower);
 }
 
 export default function DecisionArtifact({
@@ -83,6 +75,7 @@ export default function DecisionArtifact({
   const selectedPath = artifact.paths.find((path) => path.id === selectedChoice?.id) || selectedChoice || (isFinal ? recoveredPath : null);
   const oracle = artifact.oracle || inference?.gua || fateContent?.hexagram || null;
   const oracleState = oracleSnapshot(oracle);
+  const yiJingMirror = useMemo(() => createYiJingMirror(oracle || {}), [oracle]);
   const cardPresentation = useMemo(() => createDestinyCardPresentation({
     ...(fateContent || {}),
     question: fateContent?.question || inference?.question,
@@ -203,12 +196,8 @@ export default function DecisionArtifact({
           </> : <>
             <span aria-hidden="true">{oracle?.trigram || '☯'}</span>
             <h3>{oracleState.name || selectedPath.gua || '本卦'} · {oracle?.element || selectedPath.element || '观照'}</h3>
-            {oracleState.lines.length > 0 && <div className="decision-artifact__knowledge-counts" aria-label="卦象对应的案卷知识状态">
-              <span>已证 {oracleState.counts.verified}</span>
-              <span>未知 {oracleState.counts.unknown}</span>
-              <span>冲突 {oracleState.counts.contested}</span>
-            </div>}
-            <p>{readableOracleText(oracle?.text || oracle?.tip, oracle) || '卦象只提醒你检查遗漏、冲突与反转条件。'}</p>
+            <small className="decision-artifact__hexagram-structure">{yiJingMirror.primaryStructure}</small>
+            <p>{yiJingMirror.changeText} 卦象只负责照见结构与反证，不替你决定。</p>
             {phase === 'path_reveal' ? (
               <button type="button" onClick={onCommit}>确认此路 · 写下本心</button>
             ) : <div className="decision-artifact__commit-form">
@@ -265,25 +254,27 @@ export default function DecisionArtifact({
         <details className="decision-artifact__mirror-disclosure">
           <summary>展开认知镜面与变卦提示</summary>
         <aside className="decision-artifact__mirror">
-          <header><span>{oracle?.trigram || '☯'}</span><div><strong>{oracleState.name || selectedPath.gua || '本卦'}</strong><small>易经认知镜面</small></div></header>
+          <header><span>{oracle?.trigram || '☯'}</span><div><strong>{yiJingMirror.primaryName || selectedPath.gua || '本卦'}</strong><small>{yiJingMirror.primaryStructure} · 易经认知镜面</small></div></header>
           <dl>
-            <div><dt>本象</dt><dd>{oracle?.text || oracle?.tip || '观察当前处境里已经显现的力量。'}</dd></div>
-            <div><dt>变爻</dt><dd>{oracleState.counts.unknown > 0 ? `${oracleState.counts.unknown} 项未知仍可能让路径改变。` : '关键未知已收敛，重点转向执行反馈。'}</dd></div>
-            <div><dt>互卦</dt><dd>{hexagramName(oracle?.mutual) || '结构尚未形成'} · 检查局势内部如何相互牵动。</dd></div>
-            <div><dt>对卦</dt><dd>{hexagramName(oracle?.opposite) || '结构尚未形成'} · 主动检查与当前判断相反的证据和偏见。</dd></div>
-            <div><dt>戒</dt><dd>卦象只提醒遗漏、冲突与反转条件，不替代事实和你的选择。</dd></div>
+            <div><dt>本卦</dt><dd>{yiJingMirror.primaryName}，{yiJingMirror.primaryStructure}。先照见此刻局势的上下关系。</dd></div>
+            <div><dt>爻变</dt><dd>{yiJingMirror.changeText}</dd></div>
+            <div><dt>互卦</dt><dd>{yiJingMirror.mutualName} · 取二三四、三四五爻成互体，观察局势内部的牵动。</dd></div>
+            <div><dt>错卦</dt><dd>{yiJingMirror.oppositeName} · 六爻阴阳相反，用来主动寻找反证与盲点。</dd></div>
+            <div><dt>边界</dt><dd>卦象只作认知镜面，不替代案卷事实、风险条件和你的选择。</dd></div>
           </dl>
         </aside></details>
         <DecisionFeedback sessionId={sessionId} />
         <footer>
           <button type="button" className="is-primary" onClick={onRestart}>新开一局</button>
-          <button type="button" onClick={() => navigate('/')}>返回首页</button>
-          <button type="button" onClick={() => navigate('/cards')}>查看命牌库</button>
           <button type="button" onClick={onOpenHistory}>查看完整过程</button>
-          <button type="button" onClick={exportFateCard} disabled={exportState === 'exporting'}>{exportState === 'exporting' ? '正在生成 PNG…' : exportState === 'error' ? '导出失败 · 重试' : '导出命牌 PNG'}</button>
           <button type="button" onClick={saveFateCard} disabled={saveState === 'saving' || saveState === 'saved'}>
             {saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已存入命牌库' : saveState === 'local' ? '已存本机 · 重试云端' : saveState === 'error' ? '保存失败 · 重试' : '收藏命牌'}
           </button>
+          <details className="decision-artifact__more-actions"><summary>更多</summary><div>
+            <button type="button" onClick={() => navigate('/cards')}>查看命牌库</button>
+            <button type="button" onClick={exportFateCard} disabled={exportState === 'exporting'}>{exportState === 'exporting' ? '正在生成 PNG…' : exportState === 'error' ? '导出失败 · 重试' : '导出命牌 PNG'}</button>
+            <button type="button" onClick={() => navigate('/')}>返回首页</button>
+          </div></details>
           <span className="decision-artifact__save-note">收藏后可在命牌库免费生成一次专属画境</span>
           {saveState === 'local' && <span className="decision-artifact__save-note">云端未连接，本机副本仍可在命牌库查看</span>}
         </footer>
@@ -294,13 +285,12 @@ export default function DecisionArtifact({
         <footer><button type="button" className="is-primary" onClick={onRestart}>新开一局</button><button type="button" onClick={() => navigate('/')}>返回首页</button><button type="button" onClick={() => navigate('/cards')}>查看命牌库</button><button type="button" onClick={onOpenHistory}>查看完整过程</button></footer>
       </section>}
 
-      {artifact.oracle?.text && <details className="decision-artifact__lens">
-        <summary>查看易经认知镜面 · 为什么形成这一卦</summary>
-        <p>{artifact.oracle.text}</p>
+      {oracleState.lines.length > 0 && <details className="decision-artifact__lens">
+        <summary>查看卦爻与案卷视角的对应关系</summary>
         {oracleState.lines.length > 0 && <ol>
           {oracleState.lines.map((line, index) => (
             <li key={`${line.position || index}-${line.perspective || 'unknown'}`}>
-              <span>第 {line.position || index + 1} 爻 · {line.perspective || '未指定视角'}</span>
+              <span>第 {Number.isInteger(line.position) ? line.position + 1 : index + 1} 爻 · {line.perspective || '未指定视角'}</span>
               <b data-state={line.knowledgeState}>{KNOWLEDGE_LABEL[line.knowledgeState] || '未知'}{line.isDynamic ? ' · 动' : ''}</b>
             </li>
           ))}
