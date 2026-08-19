@@ -41,11 +41,7 @@ export default function Footer({ theme = {} }) {
           </Link>
           <span style={{ color: borderColor }}>|</span>
           <button
-            onClick={() => {
-              try {
-                window.dispatchEvent(new CustomEvent('yance:open-yanchat', { detail: { message: '我想反馈一个建议：' } }));
-              } catch { /* ignore */ }
-            }}
+            onClick={() => window.dispatchEvent(new CustomEvent('yance:open-feedback'))}
             className="text-[10px] hover:underline"
             style={{ color: mutedColor, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
           >
@@ -53,9 +49,7 @@ export default function Footer({ theme = {} }) {
           </button>
         </div>
 
-        <span className="text-[10px] font-mono" style={{ color: mutedColor }}>
-          v{APP_VERSION} · 决策辅助工具
-        </span>
+        <span className="text-[10px] font-mono" style={{ color: mutedColor }}>演策 {APP_VERSION}</span>
       </div>
     </footer>
   );

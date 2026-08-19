@@ -233,7 +233,7 @@ export async function query(options) {
     const { table, action, data, filter, queryOptions, id, expected } = options;
 
     // 表名白名单校验
-    const ALLOWED_TABLES = ['users', 'refresh_tokens', 'cards', 'community_posts', 'community_replies', 'community_likes', 'achievements', 'user_memories', 'conversations', 'conversation_messages', 'custom_advisors', 'published_advisors', 'advisor_subscriptions', 'daily_divinations', 'user_levels', 'decision_follow_ups', 'product_events', 'product_feedback', 'inference_sessions', 'shared_agents', 'agent_usage_log', 'llm_usage_events', 'deliberation_sessions', 'session_summaries', 'user_memory', 'deliberation_events', 'deliberation_snapshots', 'deliberation_commands', 'session_eval', 'artwork_jobs', 'artwork_versions'];
+    const ALLOWED_TABLES = ['users', 'refresh_tokens', 'cards', 'community_posts', 'community_replies', 'community_likes', 'community_reports', 'achievements', 'user_memories', 'conversations', 'conversation_messages', 'custom_advisors', 'published_advisors', 'advisor_subscriptions', 'daily_divinations', 'user_levels', 'decision_follow_ups', 'product_events', 'product_feedback', 'feedback_inbox', 'inference_sessions', 'shared_agents', 'agent_usage_log', 'llm_usage_events', 'llm_capacity_reservations', 'deliberation_sessions', 'session_summaries', 'user_memory', 'deliberation_events', 'deliberation_snapshots', 'deliberation_commands', 'session_eval', 'artwork_jobs', 'artwork_versions', 'entitlement_accounts', 'entitlement_ledger', 'rate_limit_windows', 'account_action_tokens', 'payment_events'];
     if (!ALLOWED_TABLES.includes(table)) {
       throw new Error(`非法表名: ${table}`);
     }

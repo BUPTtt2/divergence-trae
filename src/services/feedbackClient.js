@@ -6,6 +6,8 @@ export const DECISION_FEEDBACK_TAGS = new Set([
   'unclear_controls', 'destiny_card', 'other',
 ]);
 
+export const GENERAL_FEEDBACK_CATEGORIES = new Set(['bug', 'idea', 'confusing', 'other']);
+
 export function normalizeFeedbackPayload(payload = {}) {
   return {
     helpfulness: ['helpful', 'neutral', 'unhelpful'].includes(payload.helpfulness) ? payload.helpfulness : '',
@@ -23,6 +25,39 @@ export async function submitDecisionFeedback(sessionId, payload, options = {}) {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ ...normalizeFeedbackPayload(payload), ...createTrackingContext() }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.message || data.error || 'FEEDBACK_FAILED');
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+export function normalizeGeneralFeedback(payload = {}) {
+  const email = String(payload.email || '').trim().toLowerCase().slice(0, 254);
+  return {
+    category: GENERAL_FEEDBACK_CATEGORIES.has(payload.category) ? payload.category : 'other',
+    message: String(payload.message || '').trim().slice(0, 800),
+    email,
+    page: String(payload.page || '/').trim().slice(0, 180) || '/',
+  };
+}
+
+export async function submitGeneralFeedback(payload, options = {}) {
+  const baseUrl = options.baseUrl ?? API_BASE_URL;
+  const fetchImpl = options.fetchImpl || fetch;
+  const idempotencyKey = options.idempotencyKey || crypto.randomUUID();
+  const response = await fetchImpl(`${baseUrl}/api/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({
+      ...normalizeGeneralFeedback(payload),
+      website: String(payload?.website || '').slice(0, 120),
+      interactionMs: Math.max(0, Number(payload?.interactionMs || 0)),
+      ...createTrackingContext(),
+    }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {

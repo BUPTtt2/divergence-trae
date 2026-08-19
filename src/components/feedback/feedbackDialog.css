@@ -1,0 +1,29 @@
+.feedback-overlay { position: fixed; inset: 0; z-index: 80; background: rgb(10 14 12 / .68); backdrop-filter: blur(6px); animation: feedback-fade .2s ease-out; }
+.feedback-dialog { position: fixed; z-index: 81; top: 50%; left: 50%; width: min(620px, calc(100vw - 28px)); max-height: min(820px, calc(100dvh - 28px)); overflow-y: auto; transform: translate(-50%, -50%); padding: clamp(26px, 5vw, 48px); border: 1px solid #bdc8c1; border-radius: 16px; background: #f4f6f1; color: #121715; box-shadow: 0 30px 110px rgb(10 14 12 / .32); font-family: "PingFang SC", "Noto Sans SC", system-ui, sans-serif; animation: feedback-enter .3s cubic-bezier(.16,1,.3,1); }
+.feedback-dialog__close { position: absolute; top: 16px; right: 16px; width: 42px; height: 42px; border: 1px solid #bdc8c1; border-radius: 50%; background: transparent; color: #121715; font-size: 24px; line-height: 1; cursor: pointer; }
+.feedback-dialog h2 { margin: 0; padding-right: 48px; font-size: clamp(30px, 5vw, 44px); letter-spacing: -.035em; }
+.feedback-dialog [data-radix-dialog-description] { max-width: 34rem; margin: 14px 0 0; color: #5e6964; font-size: 14px; line-height: 1.7; }
+.feedback-dialog__categories { display: flex; flex-wrap: wrap; gap: 8px; margin: 30px 0 0; padding: 0; border: 0; }
+.feedback-dialog__categories legend { width: 100%; margin-bottom: 3px; font-size: 13px; font-weight: 700; }
+.feedback-dialog__categories label { cursor: pointer; }
+.feedback-dialog__categories input { position: absolute; opacity: 0; pointer-events: none; }
+.feedback-dialog__categories span { display: block; padding: 9px 12px; border: 1px solid #aeb9b3; border-radius: 8px; color: #42504a; font-size: 13px; transition: border-color .2s, background .2s, color .2s; }
+.feedback-dialog__categories input:checked + span { border-color: #c9573d; background: #c9573d; color: #fff; }
+.feedback-dialog__categories input:focus-visible + span { outline: 3px solid rgb(201 87 61 / .38); outline-offset: 2px; }
+.feedback-dialog__field { position: relative; display: grid; gap: 8px; margin-top: 22px; }
+.feedback-dialog__field > span { font-size: 13px; font-weight: 700; }
+.feedback-dialog textarea, .feedback-dialog input[type="email"] { width: 100%; border: 1px solid #aeb9b3; border-radius: 8px; background: #fff; color: #121715; font: 400 15px/1.6 inherit; }
+.feedback-dialog textarea { resize: vertical; min-height: 132px; padding: 13px 14px 30px; }
+.feedback-dialog input[type="email"] { height: 48px; padding: 0 14px; }
+.feedback-dialog textarea::placeholder, .feedback-dialog input::placeholder { color: #69756f; }
+.feedback-dialog textarea:focus, .feedback-dialog input[type="email"]:focus { outline: 3px solid rgb(201 87 61 / .28); border-color: #943824; }
+.feedback-dialog__field small { position: absolute; right: 12px; bottom: 8px; color: #69756f; font-size: 11px; }
+.feedback-dialog__trap { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.feedback-dialog__error { margin: 14px 0 0; color: #8c2d1a; font-size: 13px; }
+.feedback-dialog__submit { width: 100%; min-height: 50px; margin-top: 24px; border: 0; border-radius: 8px; background: #121715; color: #f4f6f1; font-size: 15px; font-weight: 700; cursor: pointer; }
+.feedback-dialog__submit:disabled { cursor: wait; opacity: .58; }
+.feedback-dialog__submit:focus-visible, .feedback-dialog__close:focus-visible { outline: 3px solid rgb(201 87 61 / .42); outline-offset: 3px; }
+.feedback-dialog__success > span { display: inline-block; margin-bottom: 18px; color: #943824; font-size: 13px; font-weight: 700; }
+@keyframes feedback-fade { from { opacity: 0; } }
+@keyframes feedback-enter { from { opacity: 0; transform: translate(-50%, -46%) scale(.97); } }
+@media (prefers-reduced-motion: reduce) { .feedback-overlay, .feedback-dialog { animation: none; } }

@@ -18,6 +18,7 @@ test('operations routes require a registered allowlisted principal and return co
   await new Promise((resolve) => server.once('listening', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   const previous = process.env.ADMIN_USER_IDS;
+  let publicFeedbackId;
   try {
     const anonymous = await call(base, '/api/auth/anonymous', { method: 'POST', body: {} });
     const email = `ops-${Date.now()}@example.test`;
@@ -49,8 +50,36 @@ test('operations routes require a registered allowlisted principal and return co
     assert.equal(JSON.stringify(sessions.body).includes('question'), false);
     assert.equal(JSON.stringify(sessions.body).includes('prompt'), false);
     assert.equal(JSON.stringify(sessions.body).includes('response'), false);
+    await query({ table: 'llm_usage_events', action: 'insert', data: {
+      id: 'usage-ops', provider: 'ark-primary', model: 'ep-public', stage: 'planner', status: 'success', attempt: 1,
+      prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, usage_missing: false,
+      latency_ms: 80, estimated_cost_cny: 0.003, created_at: new Date().toISOString(),
+    } });
+    const costs = await call(base, '/api/ops/costs?days=7', { token: admin.body.accessToken });
+    assert.equal(costs.status, 200);
+    assert.equal(costs.body.summary.tokens.total >= 120, true);
+    assert.equal(JSON.stringify(costs.body).includes('prompt'), false);
+    assert.equal(JSON.stringify(costs.body).includes('content'), false);
+
+    publicFeedbackId = `ops-feedback-${Date.now()}`;
+    await query({ table: 'feedback_inbox', action: 'insert', data: {
+      id: publicFeedbackId, category: 'bug', message: '首页反馈入口看不见', email: null, page: '/',
+      idempotency_key: `${publicFeedbackId}-idempotency`, content_fingerprint: publicFeedbackId,
+      subject_hash: 'test-subject', review_status: 'unread', internal_note: '',
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    } });
+    const publicFeedback = await call(base, '/api/ops/public-feedback?days=7', { token: admin.body.accessToken });
+    assert.equal(publicFeedback.status, 200);
+    assert.equal(publicFeedback.body.feedback.some((item) => item.id === publicFeedbackId), true);
+    const reviewed = await call(base, `/api/ops/public-feedback/${publicFeedbackId}`, {
+      method: 'PATCH', token: admin.body.accessToken, body: { reviewStatus: 'resolved', internalNote: '已处理' },
+    });
+    assert.equal(reviewed.status, 200);
+    assert.equal(reviewed.body.feedback.review_status, 'resolved');
     await query({ table: 'deliberation_sessions', action: 'delete', id: 'session-ops' });
+    await query({ table: 'llm_usage_events', action: 'delete', id: 'usage-ops' });
   } finally {
+    if (publicFeedbackId) await query({ table: 'feedback_inbox', action: 'delete', id: publicFeedbackId });
     if (previous === undefined) delete process.env.ADMIN_USER_IDS;
     else process.env.ADMIN_USER_IDS = previous;
     await new Promise((resolve) => server.close(resolve));

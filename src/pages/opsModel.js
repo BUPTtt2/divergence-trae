@@ -12,6 +12,11 @@ export function buildOpsViewModel(data = {}) {
   const metrics = data.overview?.metrics || {};
   const completion = metrics.completionRate || { numerator: 0, denominator: 0, rate: null };
   const duration = metrics.durationMs || {};
+  const costSummary = data.costs?.summary || {};
+  const knownCost = Number(costSummary.estimatedCostCny || 0);
+  const usageMissingCalls = Number(costSummary.costMissingCalls || costSummary.usageMissingCalls || 0);
+  const providerSummary = costSummary.byProvider || {};
+  const budgetRejected = Number(providerSummary['budget-gate']?.failedCalls || 0);
   return {
     visitors: metrics.visitors ?? null,
     visits: metrics.visits ?? null,
@@ -27,7 +32,27 @@ export function buildOpsViewModel(data = {}) {
     reliability: data.reliability?.reliability || metrics.reliability || {},
     sessions: data.sessions?.sessions || metrics.recentSessions || [],
     feedback: data.feedback?.feedback || [],
+    publicFeedback: data.publicFeedback?.feedback || [],
     feedbackSummary: metrics.feedbackSummary || { total: 0, helpful: 0, helpfulRate: { rate: null } },
+    costs: {
+      calls: Number(costSummary.calls || 0),
+      successfulCalls: Number(costSummary.successfulCalls || 0),
+      failedCalls: Number(costSummary.failedCalls || 0),
+      usageMissingCalls,
+      tokens: costSummary.tokens || { input: 0, output: 0, total: 0 },
+      knownCostLabel: `¥${knownCost.toFixed(4)}${usageMissingCalls > 0 ? ` + ${usageMissingCalls} 次价格未知` : ''}`,
+      budgetRejected,
+      capacity: {
+        sessionTokenEnvelope: Number(data.costs?.capacity?.limits?.sessionTokenEnvelope || 0),
+        userDailySessions: Number(data.costs?.capacity?.limits?.userDailySessions || 0),
+        globalDailySessions: Number(data.costs?.capacity?.limits?.globalDailySessions || 0),
+        maxActiveSessions: Number(data.costs?.capacity?.limits?.maxActiveSessions || 0),
+        activeSessions: Number(data.costs?.capacity?.observed?.activeSessions || 0),
+        settledSessions: Number(data.costs?.capacity?.observed?.settledSessions || 0),
+        releasedSessions: Number(data.costs?.capacity?.observed?.releasedSessions || 0),
+        p90ActualTokens: Number(data.costs?.capacity?.observed?.p90ActualTokens || 0),
+      },
+    },
     generatedAt: data.overview?.generatedAt || '',
   };
 }

@@ -23,6 +23,18 @@ test('the completed destiny card starts folded on a phone so the 3D ceremony is 
   assert.equal(layoutState.shouldAutoOpenDecisionArtifact({ phase: 'agent_debate', viewportWidth: 390 }), false);
 });
 
+test('the compact dossier launcher does not call itself a destiny card before the final seal', () => {
+  assert.equal(layoutState.decisionArtifactLauncherLabel('summary'), '打开案卷');
+  assert.equal(layoutState.decisionArtifactLauncherLabel('path_reveal'), '打开案卷');
+  assert.equal(layoutState.decisionArtifactLauncherLabel('final'), '打开命牌');
+});
+
+test('a restored final session always renders the revealed face of the 3D destiny card', () => {
+  assert.equal(layoutState.shouldRevealDestinyCard({ phase: 'final', fateRevealed: false }), true);
+  assert.equal(layoutState.shouldRevealDestinyCard({ phase: 'path_reveal', fateRevealed: false }), false);
+  assert.equal(layoutState.shouldRevealDestinyCard({ phase: 'path_reveal', fateRevealed: true }), true);
+});
+
 test('conversation phases only reserve the companion dock while it is open', () => {
   assert.equal(sandboxLayoutClass('clarify_loop', true), 'companion-is-open');
   assert.equal(sandboxLayoutClass('agent_debate', false), '');
@@ -78,5 +90,7 @@ test('pending clarification automatically opens the answer workbench', () => {
 test('the global assistant remains available inside the sandbox for starting a new deliberation', () => {
   assert.equal(layoutState.shouldShowGlobalCompass('/sandbox'), true);
   assert.equal(layoutState.shouldShowGlobalCompass('/cards'), true);
+  assert.equal(layoutState.shouldShowGlobalCompass('/'), false);
+  assert.equal(layoutState.shouldShowGlobalCompass('/privacy'), false);
   assert.equal(layoutState.shouldShowGlobalCompass('/ops'), false);
 });

@@ -15,6 +15,14 @@ export function shouldAutoOpenDecisionArtifact({ phase, viewportWidth = 1024 } =
   return !(phase === 'final' && viewportWidth <= 760);
 }
 
+export function decisionArtifactLauncherLabel(phase) {
+  return phase === 'final' ? '打开命牌' : '打开案卷';
+}
+
+export function shouldRevealDestinyCard({ phase, fateRevealed = false } = {}) {
+  return phase === 'final' || fateRevealed === true;
+}
+
 export function shouldMuteArena({ phase, companionOpen = false, showHistoryPanel = false } = {}) {
   return showHistoryPanel || isPresentationPhase(phase) || (companionOpen && CONVERSATION_PHASES.has(phase));
 }
@@ -33,7 +41,7 @@ export function shouldAutoOpenCompanion({ phase, awaitingAnswers = [], answerPen
 }
 
 export function shouldShowGlobalCompass(pathname = '') {
-  return pathname !== '/ops';
+  return !new Set(['/', '/legal', '/privacy', '/ops']).has(pathname);
 }
 
 export function sandboxLayoutClass(phase, companionOpen, decisionArtifactOpen = true) {

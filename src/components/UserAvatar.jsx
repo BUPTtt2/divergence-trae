@@ -8,6 +8,7 @@ import { isProfileModalControlled } from './account/accountUiModel.js';
 import { isImageAvatar, prepareAvatarImage } from './account/avatarImage.js';
 import { getAuthErrorMessage } from './account/authErrorMessage.js';
 import { createEscapeHandler, lockDocumentScroll } from './account/modalLifecycle.js';
+import { changePassword, getAccountData, getAuthCapabilities, requestPasswordReset } from '../services/accountActions.js';
 
 const T = {
   paper: '#F2EDE0',
@@ -25,7 +26,7 @@ function AvatarFace({ avatar, alt = '', className = '' }) {
   return avatar;
 }
 
-export default function UserAvatar({ size = 36, showModal, onModalClose, compactPreferences = false, showLabel = false }) {
+export default function UserAvatar({ size = 36, showModal, onModalClose, compactPreferences = false, showLabel = false, hideTrigger = false }) {
   const [localProfile, setLocalProfile] = useState(null);
   const [localShow, setLocalShow] = useState(false);
   const [editNickname, setEditNickname] = useState('');
@@ -65,6 +66,9 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
   const [authNickname, setAuthNickname] = useState('');
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [authCurrentPassword, setAuthCurrentPassword] = useState('');
+  const [authCapabilities, setAuthCapabilities] = useState(null);
+  const [authNotice, setAuthNotice] = useState('');
 
   const isControlled = isProfileModalControlled(showModal);
   const modalOpen = isControlled ? showModal : localShow;
@@ -179,9 +183,16 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
     setAuthError('');
     setAuthEmail('');
     setAuthPassword('');
+    setAuthCurrentPassword('');
     setAuthNickname('');
+    setAuthNotice('');
     setAuthModal(type);
   };
+
+  useEffect(() => {
+    if (!authModal) return;
+    getAuthCapabilities().then(setAuthCapabilities).catch(() => setAuthCapabilities(null));
+  }, [authModal]);
 
   const closeAuthModal = useCallback(() => {
     setAuthModal(null);
@@ -211,8 +222,8 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
   // 注册
   const handleRegister = async () => {
     setAuthError('');
-    if (authPassword.length < 8) {
-      setAuthError('密码至少 8 位');
+    if (authPassword.length < 10) {
+      setAuthError('密码至少 10 个字符');
       return;
     }
     setAuthLoading(true);
@@ -229,8 +240,8 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
   // 升级账号（匿名 → 注册）
   const handleUpgrade = async () => {
     setAuthError('');
-    if (authPassword.length < 8) {
-      setAuthError('密码至少 8 位');
+    if (authPassword.length < 10) {
+      setAuthError('密码至少 10 个字符');
       return;
     }
     setAuthLoading(true);
@@ -244,12 +255,64 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
     }
   };
 
+  const handlePasswordResetRequest = async () => {
+    setAuthError('');
+    setAuthNotice('');
+    if (!authEmail.trim()) { setAuthError('请先填写注册邮箱'); return; }
+    setAuthLoading(true);
+    try {
+      await requestPasswordReset(authEmail.trim());
+      setAuthNotice('如果该邮箱已注册，30 分钟有效的一次性重置链接会发送到邮箱。60 秒内请勿重复请求。');
+    } catch (error) {
+      setAuthError(error.code === 'EMAIL_DELIVERY_UNAVAILABLE' ? '邮件找回尚未开放，请联系运营者处理。' : '暂时无法发送重置邮件');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    setAuthError('');
+    if (authPassword.length < 10) { setAuthError('新密码至少 10 个字符'); return; }
+    setAuthLoading(true);
+    try {
+      await changePassword(authCurrentPassword, authPassword);
+      setAuthNotice('密码已更新，请重新登录。');
+      setTimeout(() => { logout().finally(closeAuthModal); }, 700);
+    } catch (error) {
+      setAuthError(error.message || '密码修改失败');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   // 登出
   const handleLogout = async () => {
     try {
       await logout();
     } catch (e) {
       console.warn('[UserAvatar] 登出失败:', e.message);
+    }
+  };
+
+  const handleAccountExport = async () => {
+    setProfileMessage('');
+    setProfileSaving(true);
+    try {
+      const archive = await getAccountData();
+      const blob = new Blob([JSON.stringify(archive, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `yance-account-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setProfileMessage('账号数据已导出。文件只保存在你的设备上。');
+    } catch (error) {
+      setProfileMessage(error.message || '账号数据导出失败，请稍后重试');
+    } finally {
+      setProfileSaving(false);
     }
   };
 
@@ -285,7 +348,7 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
 
   return (
     <>
-      <button
+      {!hideTrigger && <button
         type="button"
         onClick={handleOpen}
         className="flex items-center gap-1.5 font-serif font-bold transition-transform hover:scale-[1.03] shrink-0"
@@ -328,7 +391,7 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
           )}
         </span>
         {showLabel && <span className="md:hidden text-[11px] font-medium whitespace-nowrap">我的</span>}
-      </button>
+      </button>}
 
       {typeof document !== 'undefined' && createPortal(<AnimatePresence>
         {modalOpen && (
@@ -501,6 +564,21 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
                       style={{ color: T.ink, border: `1px solid ${T.border}`, borderRadius: 3, backgroundColor: 'transparent' }}
                     >
                       登出
+                    </button>
+                    <button
+                      onClick={() => openAuthModal('changePassword')}
+                      className="w-full mt-2 py-1.5 text-[11px]"
+                      style={{ color: T.ink, border: `1px solid ${T.border}`, borderRadius: 3, backgroundColor: 'transparent' }}
+                    >
+                      修改密码
+                    </button>
+                    <button
+                      onClick={handleAccountExport}
+                      disabled={profileSaving}
+                      className="w-full mt-2 py-1.5 text-[11px]"
+                      style={{ color: T.ink, border: `1px solid ${T.border}`, borderRadius: 3, backgroundColor: 'transparent', opacity: profileSaving ? 0.6 : 1 }}
+                    >
+                      {profileSaving ? '正在准备…' : '导出我的数据'}
                     </button>
                   </>
                 )}
@@ -742,7 +820,7 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
             <motion.div
               role="dialog"
               aria-modal="true"
-              aria-label={authModal === 'login' ? '登录账号' : authModal === 'register' ? '注册账号' : '升级账号'}
+              aria-label={authModal === 'login' ? '登录账号' : authModal === 'register' ? '注册账号' : authModal === 'changePassword' ? '修改密码' : '升级账号'}
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -754,16 +832,16 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
                 <button type="button" onClick={closeAuthModal} className="px-2 h-9 text-[11px] shrink-0" style={{ color: T.ink, background: T.paper, border: `1px solid ${T.border}`, borderRadius: 4 }} aria-label="返回我的账号">← 返回</button>
                 <div className="flex-1 min-w-0">
                   <h3 className="text-[15px] font-serif font-semibold mb-0.5" style={{ color: T.ink }}>
-                    {authModal === 'login' ? '登录账号' : authModal === 'register' ? '注册账号' : '升级账号'}
+                    {authModal === 'login' ? '登录账号' : authModal === 'register' ? '注册账号' : authModal === 'changePassword' ? '修改密码' : '升级账号'}
                   </h3>
                   <p className="text-[10px] truncate" style={{ color: T.muted }}>
-                    {authModal === 'login' ? '登录后跨设备同步' : authModal === 'register' ? '注册后开始同步' : '保留本机资料并开始同步'}
+                    {authModal === 'login' ? '登录后跨设备同步' : authModal === 'register' ? '注册后开始同步' : authModal === 'changePassword' ? '更新后退出其他登录会话' : '保留本机资料并开始同步'}
                   </p>
                 </div>
                 <button type="button" onClick={closeAllModals} className="w-9 h-9 shrink-0 text-[20px] leading-none" style={{ color: T.ink, background: T.paper, border: `1px solid ${T.border}`, borderRadius: 4 }} aria-label="关闭账号窗口">×</button>
               </div>
 
-              {authModal !== 'login' && (
+              {authModal !== 'login' && authModal !== 'changePassword' && (
                 <div className="mb-3">
                   <label className="text-[11px] font-medium mb-1.5 block" style={{ color: T.ink }}>昵称（可选）</label>
                   <input
@@ -778,7 +856,7 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
                 </div>
               )}
 
-              <div className="mb-3">
+              {authModal !== 'changePassword' && <div className="mb-3">
                 <label className="text-[11px] font-medium mb-1.5 block" style={{ color: T.ink }}>邮箱</label>
                 <input
                   type="email"
@@ -788,20 +866,28 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
                   style={{ backgroundColor: T.paper, border: `1px solid ${T.border}`, borderRadius: 3, color: T.ink }}
                   placeholder="you@example.com"
                 />
-              </div>
+              </div>}
+
+              {authModal === 'changePassword' && <div className="mb-3">
+                <label className="text-[11px] font-medium mb-1.5 block" style={{ color: T.ink }}>当前密码</label>
+                <input type="password" value={authCurrentPassword} onChange={(event) => setAuthCurrentPassword(event.target.value)} className="w-full px-3 py-2 text-[13px] outline-none" style={{ backgroundColor: T.paper, border: `1px solid ${T.border}`, borderRadius: 3, color: T.ink }} />
+              </div>}
 
               <div className="mb-4">
                 <label className="text-[11px] font-medium mb-1.5 block" style={{ color: T.ink }}>
-                  密码{authModal !== 'login' && '（至少 8 位）'}
+                  {authModal === 'changePassword' ? '新密码（至少 10 个字符）' : <>密码{authModal !== 'login' && '（至少 10 个字符）'}</>}
                 </label>
                 <input
                   type="password"
+                  minLength={authModal === 'login' ? undefined : 10}
+                  maxLength={128}
                   value={authPassword}
                   onChange={(e) => setAuthPassword(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       if (authModal === 'login') handleLogin();
                       else if (authModal === 'register') handleRegister();
+                      else if (authModal === 'changePassword') handleChangePassword();
                       else handleUpgrade();
                     }
                   }}
@@ -817,14 +903,22 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
                 </div>
               )}
 
-              <button
+              {authNotice && <div className="mb-3 text-[11px] p-2" style={{ color: '#456B54', backgroundColor: '#456B5410', borderRadius: 3, border: '1px solid #456B5430' }}>{authNotice}</div>}
+
+              {authModal === 'login' && (authCapabilities?.email?.enabled ? (
+                <button type="button" onClick={handlePasswordResetRequest} className="w-full mb-2 py-1 text-[10px]" style={{ color: T.accent, background: 'transparent', border: 0 }}>忘记密码？发送重置邮件</button>
+              ) : (
+                <div className="mb-2 text-center text-[9px]" style={{ color: T.muted }}>密码找回邮件尚未开放</div>
+              ))}
+
+              {authModal !== 'changePassword' && <button
                 type="button"
                 onClick={() => switchAuthModal(authModal === 'login' ? (status === 'anonymous' ? 'upgrade' : 'register') : 'login')}
                 className="w-full mb-3 py-1 text-[10px]"
                 style={{ color: T.accent, background: 'transparent', border: 0 }}
               >
                 {authModal === 'login' ? '没有账号？注册并同步' : '已有账号？直接登录'}
-              </button>
+              </button>}
 
               <div className="flex items-center gap-3 sticky bottom-0 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-3" style={{ backgroundColor: T.paperLight, paddingBottom: 'max(12px, env(safe-area-inset-bottom))', borderTop: `1px solid ${T.border}` }}>
                 <button
@@ -838,6 +932,7 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
                   onClick={() => {
                     if (authModal === 'login') handleLogin();
                     else if (authModal === 'register') handleRegister();
+                    else if (authModal === 'changePassword') handleChangePassword();
                     else handleUpgrade();
                   }}
                   disabled={authLoading}
@@ -853,7 +948,7 @@ export default function UserAvatar({ size = 36, showModal, onModalClose, compact
                 >
                   {authLoading ? '处理中...' :
                    authModal === 'login' ? '登录' :
-                   authModal === 'register' ? '注册' : '升级'}
+                   authModal === 'register' ? '注册' : authModal === 'changePassword' ? '更新密码' : '升级'}
                 </button>
               </div>
             </motion.div>

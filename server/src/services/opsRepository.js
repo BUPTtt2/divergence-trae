@@ -56,4 +56,21 @@ export async function updateFeedbackReview(id, updates) {
   return (await query({ table: 'product_feedback', action: 'update', id, data: updates })).rows[0] || null;
 }
 
-export default { loadFeedback, loadProductEvents, normalizeOpsRange, updateFeedbackReview };
+export async function loadGeneralFeedback(range, limit = 100) {
+  const safeLimit = Math.min(100, Math.max(1, limit));
+  if (pool) {
+    const result = await pool.query('SELECT * FROM feedback_inbox WHERE created_at >= $1 AND created_at <= $2 ORDER BY created_at DESC LIMIT $3', [range.from, range.to, safeLimit]);
+    return result.rows;
+  }
+  const result = await query({ table: 'feedback_inbox', action: 'select', filter: {}, queryOptions: { orderBy: 'created_at:desc' } });
+  return result.rows.filter((row) => {
+    const time = new Date(row.created_at).getTime();
+    return time >= new Date(range.from).getTime() && time <= new Date(range.to).getTime();
+  }).slice(0, safeLimit);
+}
+
+export async function updateGeneralFeedbackReview(id, updates) {
+  return (await query({ table: 'feedback_inbox', action: 'update', id, data: updates })).rows[0] || null;
+}
+
+export default { loadFeedback, loadGeneralFeedback, loadProductEvents, normalizeOpsRange, updateFeedbackReview, updateGeneralFeedbackReview };

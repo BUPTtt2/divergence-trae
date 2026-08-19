@@ -16,3 +16,36 @@ test('ops model exposes the numerator, denominator, and a low-sample warning', (
   assert.equal(view.completion.lowSample, true);
   assert.equal(view.duration, 'P50 2分 · P90 4分');
 });
+
+test('ops model exposes session capacity and refuses to present missing prices as zero-cost truth', () => {
+  const view = buildOpsViewModel({
+    costs: {
+      summary: {
+        calls: 8, successfulCalls: 6, failedCalls: 2, usageMissingCalls: 1, costMissingCalls: 2,
+        tokens: { input: 10000, output: 3000, total: 13000 }, estimatedCostCny: 1.25,
+        byProvider: { 'budget-gate': { failedCalls: 1 } },
+      },
+      capacity: {
+        limits: { sessionTokenEnvelope: 250000, userDailySessions: 3, globalDailySessions: 100, maxActiveSessions: 20 },
+        observed: { activeSessions: 4, settledSessions: 12, releasedSessions: 2, p90ActualTokens: 130000 },
+      },
+    },
+  });
+
+  assert.deepEqual(view.costs.tokens, { input: 10000, output: 3000, total: 13000 });
+  assert.equal(view.costs.knownCostLabel, '¥1.2500 + 2 次价格未知');
+  assert.equal(view.costs.budgetRejected, 1);
+  assert.equal(view.costs.capacity.maxActiveSessions, 20);
+  assert.equal(view.costs.capacity.activeSessions, 4);
+  assert.equal(view.costs.capacity.p90ActualTokens, 130000);
+});
+
+test('ops model exposes public feedback separately from decision ratings', () => {
+  const view = buildOpsViewModel({
+    feedback: { feedback: [{ id: 'decision-1', helpfulness: 'helpful' }] },
+    publicFeedback: { feedback: [{ id: 'public-1', category: 'bug', message: '按钮点不开' }] },
+  });
+  assert.equal(view.feedback.length, 1);
+  assert.equal(view.publicFeedback.length, 1);
+  assert.equal(view.publicFeedback[0].message, '按钮点不开');
+});

@@ -9,8 +9,8 @@ import { extendTHREE } from './utils/extendThree';
 import DraggableCompass from './components/fx/DraggableCompass';
 import AchievementToast from './components/AchievementToast';
 import FollowUpReminder from './components/FollowUpReminder';
-// 已废弃：旧轨
-// import YanChat from './components/YanChat';
+import FeedbackDialog from './components/feedback/FeedbackDialog.jsx';
+import BrandMark from './components/brand/BrandMark.jsx';
 import AppNav from './components/AppNav';
 import { fetchAgentPersonas } from './services/inferenceEngine';
 import { tracker, initWebVitals } from './services/tracker';
@@ -26,7 +26,6 @@ function lazyRetry(loader) {
   return lazy(() => loadWithRetry(loader));
 }
 
-/* 水墨风格 Loading 骨架屏 */
 function InkLoading() {
   return (
     <div style={{
@@ -36,26 +35,24 @@ function InkLoading() {
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: '#FAF8F0',
-      fontFamily: '"Ma Shan Zheng", "Noto Serif SC", serif',
+      fontFamily: '"PingFang SC", "Noto Sans SC", system-ui, sans-serif',
     }}>
       <div style={{
-        fontSize: 48,
-        color: '#A8472E',
-        opacity: 0.6,
-        animation: 'inkPulse 1.4s ease-in-out infinite',
-      }}>☯</div>
+        width: 86,
+        animation: 'brandPulse 1.2s ease-in-out infinite',
+      }}><BrandMark compact /></div>
       <div style={{
-        fontSize: 13,
-        color: '#7A7468',
-        marginTop: 16,
-        letterSpacing: '0.3em',
-        opacity: 0.7,
-      }}>水墨晕染中</div>
+        fontSize: 12,
+        color: '#59635e',
+        marginTop: 18,
+        letterSpacing: '0.18em',
+      }}>正在整理推演现场</div>
       <style>{`
-        @keyframes inkPulse {
-          0%, 100% { opacity: 0.3; transform: scale(1); }
-          50% { opacity: 0.7; transform: scale(1.08); }
+        @keyframes brandPulse {
+          0%, 100% { opacity: .62; transform: translateY(0); }
+          50% { opacity: 1; transform: translateY(-4px); }
         }
+        @media (prefers-reduced-motion: reduce) { .yance-brand { animation: none !important; } }
       `}</style>
     </div>
   );
@@ -73,6 +70,7 @@ const Agents = lazyRetry(() => import('./pages/Agents'));
 const Legal = lazyRetry(() => import('./pages/Legal'));
 const Privacy = lazyRetry(() => import('./pages/Privacy'));
 const Ops = lazyRetry(() => import('./pages/Ops'));
+const AccountAction = lazyRetry(() => import('./pages/AccountAction'));
 
 /* ErrorBoundary - 防止子组件抛错导致整页白屏 */
 class ErrorBoundary extends Component {
@@ -118,10 +116,10 @@ class ErrorBoundary extends Component {
           fontFamily: '"Ma Shan Zheng", "Noto Serif SC", serif',
           padding: '20px',
         }}>
-          <div style={{ fontSize: 56, marginBottom: 16, opacity: 0.3, color: '#A8472E' }}>☯</div>
-          <h2 style={{ fontSize: 22, marginBottom: 8, letterSpacing: '0.2em' }}>推演走神了</h2>
+          <div style={{ width: 72, marginBottom: 18 }}><BrandMark compact /></div>
+          <h2 style={{ fontSize: 22, marginBottom: 8 }}>这一页暂时没有加载完整</h2>
           <p style={{ fontSize: 12, color: '#7A7468', marginBottom: 12, lineHeight: 1.7, textAlign: 'center' }}>
-            卦象暂时散去, 刷新一下即可继续。
+            刷新后可以继续；错误编号已交给系统记录。
           </p>
           <div style={{ 
             fontSize: 10, 
@@ -152,7 +150,7 @@ class ErrorBoundary extends Component {
               letterSpacing: '0.2em',
             }}
           >
-            重新推演
+            重新加载
           </button>
         </div>
       );
@@ -237,6 +235,8 @@ function AnimatedRoutes() {
               <Route path="/legal" element={<ErrorBoundary><Legal /></ErrorBoundary>} />
               <Route path="/privacy" element={<ErrorBoundary><Privacy /></ErrorBoundary>} />
               <Route path="/ops" element={<ErrorBoundary><Ops /></ErrorBoundary>} />
+              <Route path="/account/verify-email" element={<ErrorBoundary><AccountAction /></ErrorBoundary>} />
+              <Route path="/account/reset-password" element={<ErrorBoundary><AccountAction /></ErrorBoundary>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
@@ -288,7 +288,7 @@ export default function App() {
                 <AnimatedRoutes />
                 <AchievementToast />
                 <FollowUpReminder />
-                {/* 已废弃：旧轨 <YanChat /> */}
+                <FeedbackDialog />
               </GameProvider>
             </AuthProvider>
           </BrowserRouter>

@@ -3,26 +3,33 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/brand/yance-icon-192.png" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
-    <meta name="theme-color" content="#FAF8F0" />
-    <title>演策 — AI决策推演沙盘 | 多智囊辩论·八卦立卦·命签收藏</title>
-    <meta name="description" content="演策是AI决策推演沙盘。输入你的真实纠结（辞职/Offer/创业/感情），演召唤多视角智囊辩论，占卜立卦，生成可收藏可分享的命签。30天回访闭环让决策可回顾可学习。" />
-    <meta name="keywords" content="AI决策,决策辅助,智囊辩论,八卦推演,命签,占卜,演策,职业选择,辞职创业,感情抉择" />
+    <meta name="theme-color" content="#121715" />
+    <link rel="canonical" href="https://yanceai.online/" />
+    <title>演策 | 把纠结推演成可行动的决定</title>
+    <meta name="description" content="演策是多视角 AI 决策推演工具。基于你的真实事实，让不同立场交锋，保留完整过程，并形成下一步行动。" />
+    <meta name="keywords" content="AI决策,决策辅助,多视角推演,行动计划,决策复盘,演策" />
     <meta name="author" content="演策" />
     <meta name="robots" content="index, follow" />
 
     <!-- Open Graph 社交分享 -->
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="演策 — AI决策推演沙盘" />
-    <meta property="og:description" content="多智囊辩论·八卦立卦·命签收藏。让AI帮你在人生重要决策前多想一步。" />
+    <meta property="og:title" content="演策 | 把纠结推演成可行动的决定" />
+    <meta property="og:description" content="让事实、反方意见和行动路径在同一张桌上说清楚。" />
+    <meta property="og:url" content="https://yanceai.online/" />
+    <meta property="og:image" content="https://yanceai.online/brand/yance-social.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
     <meta property="og:site_name" content="演策" />
     <meta property="og:locale" content="zh_CN" />
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="演策 — AI决策推演沙盘" />
-    <meta name="twitter:description" content="多智囊辩论·八卦立卦·命签收藏" />
+    <meta name="twitter:title" content="演策 | 把纠结推演成可行动的决定" />
+    <meta name="twitter:description" content="多视角 AI 决策推演工具" />
+    <meta name="twitter:image" content="https://yanceai.online/brand/yance-social.png" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -35,22 +42,21 @@
     <style>
       body {
         font-family: 'Ma Shan Zheng', 'ZCOOL XiaoWei', 'Noto Serif SC', 'STKaiti', 'KaiTi', serif;
-        background-color: #FAF8F0;
+        background-color: #EAEDE5;
       }
       /* 首屏 Loading 骨架（在 React 渲染前显示） */
       #root:empty::before {
-        content: '☯';
+        content: '';
         display: flex;
         align-items: center;
         justify-content: center;
         width: 100vw;
         height: 100dvh;
-        font-size: 48px;
-        color: #A8472E;
-        opacity: 0.4;
-        animation: inkPulse 1.4s ease-in-out infinite;
+        background: #121715 url('/brand/yance-mark.svg') center / 52px 52px no-repeat;
+        opacity: 0.92;
+        animation: brandPulse 1.4s ease-in-out infinite;
       }
-      @keyframes inkPulse {
+      @keyframes brandPulse {
         0%, 100% { opacity: 0.2; transform: scale(1); }
         50% { opacity: 0.5; transform: scale(1.08); }
       }
@@ -63,8 +69,9 @@
       "@type": "WebApplication",
       "name": "演策",
       "alternateName": "Yan Ce Bagua Engine",
-      "description": "AI决策推演沙盘。输入真实纠结，演召唤多视角智囊辩论，占卜立卦，生成可收藏可分享的命签。",
-      "applicationCategory": "LifestyleApplication",
+      "description": "多视角 AI 决策推演工具。让事实、反方意见和行动路径在同一张桌上说清楚。",
+      "url": "https://yanceai.online/",
+      "applicationCategory": "ProductivityApplication",
       "operatingSystem": "Web",
       "offers": {
         "@type": "Offer",
@@ -72,10 +79,10 @@
         "priceCurrency": "CNY"
       },
       "featureList": [
-        "多智囊辩论",
-        "八卦立卦",
-        "命签收藏",
-        "决策回顾闭环"
+        "多视角辩论",
+        "行动路径",
+        "完整过程回放",
+        "决策复盘"
       ]
     }
     </script>

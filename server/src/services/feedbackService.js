@@ -1,5 +1,6 @@
 import { query } from './db.js';
 import { normalizeProductEvent } from './productAnalytics.js';
+import crypto from 'crypto';
 import { generateUUID } from '../utils/id.js';
 
 export const FEEDBACK_HELPFULNESS = new Set(['helpful', 'neutral', 'unhelpful']);
@@ -12,6 +13,67 @@ export const FEEDBACK_TAGS = new Set([
   'destiny_card',
   'other',
 ]);
+export const GENERAL_FEEDBACK_CATEGORIES = new Set(['bug', 'idea', 'confusing', 'other']);
+
+function invalidGeneralFeedback(message) {
+  const error = new Error(message);
+  error.code = 'INVALID_FEEDBACK';
+  return error;
+}
+
+export function validateGeneralFeedbackPayload(payload = {}) {
+  const category = String(payload.category || '').trim();
+  const message = String(payload.message || '').trim();
+  const email = String(payload.email || '').trim().toLowerCase();
+  const page = String(payload.page || '/').trim();
+  if (!GENERAL_FEEDBACK_CATEGORIES.has(category)) throw invalidGeneralFeedback('category 无效');
+  if (message.length < 4 || message.length > 800) throw invalidGeneralFeedback('message 长度无效');
+  if (email && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)) throw invalidGeneralFeedback('email 无效');
+  if (!page.startsWith('/') || page.length > 180) throw invalidGeneralFeedback('page 无效');
+  return { category, message, email, page };
+}
+
+export function publicGeneralFeedbackView(row = {}) {
+  return {
+    id: row.id,
+    category: row.category,
+    message: row.message,
+    email: row.email || '',
+    page: row.page,
+    reviewStatus: row.review_status,
+    createdAt: row.created_at,
+  };
+}
+
+export async function createGeneralFeedback({ payload, idempotencyKey, requestSubject = 'unknown' }) {
+  const clean = validateGeneralFeedbackPayload(payload);
+  const safeKey = String(idempotencyKey || '').trim().slice(0, 100);
+  if (safeKey.length < 12) throw invalidGeneralFeedback('Idempotency-Key 缺失');
+  const existing = await query({ table: 'feedback_inbox', action: 'select', filter: { idempotency_key: safeKey }, queryOptions: { limit: 1 } });
+  if (existing.rows[0]) return { feedback: publicGeneralFeedbackView(existing.rows[0]), created: false };
+  const now = new Date().toISOString();
+  const fingerprint = crypto.createHash('sha256').update(`${clean.category}:${clean.message.toLowerCase()}`).digest('hex');
+  const subjectHash = crypto.createHmac('sha256', process.env.FEEDBACK_HASH_SECRET || process.env.RATE_LIMIT_HASH_SECRET || 'local-feedback-only').update(String(requestSubject)).digest('hex');
+  const row = (await query({
+    table: 'feedback_inbox',
+    action: 'insert',
+    data: {
+      id: generateUUID(),
+      category: clean.category,
+      message: clean.message,
+      email: clean.email || null,
+      page: clean.page,
+      idempotency_key: safeKey,
+      content_fingerprint: fingerprint,
+      subject_hash: subjectHash,
+      review_status: 'unread',
+      internal_note: '',
+      created_at: now,
+      updated_at: now,
+    },
+  })).rows[0];
+  return { feedback: publicGeneralFeedbackView(row), created: true };
+}
 
 export function validateFeedbackPayload(payload = {}) {
   const helpfulness = String(payload.helpfulness || '').trim();
@@ -94,4 +156,4 @@ export async function upsertFeedback({ userId, sessionId, payload, metadata = {}
   return publicFeedbackView(row);
 }
 
-export default { publicFeedbackView, upsertFeedback, validateFeedbackPayload };
+export default { createGeneralFeedback, publicFeedbackView, publicGeneralFeedbackView, upsertFeedback, validateFeedbackPayload, validateGeneralFeedbackPayload };

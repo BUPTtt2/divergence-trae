@@ -1,20 +1,32 @@
 {
-  "name": "演策 — AI决策推演沙盘",
+  "name": "演策 - AI 决策推演",
   "short_name": "演策",
-  "description": "多智囊辩论·八卦立卦·命签收藏。让AI帮你在人生重要决策前多想一步。",
-  "start_url": "/",
+  "description": "把一个纠结，推演成可行动的决定。",
+  "start_url": "/sandbox",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#FAF8F0",
-  "theme_color": "#A8472E",
+  "background_color": "#EAEDE5",
+  "theme_color": "#121715",
   "lang": "zh-CN",
   "icons": [
     {
       "src": "/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/yance-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
       "purpose": "any maskable"
+    },
+    {
+      "src": "/brand/yance-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
-  "categories": ["lifestyle", "productivity", "utilities"]
+  "categories": ["productivity", "utilities"]
 }

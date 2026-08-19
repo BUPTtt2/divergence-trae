@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import app from '../src/app.js';
 import { query } from '../src/services/db.js';
 
-async function call(base, path, { method = 'GET', token, body } = {}) {
+async function call(base, path, { method = 'GET', token, body, headers = {} } = {}) {
   const response = await fetch(`${base}${path}`, {
     method,
-    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { 'content-type': 'application/json' } : {}), ...headers },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   return { status: response.status, body: await response.json().catch(() => ({})) };
@@ -63,6 +63,38 @@ test('feedback is owner-only, validated, and updated instead of duplicated', asy
     await query({ table: 'deliberation_sessions', action: 'delete', id: sessionId });
   } finally {
     for (const id of feedbackIds) await query({ table: 'product_feedback', action: 'delete', id });
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('public feedback accepts anonymous visitors, deduplicates retries, and rejects unsafe payloads', async () => {
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const key = `public-feedback-${Date.now()}`;
+  let feedbackId;
+  try {
+    const payload = { category: 'bug', message: '手机端反馈按钮无法打开', email: 'user@example.com', page: '/', interactionMs: 2400 };
+    const first = await call(base, '/api/feedback', { method: 'POST', body: payload, headers: { 'idempotency-key': key } });
+    assert.equal(first.status, 201);
+    feedbackId = first.body.feedback.id;
+    assert.equal(first.body.feedback.category, 'bug');
+    assert.equal('ipHash' in first.body.feedback, false);
+
+    const retry = await call(base, '/api/feedback', { method: 'POST', body: payload, headers: { 'idempotency-key': key } });
+    assert.equal(retry.status, 200);
+    assert.equal(retry.body.feedback.id, feedbackId);
+
+    const invalid = await call(base, '/api/feedback', { method: 'POST', body: { ...payload, message: 'x'.repeat(801) }, headers: { 'idempotency-key': `${key}-invalid` } });
+    assert.equal(invalid.status, 400);
+
+    const bot = await call(base, '/api/feedback', { method: 'POST', body: { ...payload, website: 'spam.example' }, headers: { 'idempotency-key': `${key}-bot` } });
+    assert.equal(bot.status, 202);
+
+    const tooFast = await call(base, '/api/feedback', { method: 'POST', body: { ...payload, interactionMs: 80 }, headers: { 'idempotency-key': `${key}-fast` } });
+    assert.equal(tooFast.status, 202);
+  } finally {
+    if (feedbackId) await query({ table: 'feedback_inbox', action: 'delete', id: feedbackId });
     await new Promise((resolve) => server.close(resolve));
   }
 });
