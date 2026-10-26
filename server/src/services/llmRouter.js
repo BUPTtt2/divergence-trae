@@ -159,6 +159,11 @@ export function buildProviderRequestBody(provider, messages, options = {}) {
     || (provider.kind === 'ark' && provider.model.startsWith('glm-'))) {
     body.thinking = { type: 'disabled' };
   }
+  // doubao-seed 系列是思考模型：非流式调用必须禁思考，否则 reasoning 吃掉 max_tokens 导致 content 为空；
+  // 流式调用保留思考（演对话场景质量优先）
+  if (provider.kind === 'ark' && /^doubao-seed/.test(provider.model) && !stream) {
+    body.thinking = { type: 'disabled' };
+  }
   if ((provider.name === 'deepseek' || provider.kind === 'ark') && provider.model.startsWith('deepseek-v4')) {
     body.thinking = { type: thinking ? 'enabled' : 'disabled' };
   }
