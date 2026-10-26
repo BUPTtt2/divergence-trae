@@ -279,3 +279,13 @@
 - The use of serverless technologies reduces operational overhead and allows the application to scale dynamically
 - The project includes features to support user engagement and retention, such as daily tasks, achievements, and community sharing
 - All security best practices are followed to protect user data and ensure the application's integrity
+
+## 2026-10-26 进展同步（Trae 会话沉淀）
+- 仓库基线：本地 main = GitHub main = 部署版 codex/deployed-643159-baseline (bab9b0a, 2026-08-19) + 后续提交
+- "8月底"核实：仓库最新代码提交是 8-19，8-21 是部署动作时间
+- Langfuse 已完整接入（零依赖 Ingestion 客户端 server/src/services/langfuseService.js，挂钩 llmRouter 三个入口 + feedbackService score 回写），激活只需配 LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY 三个环境变量
+- server 测试套件 348/348 全过（含 Windows ESM 路径修复 smoke.test.js modUrl helper）
+- Langfuse 端到端回归脚本：node server/scripts/langfuse-e2e.mjs（mock provider + mock ingestion 断言全链路）
+- 本机网络：GitHub HTTPS 被墙；fetch 用镜像 https://gh-proxy.com/https://github.com/BUPTtt2/divergence-trae.git；push 走 SSH 443（仓库 push URL 已永久配置）
+- 本机工具路径：git 在 D:\Git\cmd，node/npm 在 D:\Node.js（需手动加 PATH）
+- 待办：用户在 langfuse.com 注册拿 pk/sk → 配到 Vercel/Railway 后端环境变量 → 重新部署激活
