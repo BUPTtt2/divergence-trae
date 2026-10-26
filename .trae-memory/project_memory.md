@@ -298,3 +298,11 @@
 - 线上验证通过：trace f77407ef... tags[yance,production] 含ERROR/WARNING generation，providerChain ark/zhipu
 - 已知问题：analyze路由未传stage→trace名llm.llm、session unknown；Vercel上LLM provider全失败(fallback=True，ark/zhipu暂不可用，独立问题)
 - 提交链：5e6f84c→ff73528→d0f3588→e69aa38
+
+## 2026-10-26 LLM链路修复+评测前置
+- 线上LLM全失败根因：非key失效，是maxTokens=300对doubao-seed-evolving过长输出截断→LLM_INVALID_FORMAT兜底；已改1200
+- ARK key(用户提供ark-1c112ab4-...)调doubao-seed-evolving(全小写)200可用；线上ARK_PRIMARY_MODEL已改为doubao-seed-evolving(Vercel reveal/edit需邮箱验证，用删除+重建绕过；环境复选框默认全选不要点)
+- 新增server/src/utils/llmJson.js容错提取器(markdown剥离/贪婪/截断补括号)，替换14处裸JSON提取；348测试过
+- 线上验证：analyze fallback=False，6 agents选出；commit 0750237
+- 本地.env已加ARK_API_KEY+ARK_PRIMARY_MODEL；临时调试脚本已删
+- 待办：Agent链路评测方案(用户明确要求停下来讨论)
