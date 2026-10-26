@@ -7,6 +7,7 @@
 
 import hexagramsData from '../data/hexagrams.json' with { type: 'json' };
 import { callLLM } from './llmRouter.js';
+import { extractJsonText } from '../utils/llmJson.js';
 
 // 构建卦象查找表：key = 六爻二进制（初爻为最低位，阳=1 阴=0）
 const hexagramMap = new Map();
@@ -204,13 +205,18 @@ ${dialogueText}
       return localResult;
     }
 
-    // 提取 JSON
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) {
+    // 提取 JSON（含截断/markdown 容错）
+    const jsonText = extractJsonText(text);
+    if (!jsonText) {
       return localResult;
     }
 
-    const parsed = JSON.parse(match[0]);
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch (e) {
+      return localResult;
+    }
     return {
       verse: parsed.verse || localResult.verse,
       framework: parsed.framework || localResult.framework,

@@ -31,6 +31,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requireOwnedDeliberation, requirePrincipal } from '../middleware/principal.js';
+import { extractJsonText } from '../utils/llmJson.js';
 import * as deliberationEngine from '../services/deliberationEngine.js';
 import * as memoryService from '../services/memoryService.js';
 import * as customAdvisorService from '../services/customAdvisorService.js';
@@ -111,7 +112,7 @@ router.post(
           { role: 'user', content: normalizedQuestion },
         ], { maxTokens: 120, temperature: 0, timeout: 6000 });
         if (!content) return null;
-        const json = content.match(/\{[\s\S]*\}/)?.[0];
+        const json = extractJsonText(content);
         return json ? JSON.parse(json) : null;
       } : undefined,
     });

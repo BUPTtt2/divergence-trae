@@ -13,6 +13,7 @@
 import { callLLM } from './llmRouter.js';
 import { CHINESE_COLORS, AGENT_SOURCES, buildPersona, validateAgent } from '../data/agentSchema.js';
 import { generateUUID } from '../utils/id.js';
+import { extractJsonText } from '../utils/llmJson.js';
 import sharedPool from './sharedPool.js';
 
 const GENERATION_TIMEOUT = 12000;
@@ -153,10 +154,10 @@ function parseLLMResponse(text) {
   // 尝试提取JSON数组
   const jsonMatch = text.match(/\[[\s\S]*\]/);
   if (!jsonMatch) {
-    const jsonMatch2 = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch2) {
+    const jsonText = extractJsonText(text);
+    if (jsonText) {
       try {
-        const single = JSON.parse(jsonMatch2[0]);
+        const single = JSON.parse(jsonText);
         return [single];
       } catch {
         return [];

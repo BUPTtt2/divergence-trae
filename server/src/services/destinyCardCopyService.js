@@ -1,4 +1,5 @@
 import { callLLM } from './llmRouter.js';
+import { extractJsonText } from '../utils/llmJson.js';
 
 function compact(value, maxLength, fallback) {
   const text = String(value || '').replace(/\s+/g, ' ').replace(/[“”"]/g, '').trim() || fallback;
@@ -29,10 +30,10 @@ function structuredCopy(input = {}) {
 }
 
 function parseGeneratedCopy(raw, fallback) {
-  const match = String(raw || '').match(/\{[\s\S]*\}/);
-  if (!match) return null;
+  const jsonText = extractJsonText(String(raw || ''));
+  if (!jsonText) return null;
   try {
-    const parsed = JSON.parse(match[0]);
+    const parsed = JSON.parse(jsonText);
     return {
       source: 'generated',
       sealTitle: compact(parsed.sealTitle, 5, fallback.sealTitle),

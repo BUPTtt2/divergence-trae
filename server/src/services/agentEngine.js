@@ -9,6 +9,7 @@ import { callLLM } from './llmRouter.js';
 import { retrieveMemories, getUserProfile } from './memoryService.js';
 import { listAdvisors, formatAdvisorForAgentPool } from './customAdvisorService.js';
 import logger from './logger.js';
+import { extractJsonText } from '../utils/llmJson.js';
 
 export function uniqueValidAgentIds(agentIds, validIds) {
   const allowed = new Set(Array.isArray(validIds) ? validIds : []);
@@ -168,20 +169,20 @@ ${agentList}
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      { maxTokens: 300, temperature: 0.3, timeout: 18000 }
+      { maxTokens: 1200, temperature: 0.3, timeout: 28000 }
     );
 
     if (!text) {
       throw Object.assign(new Error('analyzeQuestion LLM返回空文本'), { type: 'LLM_EMPTY_OUTPUT' });
     }
 
-    // 提取 JSON
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) {
+    // 提取 JSON（doubao-seed 等思考模型输出更长，maxTokens 截断或 markdown 包裹都由 extractJsonText 容错）
+    const jsonText = extractJsonText(text);
+    if (!jsonText) {
       throw Object.assign(new Error('analyzeQuestion LLM返回内容无有效JSON'), { type: 'LLM_INVALID_FORMAT', raw: text.slice(0, 200) });
     }
 
-    const parsed = JSON.parse(match[0]);
+    const parsed = JSON.parse(jsonText);
     const validIds = allAgents.map((a) => a.id);
     const agentIds = uniqueValidAgentIds(parsed.agentIds, validIds);
 
@@ -548,9 +549,9 @@ export async function shouldContinueAsking(agent, originalQuestion, dialogueHist
     );
 
     if (text) {
-      const match = text.match(/\{[\s\S]*\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
+      const jsonText = extractJsonText(text);
+      if (jsonText) {
+        const parsed = JSON.parse(jsonText);
         return {
           continueAsking: parsed.continueAsking === true,
           nextQuestion: parsed.nextQuestion || '',
@@ -665,15 +666,15 @@ ${JSON.stringify({
     return buildLocalMasterSummary(originalQuestion, agentIds, dialogueHistory);
   }
 
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) {
+  const jsonText = extractJsonText(text);
+  if (!jsonText) {
     console.warn('[generateMasterSummary] LLM无有效JSON，返回本地兜底。原文:', text.slice(0, 150));
     return buildLocalMasterSummary(originalQuestion, agentIds, dialogueHistory);
   }
 
   let parsed;
   try {
-    parsed = JSON.parse(match[0]);
+    parsed = JSON.parse(jsonText);
   } catch (e) {
     console.warn('[generateMasterSummary] JSON解析失败，返回本地兜底:', e.message);
     return buildLocalMasterSummary(originalQuestion, agentIds, dialogueHistory);

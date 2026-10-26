@@ -19,6 +19,7 @@
  */
 
 import { callLLM } from './llmRouter.js';
+import { extractJsonText } from '../utils/llmJson.js';
 import { executeEvidenceTool, getAgentToolRegistry } from './toolEvidenceGateway.js';
 import { generateAgentDialogue } from './agentEngine.js';
 import { AGENT_POOL } from '../data/agentPool.js';
@@ -320,11 +321,11 @@ function parseThinkAction(text) {
     // 不是纯 JSON，尝试提取 JSON 块
   }
 
-  // 尝试提取 {...} 块
-  const m = text.match(/\{[\s\S]*\}/);
-  if (m) {
+  // 尝试提取 {...} 块（含截断修复）
+  const jsonText = extractJsonText(text);
+  if (jsonText) {
     try {
-      const parsed = JSON.parse(m[0]);
+      const parsed = JSON.parse(jsonText);
       if (parsed.action) {
         return { type: parsed.action, args: parsed.args || {}, reason: parsed.reason || '' };
       }

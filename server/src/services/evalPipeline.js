@@ -21,6 +21,7 @@
 import { getSession } from './memoryService.js';
 import { callLLM } from './llmRouter.js';
 import { query } from './db.js';
+import { extractJsonText } from '../utils/llmJson.js';
 import logger from './logger.js';
 
 // ============ 常量 ============
@@ -144,11 +145,11 @@ export async function evaluateSession(sessionId) {
  */
 function parseEvalScores(raw) {
   if (!raw || typeof raw !== 'string') return null;
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) return null;
+  const jsonText = extractJsonText(raw);
+  if (!jsonText) return null;
   let obj;
   try {
-    obj = JSON.parse(m[0]);
+    obj = JSON.parse(jsonText);
   } catch (e) {
     return null;
   }

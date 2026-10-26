@@ -1,6 +1,7 @@
 import { callLLM } from './llmRouter.js';
 import { withRetry } from './retryHelper.js';
 import logger from './logger.js';
+import { extractJsonText } from '../utils/llmJson.js';
 
 const MAX_FIELDS = 8;
 const MIN_FIELDS = 3;
@@ -16,10 +17,10 @@ function safeId(value, index) {
 }
 
 function extractJson(raw) {
-  const text = clean(raw, 20000).replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('案卷分析 Agent 未返回 JSON');
-  return JSON.parse(match[0]);
+  const text = clean(raw, 20000);
+  const jsonText = extractJsonText(text);
+  if (!jsonText) throw new Error('案卷分析 Agent 未返回 JSON');
+  return JSON.parse(jsonText);
 }
 
 function normalizeFields(fields = []) {

@@ -88,13 +88,7 @@ ${intent.coreConflict ? '核心矛盾：' + intent.coreConflict : ''}
     }
 
     // 解析维度
-    let dimStr = dimText;
-    const dimCodeBlock = dimText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (dimCodeBlock) dimStr = dimCodeBlock[1];
-    else {
-      const dimBrace = dimText.match(/\{[\s\S]*\}/);
-      if (dimBrace) dimStr = dimBrace[0];
-    }
+    let dimStr = extractJsonText(dimText) || dimText;
 
     let dimParsed;
     try {
@@ -111,13 +105,7 @@ ${intent.coreConflict ? '核心矛盾：' + intent.coreConflict : ''}
     // 解析命牌（命牌失败时用默认值兜底）
     let fateParsed = { fateAccept: null, fateReject: null };
     if (fateText) {
-      let fateStr = fateText;
-      const fateCodeBlock = fateText.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (fateCodeBlock) fateStr = fateCodeBlock[1];
-      else {
-        const fateBrace = fateText.match(/\{[\s\S]*\}/);
-        if (fateBrace) fateStr = fateBrace[0];
-      }
+      let fateStr = extractJsonText(fateText) || fateText;
       try {
         fateParsed = JSON.parse(fateStr);
       } catch (e) {

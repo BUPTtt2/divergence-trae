@@ -7,6 +7,7 @@
  */
 
 import { callLLM } from './llmRouter.js';
+import { extractJsonText } from '../utils/llmJson.js';
 import { retrieveMemories, getUserProfile } from './memoryService.js';
 
 /**
@@ -104,12 +105,12 @@ ${memoryContext}
     }
 
     // 提取 JSON
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) {
+    const jsonText = extractJsonText(text);
+    if (!jsonText) {
       return fallbackIntent();
     }
 
-    const parsed = JSON.parse(match[0]);
+    const parsed = JSON.parse(jsonText);
 
     return {
       decisionStructure: parsed.decisionStructure || 'open_exploration',

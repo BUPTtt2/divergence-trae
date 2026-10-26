@@ -12,6 +12,7 @@
 import { callLLM } from './llmRouter.js';
 import sharedPool from './sharedPool.js';
 import { generateAgentsForDimensions } from './dynamicGenerator.js';
+import { extractJsonText } from '../utils/llmJson.js';
 import { validateGeneratedAgent } from './qualityValidator.js';
 import { AGENT_POOL } from '../data/agentPool.js';
 import { PERSPECTIVES, PERSPECTIVE_LABELS, AGENT_SOURCES, computeStanceSimilarity, formatAgentForOutput } from '../data/agentSchema.js';
@@ -271,15 +272,15 @@ financial, risk, emotional, reflection, strategic, action, communication, macro,
       return getFallbackAnalysis(question);
     }
 
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) {
+    const jsonText = extractJsonText(text);
+    if (!jsonText) {
       logger.warn('[AgentRouter][analyze] LLM返回中未找到JSON，使用降级分析', {
         textPreview: text.slice(0, 200),
       });
       return getFallbackAnalysis(question);
     }
 
-    const parsed = JSON.parse(match[0]);
+    const parsed = JSON.parse(jsonText);
     logger.info('[AgentRouter][analyze] JSON解析成功', {
       rawDimensionCount: parsed.dimensions?.length || 0,
       hasAnalysis: !!parsed.analysis,
