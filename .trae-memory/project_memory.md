@@ -289,3 +289,12 @@
 - 本机网络：GitHub HTTPS 被墙；fetch 用镜像 https://gh-proxy.com/https://github.com/BUPTtt2/divergence-trae.git；push 走 SSH 443（仓库 push URL 已永久配置）
 - 本机工具路径：git 在 D:\Git\cmd，node/npm 在 D:\Node.js（需手动加 PATH）
 - 待办：用户在 langfuse.com 注册拿 pk/sk → 配到 Vercel/Railway 后端环境变量 → 重新部署激活
+
+## 2026-10-26 Langfuse线上激活完成
+- 旧版/api/public/ingestion已废弃(207静默丢数据)，langfuseService整体重写为OTel端点/api/public/otel/v1/traces+Scores REST API；traceId必须32位hex、spanId 16位hex，不符被静默丢弃
+- serverless关键坑：Vercel函数响应后冻结，fire-and-forget flush永不执行→llmRouter所有返回路径必须await flushLangfuse()，lfScoreSession返回promise由feedbackService await
+- 线上激活：Vercel项目yance-bagua-engine(api.yanceai.online)配置LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY环境变量；Langfuse项目projectId=cmvowumrw03bbad0e5d0qum8r，pk-lf-7512c86c-efed-4d5e-a0c5-4500f1c33670
+- Vercel项目原本未连Git(全是手动部署快照)，已连接BUPTtt2/divergence-trae main分支+RootDirectory=server(根目录vercel.json是前端配置，曾导致API域名被前端覆盖，已回滚修复)
+- 线上验证通过：trace f77407ef... tags[yance,production] 含ERROR/WARNING generation，providerChain ark/zhipu
+- 已知问题：analyze路由未传stage→trace名llm.llm、session unknown；Vercel上LLM provider全失败(fallback=True，ark/zhipu暂不可用，独立问题)
+- 提交链：5e6f84c→ff73528→d0f3588→e69aa38
