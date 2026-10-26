@@ -277,7 +277,7 @@ export async function callLLM(messages, options = {}) {
           metadata: { attempt, stage: ctx.stage },
         });
         console.log(`[LLM] ${provider.name} 调用成功`);
-        flushLangfuse();
+        await flushLangfuse();
         return result.content;
       }
       lfGeneration({
@@ -315,7 +315,7 @@ export async function callLLM(messages, options = {}) {
   }
 
   console.warn('[LLM] 所有提供商均失败，返回 null');
-  flushLangfuse();
+  await flushLangfuse();
   return null;
 }
 
@@ -390,7 +390,7 @@ export async function callLLMWithTools({
         metadata: { attempt, stage: ctx.stage, toolCalls: result.tool_calls?.length || 0 },
       });
       console.log(`[LLM][tools] ${provider.name} 调用成功, tool_calls=${!!result.tool_calls}`);
-      flushLangfuse();
+      await flushLangfuse();
       return { ...result, provider: provider.name };
     } catch (e) {
       providerRuntime.recordFailure(provider.name, e, {
@@ -414,7 +414,7 @@ export async function callLLMWithTools({
     }
   }
 
-  flushLangfuse();
+  await flushLangfuse();
   return { content: '', tool_calls: null, provider: null, error: 'all_providers_failed' };
 }
 
@@ -532,7 +532,7 @@ export async function callLLMStream(messages, options = {}, res) {
           res.write(`event: done\ndata: ${JSON.stringify({ full: text })}\n\n`);
           res.end();
           console.log(`[LLM] ${provider.name} 流式调用成功（非流式降级）`);
-          flushLangfuse();
+          await flushLangfuse();
           return text;
         }
         throw new Error(`${provider.name} 返回空内容`);
@@ -598,7 +598,7 @@ export async function callLLMStream(messages, options = {}, res) {
         res.write(`event: done\ndata: ${JSON.stringify({ full: fullText })}\n\n`);
         res.end();
         console.log(`[LLM] ${provider.name} 流式调用成功`);
-        flushLangfuse();
+        await flushLangfuse();
         return fullText;
       }
 
@@ -631,7 +631,7 @@ export async function callLLMStream(messages, options = {}, res) {
   res.write(`event: error\ndata: ${JSON.stringify({ error: '所有 LLM 提供商均不可用' })}\n\n`);
   res.end();
   console.warn('[LLM] 所有提供商流式调用均失败');
-  flushLangfuse();
+  await flushLangfuse();
   return null;
 }
 

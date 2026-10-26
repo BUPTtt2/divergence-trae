@@ -263,7 +263,8 @@ export function lfScoreSession({ sessionId, userId, name = 'user-feedback', valu
         comment: comment ? String(comment).slice(0, 800) : undefined,
       });
     }
-    flushLangfuse();
+    // 返回 flush promise，serverless 环境下调用方应 await（响应后函数会被冻结）
+    return flushLangfuse();
   } catch (e) {
     console.warn(`[Langfuse] score 记录失败: ${e?.message || e}`);
   }

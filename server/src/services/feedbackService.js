@@ -156,7 +156,8 @@ export async function upsertFeedback({ userId, sessionId, payload, metadata = {}
   if (event) await query({ table: 'product_events', action: 'insert', data: event });
 
   // 用户反馈回写 Langfuse score（挂到该会话最近的 LLM trace，找不到则静默跳过）
-  lfScoreSession({
+  // serverless 环境下必须 await，否则响应后函数冻结、上报丢失
+  await lfScoreSession({
     sessionId,
     userId,
     name: 'user-feedback',
