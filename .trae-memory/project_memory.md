@@ -311,3 +311,5 @@
 - 新增server/src/middleware/llmTraceContext.js：路径推导stage+ALS注入sessionId/userId，挂agent/yan路由；前端apiClient统一x-trace-session头(每标签页一链，analyzeQuestion入口resetTraceSession开新链)
 - 线上验证：Langfuse Sessions页显示verify-chain-1026会话含2条trace；traces列表UI有索引延迟，用Sessions页验证更可靠
 - 下一步：Agent链路评测(用户待讨论方案)
+
+- 前端已部署surge(yance-bagua.surge.sh)，x-trace-session已上线，线上推演自动串链；评测建议下轮做分段评测(analyze选团/dialogue角色一致性/summary质量三段可独立自动评，人工交互段用在线score累积)
