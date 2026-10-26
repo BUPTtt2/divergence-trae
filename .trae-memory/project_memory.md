@@ -306,3 +306,8 @@
 - 线上验证：analyze fallback=False，6 agents选出；commit 0750237
 - 本地.env已加ARK_API_KEY+ARK_PRIMARY_MODEL；临时调试脚本已删
 - 待办：Agent链路评测方案(用户明确要求停下来讨论)
+
+## 2026-10-26 trace链路贯通完成
+- 新增server/src/middleware/llmTraceContext.js：路径推导stage+ALS注入sessionId/userId，挂agent/yan路由；前端apiClient统一x-trace-session头(每标签页一链，analyzeQuestion入口resetTraceSession开新链)
+- 线上验证：Langfuse Sessions页显示verify-chain-1026会话含2条trace；traces列表UI有索引延迟，用Sessions页验证更可靠
+- 下一步：Agent链路评测(用户待讨论方案)
