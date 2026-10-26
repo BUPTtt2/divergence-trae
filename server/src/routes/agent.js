@@ -5,6 +5,7 @@ import { AGENT_POOL, AGENT_POOL_MAP, buildAgentSystemPrompt } from '../data/agen
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { llmRateLimit } from '../middleware/rateLimit.js';
 import { optionalAuth } from '../middleware/auth.js';
+import llmTraceContext from '../middleware/llmTraceContext.js';
 import { listAdvisors, formatAdvisorForAgentPool } from '../services/customAdvisorService.js';
 import { getToolSchemas } from '../services/mcpService.js';
 import { executeEvidenceTool } from '../services/toolEvidenceGateway.js';
@@ -12,6 +13,9 @@ import { classifyIntent, assessCompleteness } from '../services/intentService.js
 import { generateDecisionTree } from '../services/treeService.js';
 
 const router = Router();
+
+// 推演链路可观测性：注入 sessionId/userId/stage 到 ALS，所有 callLLM 的 Langfuse trace 共享会话链
+router.use(llmTraceContext);
 
 /**
  * P3: Prompt 注入防护 — 清洗用户输入

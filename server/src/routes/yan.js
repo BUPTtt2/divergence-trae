@@ -7,8 +7,12 @@ import { getRecentMessages, retrieveMemories, getUserProfile } from '../services
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { llmRateLimit } from '../middleware/rateLimit.js';
 import { requireUser, optionalAuth, publicAuth } from '../middleware/auth.js';
+import llmTraceContext from '../middleware/llmTraceContext.js';
 
 const router = Router();
+
+// 演对话链路可观测性：注入 sessionId/userId/stage，Langfuse trace 串成会话链
+router.use(llmTraceContext);
 
 /**
  * POST /api/yan/chat

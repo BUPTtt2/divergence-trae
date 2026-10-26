@@ -144,6 +144,30 @@ export { isBackendCircuitOpen, resetBackendCircuit, ApiUnavailableError };
 export const API_TIMEOUT = 50000;
 export const SSE_TIMEOUT = 90000;
 
+/**
+ * 推演链路可观测性：同一浏览器标签页内所有 LLM 相关请求共享 x-trace-session，
+ * 后端用它作为 Langfuse session.id，把 analyze→dialogue→summary 串成一条会话链。
+ * 粒度：每标签页一个链路（新推演可通过 resetTraceSession() 开新链）。
+ */
+const TRACE_SESSION_KEY = 'yance:trace:session';
+function getTraceSessionId() {
+  try {
+    let id = sessionStorage.getItem(TRACE_SESSION_KEY);
+    if (!id) {
+      id = `web_${(crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`).replaceAll('-', '').slice(0, 24)}`;
+      sessionStorage.setItem(TRACE_SESSION_KEY, id);
+    }
+    return id;
+  } catch {
+    return null;
+  }
+}
+export function resetTraceSession() {
+  try {
+    sessionStorage.removeItem(TRACE_SESSION_KEY);
+  } catch { /* ignore */ }
+}
+
 async function tryFetch(url, options = {}, timeout = API_TIMEOUT) {
   if (isBackendCircuitOpen()) {
     throw new ApiUnavailableError();
@@ -151,7 +175,10 @@ async function tryFetch(url, options = {}, timeout = API_TIMEOUT) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   try {
-    const resp = await fetch(url, { ...options, signal: controller.signal });
+    const traceId = getTraceSessionId();
+    const headers = { ...(options.headers || {}) };
+    if (traceId && !headers['x-trace-session']) headers['x-trace-session'] = traceId;
+    const resp = await fetch(url, { ...options, headers, signal: controller.signal });
     return resp;
   } catch (e) {
     const name = e?.name || '';
@@ -356,6 +383,7 @@ async function handleResponse(resp, path) {
  * POST /api/agent/analyze → { agents, reasoning }
  */
 export async function analyzeQuestion(question) {
+  resetTraceSession(); // 新推演 → 开新 Langfuse 会话链
   return request('/api/agent/analyze', {
     method: 'POST',
     body: JSON.stringify({ question }),
@@ -369,6 +397,7 @@ export async function analyzeQuestion(question) {
  * 返回的 recommendedIds: 演推荐的已有智囊 ID（从 seedAgents/sharedAgents 中挑出的推荐）
  */
 export async function analyzeQuestionV2(question, options = {}) {
+  resetTraceSession(); // 新推演 → 开新 Langfuse 会话链
   return request('/api/agent/analyze-v2', {
     method: 'POST',
     body: JSON.stringify({ question, useSharedPool: true, ...options }),
@@ -417,7 +446,7 @@ export async function streamAgentDialogue(agent, question, previousDialogues, on
     ? previousDialogues
     : Object.entries(previousDialogues).map(([id, text]) => ({ agentId: id, text }));
 
-  const streamHeaders = { 'Content-Type': 'application/json' };
+  const streamHeaders = { 'Content-Type': 'application/json', 'x-trace-session': getTraceSessionId() || '' };
   await injectAuthHeader(streamHeaders);
 
   const api = await getActiveApi();
@@ -872,7 +901,7 @@ export async function streamYanChat({ message, conversationId, history }, onChun
       _silentFallback: true,
     };
   }
-  const streamHeaders = { 'Content-Type': 'application/json' };
+  const streamHeaders = { 'Content-Type': 'application/json', 'x-trace-session': getTraceSessionId() || '' };
   await injectAuthHeader(streamHeaders);
 
   const api = await getActiveApi();
