@@ -1,5 +1,6 @@
 import { query } from './db.js';
 import { normalizeProductEvent } from './productAnalytics.js';
+import { lfScoreSession } from './langfuseService.js';
 import crypto from 'crypto';
 import { generateUUID } from '../utils/id.js';
 
@@ -153,6 +154,15 @@ export async function upsertFeedback({ userId, sessionId, payload, metadata = {}
     properties: { helpfulness: clean.helpfulness, tags: clean.tags, feedbackId: row.id },
   }, { principalId: userId });
   if (event) await query({ table: 'product_events', action: 'insert', data: event });
+
+  // 用户反馈回写 Langfuse score（挂到该会话最近的 LLM trace，找不到则静默跳过）
+  lfScoreSession({
+    sessionId,
+    userId,
+    name: 'user-feedback',
+    value: clean.helpfulness === 'helpful' ? 1 : clean.helpfulness === 'unhelpful' ? -1 : 0,
+    comment: clean.comment || undefined,
+  });
   return publicFeedbackView(row);
 }
 

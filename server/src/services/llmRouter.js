@@ -1,6 +1,7 @@
 import { providerRuntime } from './providerRuntime.js';
 import { getLLMUsageContext } from './llmUsageContext.js';
 import { reserveLlmBudget } from './llmBudgetService.js';
+import { lfTrace, lfGeneration, flushLangfuse } from './langfuseService.js';
 
 /**
  * LLM 多提供商路由
@@ -239,6 +240,16 @@ export async function callLLM(messages, options = {}) {
   const providers = getProviders();
   if (providers.length === 0) return null;
   if (!(await passBudgetGate(messages, options))) return null;
+  const ctx = usageContext(options, 1);
+  const traceId = lfTrace({
+    name: `llm.${ctx.stage}`,
+    sessionId: ctx.sessionId,
+    userId: ctx.userId,
+    agentId: ctx.agentId,
+    stage: ctx.stage,
+    metadata: { providerChain: providers.map((p) => p.name) },
+    input: messages,
+  });
   let attempt = 0;
 
   for (const provider of providers) {
@@ -254,20 +265,57 @@ export async function callLLM(messages, options = {}) {
           usage: result.usage,
           ...usageContext(options, attempt),
         });
+        lfGeneration({
+          traceId,
+          name: `${provider.name}.chat`,
+          provider: provider.name,
+          model: result.model || provider.model,
+          input: messages,
+          output: result.content,
+          usage: result.usage,
+          latencyMs: Date.now() - startedAt,
+          metadata: { attempt, stage: ctx.stage },
+        });
         console.log(`[LLM] ${provider.name} 调用成功`);
+        flushLangfuse();
         return result.content;
       }
+      lfGeneration({
+        traceId,
+        name: `${provider.name}.chat`,
+        provider: provider.name,
+        model: provider.model,
+        input: messages,
+        output: '',
+        latencyMs: Date.now() - startedAt,
+        level: 'WARNING',
+        statusMessage: '返回空内容',
+        metadata: { attempt, stage: ctx.stage },
+      });
     } catch (e) {
       providerRuntime.recordFailure(provider.name, e, {
         model: provider.model,
         latencyMs: Date.now() - startedAt,
         ...usageContext(options, attempt),
       });
+      lfGeneration({
+        traceId,
+        name: `${provider.name}.chat`,
+        provider: provider.name,
+        model: provider.model,
+        input: messages,
+        output: null,
+        latencyMs: Date.now() - startedAt,
+        level: 'ERROR',
+        statusMessage: e?.message || String(e),
+        metadata: { attempt, stage: ctx.stage, code: e?.code || null },
+      });
       console.warn(`[LLM] ${provider.name} 暂时不可用，切换备用模型`);
     }
   }
 
   console.warn('[LLM] 所有提供商均失败，返回 null');
+  flushLangfuse();
   return null;
 }
 
@@ -299,6 +347,16 @@ export async function callLLMWithTools({
   if (!(await passBudgetGate(messages, budgetOptions))) {
     return { content: '', tool_calls: null, provider: null, error: 'budget_exceeded' };
   }
+  const ctx = usageContext({ sessionId, userId, agentId, stage }, 1);
+  const traceId = lfTrace({
+    name: `llm.${ctx.stage}`,
+    sessionId: ctx.sessionId,
+    userId: ctx.userId,
+    agentId: ctx.agentId,
+    stage: ctx.stage,
+    metadata: { providerChain: providers.map((p) => p.name), toolCount: tools?.length || 0 },
+    input: messages,
+  });
 
   let attempt = 0;
   for (const provider of providers) {
@@ -320,7 +378,19 @@ export async function callLLMWithTools({
         usage: result.usage,
         ...usageContext({ sessionId, userId, agentId, stage }, attempt),
       });
+      lfGeneration({
+        traceId,
+        name: `${provider.name}.tools`,
+        provider: provider.name,
+        model: result.model || provider.model,
+        input: messages,
+        output: { content: result.content, tool_calls: result.tool_calls },
+        usage: result.usage,
+        latencyMs: Date.now() - startedAt,
+        metadata: { attempt, stage: ctx.stage, toolCalls: result.tool_calls?.length || 0 },
+      });
       console.log(`[LLM][tools] ${provider.name} 调用成功, tool_calls=${!!result.tool_calls}`);
+      flushLangfuse();
       return { ...result, provider: provider.name };
     } catch (e) {
       providerRuntime.recordFailure(provider.name, e, {
@@ -328,10 +398,23 @@ export async function callLLMWithTools({
         latencyMs: Date.now() - startedAt,
         ...usageContext({ sessionId, userId, agentId, stage }, attempt),
       });
+      lfGeneration({
+        traceId,
+        name: `${provider.name}.tools`,
+        provider: provider.name,
+        model: provider.model,
+        input: messages,
+        output: null,
+        latencyMs: Date.now() - startedAt,
+        level: 'ERROR',
+        statusMessage: e?.message || String(e),
+        metadata: { attempt, stage: ctx.stage, code: e?.code || null },
+      });
       console.warn(`[LLM][tools] ${provider.name} 暂时不可用，切换备用模型`);
     }
   }
 
+  flushLangfuse();
   return { content: '', tool_calls: null, provider: null, error: 'all_providers_failed' };
 }
 
@@ -376,6 +459,17 @@ export async function callLLMStream(messages, options = {}, res) {
     res.write(`event: start\ndata: ${JSON.stringify({ ok: true })}\n\n`);
   }
 
+  const ctx = usageContext(options, 1);
+  const traceId = lfTrace({
+    name: `llm.${ctx.stage}`,
+    sessionId: ctx.sessionId,
+    userId: ctx.userId,
+    agentId: ctx.agentId,
+    stage: ctx.stage,
+    metadata: { providerChain: providers.map((p) => p.name), stream: true },
+    input: messages,
+  });
+
   let attempt = 0;
   for (const provider of providers) {
     if (!canAttemptProvider(provider, providers)) continue;
@@ -419,6 +513,17 @@ export async function callLLMStream(messages, options = {}, res) {
             usage: data.usage || null,
             ...usageContext(options, attempt),
           });
+          lfGeneration({
+            traceId,
+            name: `${provider.name}.stream`,
+            provider: provider.name,
+            model: data.model || provider.model,
+            input: messages,
+            output: text,
+            usage: data.usage || null,
+            latencyMs: Date.now() - startedAt,
+            metadata: { attempt, stage: ctx.stage, degraded: 'non-stream-json' },
+          });
           // 逐字推送（模拟流式效果）
           for (const char of text) {
             res.write(`data: ${JSON.stringify({ content: char })}\n\n`);
@@ -427,6 +532,7 @@ export async function callLLMStream(messages, options = {}, res) {
           res.write(`event: done\ndata: ${JSON.stringify({ full: text })}\n\n`);
           res.end();
           console.log(`[LLM] ${provider.name} 流式调用成功（非流式降级）`);
+          flushLangfuse();
           return text;
         }
         throw new Error(`${provider.name} 返回空内容`);
@@ -478,9 +584,21 @@ export async function callLLMStream(messages, options = {}, res) {
           usage,
           ...usageContext(options, attempt),
         });
+        lfGeneration({
+          traceId,
+          name: `${provider.name}.stream`,
+          provider: provider.name,
+          model: actualModel,
+          input: messages,
+          output: fullText,
+          usage,
+          latencyMs: Date.now() - startedAt,
+          metadata: { attempt, stage: ctx.stage },
+        });
         res.write(`event: done\ndata: ${JSON.stringify({ full: fullText })}\n\n`);
         res.end();
         console.log(`[LLM] ${provider.name} 流式调用成功`);
+        flushLangfuse();
         return fullText;
       }
 
@@ -490,6 +608,18 @@ export async function callLLMStream(messages, options = {}, res) {
         model: provider.model,
         latencyMs: Date.now() - startedAt,
         ...usageContext(options, attempt),
+      });
+      lfGeneration({
+        traceId,
+        name: `${provider.name}.stream`,
+        provider: provider.name,
+        model: provider.model,
+        input: messages,
+        output: null,
+        latencyMs: Date.now() - startedAt,
+        level: 'ERROR',
+        statusMessage: e?.message || String(e),
+        metadata: { attempt, stage: ctx.stage, code: e?.code || null },
       });
       console.warn(`[LLM] ${provider.name} 流式调用失败，切换备用模型`);
       // 通知前端切换提供商
@@ -501,6 +631,7 @@ export async function callLLMStream(messages, options = {}, res) {
   res.write(`event: error\ndata: ${JSON.stringify({ error: '所有 LLM 提供商均不可用' })}\n\n`);
   res.end();
   console.warn('[LLM] 所有提供商流式调用均失败');
+  flushLangfuse();
   return null;
 }
 
