@@ -52,8 +52,13 @@ import {
   parseExecuteRequest,
 } from '../contracts/deliberationContract.js';
 import { policyMiddlewares } from '../security/abusePolicies.js';
+import llmTraceContext from '../middleware/llmTraceContext.js';
 
 const router = Router();
+
+// 推演链路可观测性：未显式包 withLLMUsageContext 的处理器（start/route/interject 等）
+// 也带上 sessionId/stage，Langfuse 会话链不断裂；已包的处理器内层上下文优先生效。
+router.use(llmTraceContext);
 
 // 固定路由保留字（不可被当作 sessionId 匹配）
 const RESERVED_KEYWORDS = new Set([

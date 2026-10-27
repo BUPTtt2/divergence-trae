@@ -18,6 +18,10 @@ export function buildInfrastructureStatus(env = process.env) {
       reason: env.ARK_API_KEY && models.length > 0 ? null : 'ARK_API_KEY_OR_MODELS_MISSING',
     },
     providers: getExternalProviderCapabilities(env),
+    langfuse: {
+      enabled: Boolean(env.LANGFUSE_PUBLIC_KEY && env.LANGFUSE_SECRET_KEY) && env.LANGFUSE_ENABLED !== 'false',
+      host: env.LANGFUSE_HOST || 'https://cloud.langfuse.com',
+    },
   };
 }
 

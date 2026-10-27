@@ -22,6 +22,7 @@ import { getSession } from './memoryService.js';
 import { callLLM } from './llmRouter.js';
 import { query } from './db.js';
 import { extractJsonText } from '../utils/llmJson.js';
+import { lfScoreSession } from './langfuseService.js';
 import logger from './logger.js';
 
 // ============ 常量 ============
@@ -34,6 +35,14 @@ const EVAL_METRICS = [
   'no_hallucination',
   'actionability',
 ];
+
+// Langfuse score 名（与用户反馈 user-feedback 区分）
+const EVAL_SCORE_NAMES = {
+  relevance: 'eval.relevance',
+  diversity: 'eval.diversity',
+  no_hallucination: 'eval.no_hallucination',
+  actionability: 'eval.actionability',
+};
 
 // ============ 主入口 ============
 
@@ -125,6 +134,18 @@ export async function evaluateSession(sessionId) {
         raw: JSON.stringify({ llmRaw: llmRaw ? String(llmRaw).slice(0, 500) : null, ts: Date.now() }),
       },
     });
+
+    // 评估分同步上报 Langfuse（挂到该会话最近的 trace；未配置 key 时 no-op）
+    // 逐条 await：第一条会先 flush trace，保证后续 score 能关联到已存在的 trace
+    for (const metric of EVAL_METRICS) {
+      await lfScoreSession({
+        sessionId,
+        userId: session.user_id || undefined,
+        name: EVAL_SCORE_NAMES[metric],
+        value: scores[metric],
+        comment: `evalId=${evalId}`,
+      });
+    }
 
     logger.info('[EvalPipeline] 评估完成', { sessionId, evalId, scores });
     return { sessionId, evalId, ...scores };
