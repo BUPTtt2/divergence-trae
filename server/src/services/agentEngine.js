@@ -424,7 +424,7 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
 4. 数字必须来自用户或已接受证据；没有来源就写成待验证变量，禁止为了显得专业而编造比例、概率和成本。
 5. 回答至少包含：当前倾向、两条理由、一个未知或反转条件、一个可逆下一步。`;
 
-  const systemPrompt = `${basePrompt}${memoryContextInjection}${interactionRules}
+  const systemPrompt = `${basePrompt}${interactionRules}
 
 【补充约束】
 - 用清楚自然的中文，不写空泛口号
@@ -475,7 +475,9 @@ export async function generateAgentDialogue(agent, question, previousDialogues =
     ? `\n\n【本轮可引用的已接受工具证据】\n${evidenceContext}`
     : '\n\n【本轮工具证据】没有通过证据门禁的外部资料；不得声称已查到实时行情、价格或概率。';
 
-  const userPrompt = `用户问：「${question}」${contextText}${agentContextText}${evidenceText}
+  // 记忆/画像必须放在 user 消息：system 前缀（basePrompt+规则）才能跨用户、跨会话稳定命中缓存；
+  // 若留在 system 尾部，每个用户的画像都会打散后半段规则的前缀（与 analyzeQuestion 同一原因）
+  const userPrompt = `${memoryContextInjection.trim() ? `${memoryContextInjection.trim()}\n\n` : ''}用户问：「${question}」${contextText}${agentContextText}${evidenceText}
 
 请以 ${agent.name}（${agent.stance}）的身份，${options.mode === 'finding' ? `完成任务“${options.task || '给出独立判断'}”，并按指定四段格式提交 finding` : '说 1-3 句话回应。不要复述用户问题'}。`;
 
