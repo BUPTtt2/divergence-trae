@@ -191,8 +191,9 @@ export async function analyzeQuestion(question, userId = null, options = {}) {
     }
   }
 
+  // memoryContext 逐人不同（画像+历史召回）：只能放 user 消息，不能插 system 顶部，
+  // 否则每个用户的前缀都不同，DeepSeek 兜底时前缀缓存命中率被清零（CLAUDE.md §六 4.1）
   const systemPrompt = `你是"演"，推演核心，统领全局的太极Agent。
-${memoryContext}
 【任务】分析用户问题，根据问题的复杂度和涉及的维度，从以下Agent池中选择最适合的Agent团队。
 
 可用Agent池：
@@ -218,7 +219,7 @@ ${agentList}
 8. dimensions 必须是 2-6 个贴合本题的判断维度，并绑定负责的已选 Agent；不要套固定模板
 9. 只返回 JSON，不要其他文字`;
 
-  const userPrompt = `用户问题：「${question}」
+  const userPrompt = `${memoryContext.trim() ? `${memoryContext.trim()}\n\n` : ''}用户问题：「${question}」
 
 请分析这个问题的核心矛盾，选择最适合的Agent团队，并说明挑选理由。`;
 

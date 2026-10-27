@@ -240,7 +240,7 @@ input → casting → analyzing → summoning → yan_analyze → agent_select
 
 ### P1 - 重要问题
 4. ❌ **自定义Agent发言链路未打通**: 自定义Agent存储在localStorage，后端不认识
-4.1 ⚠️ **analyze 系统提示词含 memoryContext**（位置靠前）: 登录用户每次记忆不同 → 前缀缓存被打散，DeepSeek 兜底时命中率下降
+4.1 ✅ **analyze memoryContext 位置**（2026-10-27 已修复）: 用户画像/历史召回从 system prompt 顶部挪到 user 消息，system 前缀（人设+Agent清单+规则）跨用户稳定，DeepSeek 兜底前缀缓存不再被逐人记忆打散；智囊发言链路（agentEngine L380+）的注入仍在 system 尾部，影响较小未动
 5. ❌ **LLM记忆上下文有限**: 澄清对话历史传入但可能被截断
 6. ❌ **字体渲染问题**: "Ma Shan Zheng" 字体中文字符不全
 
