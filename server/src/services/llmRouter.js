@@ -84,6 +84,13 @@ export function isLLMAvailable() {
   return getProviders().length > 0;
 }
 
+// 自动前缀缓存命中量：DeepSeek 返回 prompt_cache_hit_tokens，方舟/豆包返回 prompt_tokens_details.cached_tokens
+function cacheUsageMeta(usage = {}) {
+  const hit = Number(usage?.prompt_cache_hit_tokens ?? usage?.prompt_tokens_details?.cached_tokens) || 0;
+  const miss = Number(usage?.prompt_cache_miss_tokens) || 0;
+  return hit + miss > 0 ? { cacheHitTokens: hit, cacheMissTokens: miss } : {};
+}
+
 function canAttemptProvider(provider, providers) {
   // 只有一个模型时不能因为进程级熔断直接跳过整次请求：
   // 串行请求本身就是受控的恢复探测，成功后会立即关闭熔断。
@@ -173,7 +180,7 @@ export function buildProviderRequestBody(provider, messages, options = {}) {
   }
   if (stream) {
     body.stream = true;
-    if (provider.name === 'doubao' || provider.kind === 'ark') {
+    if (provider.name === 'doubao' || provider.kind === 'ark' || provider.name === 'deepseek') {
       body.stream_options = { include_usage: true };
     }
   }
@@ -279,7 +286,7 @@ export async function callLLM(messages, options = {}) {
           output: result.content,
           usage: result.usage,
           latencyMs: Date.now() - startedAt,
-          metadata: { attempt, stage: ctx.stage },
+          metadata: { attempt, stage: ctx.stage, ...cacheUsageMeta(result.usage) },
         });
         console.log(`[LLM] ${provider.name} 调用成功`);
         await flushLangfuse();
@@ -392,7 +399,7 @@ export async function callLLMWithTools({
         output: { content: result.content, tool_calls: result.tool_calls },
         usage: result.usage,
         latencyMs: Date.now() - startedAt,
-        metadata: { attempt, stage: ctx.stage, toolCalls: result.tool_calls?.length || 0 },
+        metadata: { attempt, stage: ctx.stage, toolCalls: result.tool_calls?.length || 0, ...cacheUsageMeta(result.usage) },
       });
       console.log(`[LLM][tools] ${provider.name} 调用成功, tool_calls=${!!result.tool_calls}`);
       await flushLangfuse();
@@ -598,7 +605,7 @@ export async function callLLMStream(messages, options = {}, res) {
           output: fullText,
           usage,
           latencyMs: Date.now() - startedAt,
-          metadata: { attempt, stage: ctx.stage },
+          metadata: { attempt, stage: ctx.stage, ...cacheUsageMeta(usage) },
         });
         res.write(`event: done\ndata: ${JSON.stringify({ full: fullText })}\n\n`);
         res.end();

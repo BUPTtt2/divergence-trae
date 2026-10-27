@@ -1,6 +1,6 @@
 # 演策 (YAN CE) - 项目核心说明书
 
-> **版本**: v2.1 (2026-07-31 生产级改造)
+> **版本**: v2.4 (2026-10-27 智囊对齐：前后端 id 统一 13 个 + analyze 选人加固)
 > **用途**: 给 AI 和开发者提供完整项目上下文，避免理解偏差
 > **更新纪律**: 任何架构/功能变更必须同步更新此文件
 > **生产级改造日志**: `docs/PRODUCTION_REDESIGN_LOG.md`（每次架构变更同步更新）
@@ -34,11 +34,15 @@
 |------|------|------|
 | Node.js | - | 运行时 |
 | Express | - | Web 框架 |
-| 智谱 AI (Zhipu) | - | LLM 推理引擎 |
+| 火山方舟 ARK | doubao-seed-evolving | ★ 主 LLM（思考模型，非流式禁 thinking） |
+| 智谱 AI (Zhipu) | glm-4-flash | 备用 LLM |
+| DeepSeek | deepseek-chat | 兜底 LLM（自动前缀缓存，命中率已埋点） |
+| Langfuse Cloud | OTel + Scores | 链路追踪与评分上报 |
 | PostgreSQL / 内存模式 | - | 数据存储（无 DATABASE_URL 时降级内存） |
 | SSE (EventSource) | - | 推演事件流实时推送 |
 | EventBus | v2.1 | 事件总线（持久化+重放） |
-| Railway | - | 部署平台 |
+| Vercel | - | 后端部署平台（api.yanceai.online） |
+| Surge | - | 前端部署平台（yance-bagua.surge.sh） |
 
 ### 开发工具
 | 工具 | 用途 |
@@ -152,7 +156,7 @@ divergence-trae/
                ▼
 ┌─────────────────────────────────┐
 │  后端 agentPool.js              │
-│  - 8个权威Agent (三层提示词)      │
+│  - 13个权威Agent (三层提示词)     │
 │  - buildAgentSystemPrompt()     │
 │  - getAgentsByIds()             │
 └──────────────┬──────────────────┘
@@ -174,17 +178,18 @@ divergence-trae/
 └─────────────────────────────────┘
 ```
 
-### 4.2 双端 Agent 定义 (不一致!)
+### 4.2 双端 Agent 定义 (2026-10-27 已对齐)
 
 | 维度 | 后端 agentPool.js | 前端 agents.js |
 |------|-------------------|----------------|
-| Agent数量 | 8个 | 12个 |
-| Agent列表 | 钱谷/路向/风眼/心禾/镜渊/云图/震行/兑言 | +远足/养生/法度/学者 |
-| 提示词结构 | 三层 (identity/methodology/deliverable) | persona (单段) |
-| 问题类型 | career/finance/relationship/life/action/communication/offer/startup/invest/city/legal/health/education/technical/product | career/finance/relationship/offer/startup/invest/communication/action/life/daily/travel/city/health/education |
+| Agent数量 | 13个 | 13个（含「演」共14项） |
+| Agent列表 | 钱谷/路向/风眼/心禾/镜渊/云图/震行/兑言/luyou/falv/jiankang/jiaoyu/jishu | 完全同名同 id |
+| id 一致性 | ✅ 已统一（2026-10-27） | ✅ 已统一（2026-10-27） |
+| 提示词结构 | 三层 (identity/methodology/deliverable) | persona (单段，仅降级用) |
+| 问题类型 | career/finance/relationship/life/action/communication/offer/startup/invest/city/legal/health/education/technical/product/travel/experience | 同集合（前后端枚举已对齐） |
 | 权威源 | ✅ 是 | ❌ 仅降级用 |
 
-**⚠️ 关键问题**: 后端缺少 travel 类型和远足/养生/法度/学者 Agent，前端扩展的这4个Agent后端无法发言。
+**✅ 已解决**: 2026-10-27 将「远足(luyou)」补入后端 `AGENT_POOL`（此前仅前端有），并把前端 `fadu/yangsheng/xuezhe/jiangxin` 重命名为 `falv/jiankang/jiaoyu/jishu`。`analyzeQuestion` 增加 id 归一化（历史 id/中文名/「X视角」写法 → 权威 id），LLM 输出不会再因命名差异被丢弃。
 
 ### 4.3 状态机 (Game.jsx 11阶段)
 
@@ -229,12 +234,13 @@ input → casting → analyzing → summoning → yan_analyze → agent_select
 ## 六、已识别的关键问题
 
 ### P0 - 阻塞性问题
-1. ❌ **前后端Agent定义不一致**: 后端缺少4个扩展Agent (远足/养生/法度/学者) 和 travel 问题类型
-2. ❌ **后端detectQuestionType无类型优先级**: 旅行问题可能被误分类
+1. ✅ **前后端 Agent id 不一致**（2026-10-27 已修复）：后端补入 luyou，前端 4 个 id 重命名为 falv/jiankang/jiaoyu/jishu；见 §4.2
+2. ✅ **演选人质量不稳**（2026-10-27 已修复）：`analyzeQuestion` 增加 id/中文名归一化 + 提示词视角覆盖硬约束 + 关键词确定性补齐（钱→钱谷、风险→风眼、职业→路向、情感→心禾）+ 规则兜底 id 修正；抽样 5 题全部 `fallback=false`，覆盖稳定
 3. ❌ **Agent去重逻辑复杂**: 三层去重导致维护困难
 
 ### P1 - 重要问题
 4. ❌ **自定义Agent发言链路未打通**: 自定义Agent存储在localStorage，后端不认识
+4.1 ⚠️ **analyze 系统提示词含 memoryContext**（位置靠前）: 登录用户每次记忆不同 → 前缀缓存被打散，DeepSeek 兜底时命中率下降
 5. ❌ **LLM记忆上下文有限**: 澄清对话历史传入但可能被截断
 6. ❌ **字体渲染问题**: "Ma Shan Zheng" 字体中文字符不全
 
@@ -402,3 +408,43 @@ node index.js        # 启动 Express server
 | P1 | Agent推荐精准+能力描述清晰 | 交互友好 |
 | P2 | iPad/触屏适配 | 展示要求 |
 | P2 | 演示视频录制 | 展示要求 |
+
+---
+
+## 十三、版本对齐记录（2026-10-26 全量盘点）
+
+> 本文档上一版停在 2026-08-06（自称 v2.1 / 迁移 005），与代码实际状态相差约 2.7 个月。以下是核对后的真实状态。
+
+### 13.1 代码现状
+| 项 | 真实值 |
+|----|--------|
+| 后端路由 | 18 个：achievements / advisors / agent / auth / cards / community / daily / deliberation / divination / feedback / followUp / level / mcp / ops / session / sync / track / yan |
+| 后端服务 | 73 个（含 deliberationEngine / planner / reflector / autonomyGate / memoryService / eventBus / toolProbeService / llmRouter / langfuseService / evalPipeline / llmBudgetService / providerRuntime / llmUsageService…） |
+| 数据库迁移 | 032 个（最新 `032-llm-usage-cache-tokens.sql`） |
+| 前端页面 | 14 个：AccountAction / Agents / Calendar / Collection / Community / Daily / Dictionary / Game / Landing / Legal / NotFound / Ops / Privacy / Scenarios |
+| 智囊池 | 后端 13 + 前端 13（含「演」共 14），id 已统一，见 §4.2 |
+
+### 13.2 LLM 提供商优先级（llmRouter.js 实际顺序）
+1. 火山方舟 ARK `doubao-seed-evolving`（主，思考模型；非流式请求强制 `thinking: disabled`）
+2. 智谱 `glm-4-flash`
+3. 魔搭 ModelScope `Qwen2.5-7B`
+4. DeepSeek `deepseek-chat`（兜底，自动前缀缓存）
+
+### 13.3 观测与成本
+- Langfuse Cloud：OTel 端点 + Scores API（原 ingestion API 已废弃），traceId 必须 64 位十六进制
+- `llm_usage_events`（022）已扩展 `cache_hit_tokens` / `cache_miss_tokens`（032），`summarizeUsageEntries` 输出 `cacheHitRate`
+- DeepSeek 前缀缓存实测：1449 token 前缀第 2/3 次命中 1280（≈88%）；250 token 短前缀不命中
+
+### 13.4 线上
+| 端 | 地址 | 状态（2026-10-26） |
+|----|------|--------------------|
+| 后端 | https://api.yanceai.online/health | 200，dbMode=postgresql，llmAvailable=true |
+| 前端 | https://yance-bagua.surge.sh | 200 |
+| Vercel 项目 | sandbox-app（根目录，projectId prj_yMqIZNUmzZfSC81KetE3LsmMmQKr） | 本机 CLI 无凭据，未能核对线上 env/commit |
+
+### 13.5 智囊对齐与选人质量（2026-10-27）
+- 后端 `AGENT_POOL` 补入「远足 luyou」（13 个），前端 `agents.js` 的 fadu/yangsheng/xuezhe/jiangxin 重命名为 falv/jiankang/jiaoyu/jishu，前后端 id 完全一致
+- `analyzeQuestion` 三步加固：① `resolveAgentId` 归一化（历史 id / 中文名 / 「X视角」→ 权威 id）② 提示词视角覆盖硬约束 ③ `ensureCoreCoverage` 关键词补齐（钱→钱谷、风险→风眼、职业→路向、情感→心禾，最多 8 位）
+- 规则兜底 id 修正（原 qingjin/moyin/suwen/fajing/yunyou/lingchong/zhuque 均不存在，等于永远不生效）
+- 验证：server 测试 348/348 通过；本地 5 题抽样 + HTTP 抽查全部 `fallback=false`，职业题必含路向、情感题必含心禾
+- 注意：PowerShell 5.1 调 analyze 接口必须用 `UTF8.GetBytes` 发送 body，否则中文会变成 `?`（会误判选人质量）

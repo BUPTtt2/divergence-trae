@@ -17,8 +17,66 @@ export function uniqueValidAgentIds(agentIds, validIds) {
     .filter((id) => allowed.has(id));
 }
 
-const DIMENSION_PERSPECTIVES = new Set([
-  'financial', 'risk', 'emotional', 'reflection', 'strategic', 'action',
+// 历史 id / 别名 / 常见误写 → 权威 id（前后端统一用后端 agentPool id）
+const AGENT_ID_ALIASES = {
+  fadu: 'falv',
+  yangsheng: 'jiankang',
+  xuezhe: 'jiaoyu',
+  jiangxin: 'jishu',
+  yunyou: 'luyou',
+  lvyou: 'luyou',
+  qingjin: 'xinhe',
+  moyin: 'jiaoyu',
+  suwen: 'jiankang',
+  fajing: 'falv',
+  zhuque: 'yuntu',
+  lingchong: 'xinhe',
+};
+
+/**
+ * 把 LLM 返回的任意 id / 中文名 / 视角写法归一化到权威 id。
+ * 识别不到返回 null（调用方过滤）。
+ */
+export function resolveAgentId(rawId, agents = AGENT_POOL) {
+  const pool = Array.isArray(agents) && agents.length > 0 ? agents : AGENT_POOL;
+  const rawText = String(rawId || '').trim();
+  if (!rawText) return null;
+  const raw = rawText.toLowerCase();
+  const byId = new Map(pool.map((agent) => [String(agent.id).toLowerCase(), agent.id]));
+  if (byId.has(raw)) return byId.get(raw);
+  const alias = AGENT_ID_ALIASES[raw];
+  if (alias && byId.has(alias)) return byId.get(alias);
+  const byName = pool.find((agent) => String(agent.name || '').trim() === rawText);
+  if (byName) return byName.id;
+  const rawStance = raw.replace(/视角$/, '');
+  const byStance = pool.find((agent) => String(agent.stance || '').toLowerCase().replace(/视角$/, '') === rawStance);
+  return byStance ? byStance.id : null;
+}
+
+// 关键词 → 必须覆盖的智囊：LLM 漏选时做确定性补齐（最多 8 位）
+const CORE_COVERAGE_RULES = [
+  { pattern: /(钱|薪资|薪|工资|预算|成本|收入|房价|房租|贷款|本金|存款|万|投资|理财|基金|股票)/, id: 'qiangu' },
+  { pattern: /(风险|失败|亏|最坏|万一|不确定性|裁员|不稳定|压力|焦虑)/, id: 'fengyan' },
+  { pattern: /(跳槽|辞职|离职|转行|职业|工作|offer|升职|赛道|行业|岗位|毕业|读研|考研|留学)/, id: 'luxiang' },
+  { pattern: /(感情|恋爱|结婚|分手|男朋友|女朋友|老公|老婆|父母|家人|关系|情绪|后悔)/, id: 'xinhe' },
+];
+
+function ensureCoreCoverage(agentIds, question, allAgents = [], maxAgents = 8) {
+  const allIds = new Set(allAgents.map((agent) => agent.id));
+  const picked = [...agentIds];
+  const added = [];
+  for (const rule of CORE_COVERAGE_RULES) {
+    if (picked.length >= maxAgents) break;
+    if (!rule.pattern.test(question || '')) continue;
+    if (picked.includes(rule.id)) continue;
+    if (!allIds.has(rule.id)) continue;
+    picked.push(rule.id);
+    added.push(rule.id);
+  }
+  return { agentIds: picked, added };
+}
+
+const DIMENSION_PERSPECTIVES = new Set(['financial', 'risk', 'emotional', 'reflection', 'strategic', 'action',
   'communication', 'macro', 'health', 'legal', 'education', 'experience',
   'practical', 'technical', 'career',
 ]);
@@ -150,14 +208,15 @@ ${agentList}
 }
 
 【规则】
-1. Agent 数量由问题复杂度决定：简单问题1-2个够用，复杂问题可以选3-8个，不要机械地选固定数量
-2. 必须选择与问题最相关的Agent，覆盖不同视角（财务、风险、本心、长期、行动等）
-3. 如果现有Agent池无法覆盖某个关键维度，可以在 analysis 中说明"建议生成X视角的临时智囊"
-4. agentIds 必须是上面列出的有效 id
-5. analysis 要深入拆解问题的核心矛盾和关键维度
-6. reasoning 要说明每个被选中Agent的作用
-7. dimensions 必须是 2-6 个贴合本题的判断维度，并绑定负责的已选 Agent；不要套固定模板
-8. 只返回 JSON，不要其他文字`;
+1. Agent 数量由问题复杂度决定：简单问题2-3个，复杂问题4-6个，最多8个，不要机械地选固定数量
+2. 视角覆盖是硬约束：只要问题涉及金钱/成本/收入，必须有钱谷；涉及不确定、失败、风险，必须有风眼；涉及职业路径或长期选择，必须有路向；涉及情绪、关系、家人，必须有心禾；涉及自我重复、后悔、意义，必须有镜渊
+3. 再按问题补充 1-2 位专题智囊（法度/养生/师道/匠心/远足/云图/震行/兑言），不要只选「万金油」组合
+4. 如果现有Agent池无法覆盖某个关键维度，可以在 analysis 中说明"建议生成X视角的临时智囊"
+5. agentIds 必须逐字使用上面列出的 id（不要写中文名、不要造新 id），且至少 2 个
+6. analysis 要深入拆解问题的核心矛盾和关键维度
+7. reasoning 要说明每个被选中Agent的作用
+8. dimensions 必须是 2-6 个贴合本题的判断维度，并绑定负责的已选 Agent；不要套固定模板
+9. 只返回 JSON，不要其他文字`;
 
   const userPrompt = `用户问题：「${question}」
 
@@ -184,13 +243,24 @@ ${agentList}
 
     const parsed = JSON.parse(jsonText);
     const validIds = allAgents.map((a) => a.id);
-    const agentIds = uniqueValidAgentIds(parsed.agentIds, validIds);
+    const rawIds = Array.isArray(parsed.agentIds) ? parsed.agentIds : [];
+    // LLM 可能返回历史 id / 中文名 / 「X视角」写法，先归一化再校验
+    const resolvedIds = rawIds.map((raw) => resolveAgentId(raw, allAgents)).filter(Boolean);
+    const uniqueIds = uniqueValidAgentIds(resolvedIds, validIds);
+    if (resolvedIds.length === 0 && rawIds.length > 0) {
+      logger.warn('[agentEngine] analyzeQuestion 返回的 agentIds 无法识别，启用规则兜底', { modelAgentIds: rawIds });
+    }
 
     // LLM 未选出任何 Agent 或解析失败：启用规则兜底（风眼/镜渊/钱谷/路向 四核心 + 关键词扩展）
-    if (agentIds.length === 0) {
-      logger.warn('[agentEngine] analyzeQuestion LLM无有效Agent，启用规则兜底');
+    if (uniqueIds.length === 0) {
+      logger.warn('[agentEngine] analyzeQuestion LLM无有效Agent，启用规则兜底', { modelAgentIds: parsed.agentIds });
       const fallback = _ruleBasedAgents(question, allAgents);
       return fallback;
+    }
+    // 覆盖补齐：题目明确涉及钱/风险/职业/情感时，无论模型是否漏选都补上对应核心智囊
+    const { agentIds, added } = ensureCoreCoverage(uniqueIds, question, allAgents);
+    if (added.length > 0) {
+      logger.info('[agentEngine] analyzeQuestion 覆盖补齐', { modelAgentIds: uniqueIds, added });
     }
 
     const dimensions = buildSelectionDimensions({
@@ -229,20 +299,20 @@ function _ruleBasedAgents(question, allAgents = [], errorReason = '') {
   const q = (question || '').toLowerCase();
   const core = ['fengyan', 'jingyuan', 'qiangu', 'luxiang'];
   const extra = [];
-  // 情感类 → 加青衿
-  if (/(感情|恋爱|结婚|分手|对象|老公|老婆|父母|家人|朋友|同事)/.test(q)) extra.push('qingjin');
-  // 教育/成长类 → 加墨隐
-  if (/(读书|考试|考研|留学|培训|学习|学校|技能|成长|毕业)/.test(q)) extra.push('moyin');
-  // 健康类 → 加素问
-  if (/(健康|身体|生病|看病|运动|减肥|健身|治病|养生|熬夜|失眠|焦虑|抑郁|体检|病|痛|伤)/.test(q)) extra.push('suwen');
-  // 法律/合同类 → 加法镜
-  if (/(合同|法律|官司|起诉|律师|权益|维权|合规|违法|版权|专利|纠纷)/.test(q)) extra.push('fajing');
-  // 旅行/出行类 → 加云逰
-  if (/(旅行|旅游|游玩|出差|出国|自驾|攻略|景点|回老家|返乡)/.test(q)) extra.push('yunyou');
-  // 宠物类 → 加灵宠
-  if (/(养猫|养狗|养宠物|宠物|猫|狗|鸟|鱼|兔|仓鼠)/.test(q)) extra.push('lingchong');
-  // 投资类 → 加钱谷已在core里，再加朱雀偏决策
-  if (/(投资|股票|基金|理财|贷款|汇率|通货膨胀|股市|定投)/.test(q)) extra.push('zhuque');
+  // 情感类 → 加心禾
+  if (/(感情|恋爱|结婚|分手|对象|老公|老婆|父母|家人|朋友|同事)/.test(q)) extra.push('xinhe');
+  // 教育/成长类 → 加师道
+  if (/(读书|考试|考研|留学|培训|学习|学校|技能|成长|毕业)/.test(q)) extra.push('jiaoyu');
+  // 健康类 → 加养生
+  if (/(健康|身体|生病|看病|运动|减肥|健身|治病|养生|熬夜|失眠|焦虑|抑郁|体检|病|痛|伤)/.test(q)) extra.push('jiankang');
+  // 法律/合同类 → 加法度
+  if (/(合同|法律|官司|起诉|律师|权益|维权|合规|违法|版权|专利|纠纷)/.test(q)) extra.push('falv');
+  // 旅行/出行类 → 加远足
+  if (/(旅行|旅游|游玩|出差|出国|自驾|攻略|景点|回老家|返乡)/.test(q)) extra.push('luyou');
+  // 宠物类 → 加养生 + 心禾（情感投入）
+  if (/(养猫|养狗|养宠物|宠物|猫|狗|鸟|鱼|兔|仓鼠)/.test(q)) extra.push('jiankang', 'xinhe');
+  // 投资类 → 加云图（周期判断）
+  if (/(投资|股票|基金|理财|贷款|汇率|通货膨胀|股市|定投)/.test(q)) extra.push('yuntu');
 
   // 去重并保证一定在 AGENT_POOL 里
   const allIds = new Set(allAgents.map(a => a.id));

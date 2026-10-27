@@ -7,11 +7,14 @@ const number = (value) => Math.max(0, Number(value) || 0);
 
 function normalizeUsage(value) {
   if (!value || typeof value !== 'object') return null;
+  const details = value.prompt_tokens_details || {};
   return {
     prompt_tokens: number(value.prompt_tokens ?? value.input_tokens),
     completion_tokens: number(value.completion_tokens ?? value.output_tokens),
     total_tokens: number(value.total_tokens)
       || number(value.prompt_tokens ?? value.input_tokens) + number(value.completion_tokens ?? value.output_tokens),
+    cache_hit_tokens: number(value.prompt_cache_hit_tokens ?? details.cached_tokens),
+    cache_miss_tokens: number(value.prompt_cache_miss_tokens),
   };
 }
 
@@ -40,7 +43,7 @@ export function normalizeUsageEntry(input = {}) {
 }
 
 function emptyGroup() {
-  return { calls: 0, successfulCalls: 0, failedCalls: 0, usageMissingCalls: 0, costMissingCalls: 0, tokens: { input: 0, output: 0, total: 0 }, estimatedCostCny: 0 };
+  return { calls: 0, successfulCalls: 0, failedCalls: 0, usageMissingCalls: 0, costMissingCalls: 0, tokens: { input: 0, output: 0, total: 0 }, cacheHitTokens: 0, cacheMissTokens: 0, estimatedCostCny: 0 };
 }
 
 function addToGroup(group, entry) {
@@ -52,7 +55,17 @@ function addToGroup(group, entry) {
   group.tokens.input += number(entry.usage?.prompt_tokens);
   group.tokens.output += number(entry.usage?.completion_tokens);
   group.tokens.total += number(entry.usage?.total_tokens);
+  group.cacheHitTokens += number(entry.usage?.cache_hit_tokens);
+  group.cacheMissTokens += number(entry.usage?.cache_miss_tokens);
   group.estimatedCostCny = Number((group.estimatedCostCny + number(entry.estimatedCostCny)).toFixed(8));
+}
+
+// 缓存命中率 = 命中 / (命中 + 未命中)，两者都缺省时为 null
+function cacheHitRate(group) {
+  const cached = group.cacheHitTokens;
+  const missed = group.cacheMissTokens;
+  if (cached + missed === 0) return null;
+  return Number((cached / (cached + missed)).toFixed(4));
 }
 
 export function summarizeUsageEntries(entries = []) {
@@ -75,6 +88,9 @@ export function summarizeUsageEntries(entries = []) {
     addToGroup(summary.byStage[entry.stage], entry);
   }
   summary.averageLatencyMs = normalized.length ? Math.round(latencyTotal / normalized.length) : 0;
+  summary.cacheHitRate = cacheHitRate(summary);
+  for (const group of Object.values(summary.byProvider)) group.cacheHitRate = cacheHitRate(group);
+  for (const group of Object.values(summary.byStage)) group.cacheHitRate = cacheHitRate(group);
   return summary;
 }
 
@@ -93,6 +109,8 @@ export async function persistUsageEntry(input = {}) {
     prompt_tokens: entry.usage?.prompt_tokens || 0,
     completion_tokens: entry.usage?.completion_tokens || 0,
     total_tokens: entry.usage?.total_tokens || 0,
+    cache_hit_tokens: entry.usage?.cache_hit_tokens || 0,
+    cache_miss_tokens: entry.usage?.cache_miss_tokens || 0,
     usage_missing: entry.usageMissing,
     latency_ms: entry.latencyMs,
     estimated_cost_cny: entry.estimatedCostCny,
@@ -109,8 +127,8 @@ export async function persistUsageEntry(input = {}) {
       sql: `WITH inserted AS (
         INSERT INTO llm_usage_events
           (id, session_id, user_id, provider, model, stage, agent_id, status, attempt,
-           prompt_tokens, completion_tokens, total_tokens, usage_missing, latency_ms,
-           estimated_cost_cny, error_status, error_code, created_at)
+           prompt_tokens, completion_tokens, total_tokens, cache_hit_tokens, cache_miss_tokens,
+           usage_missing, latency_ms, estimated_cost_cny, error_status, error_code, created_at)
         VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')})
         RETURNING session_id, status, total_tokens
       )
@@ -143,6 +161,8 @@ function rowToEntry(row = {}) {
       prompt_tokens: row.prompt_tokens,
       completion_tokens: row.completion_tokens,
       total_tokens: row.total_tokens,
+      cache_hit_tokens: row.cache_hit_tokens,
+      cache_miss_tokens: row.cache_miss_tokens,
     },
     error: row.error_code ? { status: row.error_status, code: row.error_code } : null,
   });
@@ -167,8 +187,8 @@ export async function getOpsUsageSummary(range = {}, options = {}) {
     ? await queryImpl({
       action: 'raw',
       sql: `SELECT id, provider, model, stage, agent_id, status, attempt,
-        prompt_tokens, completion_tokens, total_tokens, usage_missing,
-        latency_ms, estimated_cost_cny, error_status, error_code, created_at
+        prompt_tokens, completion_tokens, total_tokens, cache_hit_tokens, cache_miss_tokens,
+        usage_missing, latency_ms, estimated_cost_cny, error_status, error_code, created_at
         FROM llm_usage_events
         WHERE created_at >= $1 AND created_at <= $2
         ORDER BY created_at ASC

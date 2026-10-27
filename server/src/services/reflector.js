@@ -825,7 +825,7 @@ export async function selfTest() {
     },
     findings: [
       { agentId: 'fengyan', agentName: '风眼', perspective: 'risk', content: '高原反应风险高', stance: 'negative', intensity: 0.8 },
-      { agentId: 'yangsheng', agentName: '养生', perspective: 'health', content: '身体条件允许', stance: 'positive', intensity: 0.7 },
+      { agentId: 'jiankang', agentName: '养生', perspective: 'health', content: '身体条件允许', stance: 'positive', intensity: 0.7 },
       { agentId: 'luyou', agentName: '远足', perspective: 'experience', content: '体验极佳', stance: 'positive', intensity: 0.9 },
       { agentId: 'jingyuan', agentName: '镜渊', perspective: 'reflection', content: '此行有意义', stance: 'positive', intensity: 0.6 },
     ],

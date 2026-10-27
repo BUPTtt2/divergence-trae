@@ -22,7 +22,13 @@ test('usage entry keeps billing metadata and removes prompts, keys, and response
     content: 'must not persist',
   });
 
-  assert.deepEqual(entry.usage, { prompt_tokens: 3500, completion_tokens: 1500, total_tokens: 5000 });
+  assert.deepEqual(entry.usage, {
+    prompt_tokens: 3500,
+    completion_tokens: 1500,
+    total_tokens: 5000,
+    cache_hit_tokens: 0,
+    cache_miss_tokens: 0,
+  });
   assert.equal(entry.stage, 'advisor');
   assert.equal(entry.attempt, 2);
   assert.equal('prompt' in entry, false);

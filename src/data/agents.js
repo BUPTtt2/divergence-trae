@@ -137,7 +137,7 @@ export const AGENTS = [
     pauseDuration: 600,
   },
   {
-    id: 'yangsheng',
+    id: 'jiankang',
     name: '养生',
     stance: '健康视角',
     color: '#689060',
@@ -150,7 +150,7 @@ export const AGENTS = [
     pauseDuration: 700,
   },
   {
-    id: 'fadu',
+    id: 'falv',
     name: '法度',
     stance: '法律视角',
     color: '#585878',
@@ -163,7 +163,7 @@ export const AGENTS = [
     pauseDuration: 700,
   },
   {
-    id: 'xuezhe',
+    id: 'jiaoyu',
     name: '师道',
     stance: '教育视角',
     color: '#587890',
@@ -176,7 +176,7 @@ export const AGENTS = [
     pauseDuration: 600,
   },
   {
-    id: 'jiangxin',
+    id: 'jishu',
     name: '匠心',
     stance: '技术视角',
     color: '#588898',
@@ -195,28 +195,28 @@ export function getAgents() {
 }
 
 export const AGENT_MAP = Object.fromEntries(AGENTS.map(a => [a.id, a]));
-export const AGENT_ORDER = ['qiangu', 'luxiang', 'fengyan', 'xinhe', 'jingyuan', 'yuntu', 'zhenxing', 'duiyan', 'luyou', 'yangsheng', 'fadu', 'xuezhe', 'jiangxin'];
+export const AGENT_ORDER = ['qiangu', 'luxiang', 'fengyan', 'xinhe', 'jingyuan', 'yuntu', 'zhenxing', 'duiyan', 'luyou', 'jiankang', 'falv', 'jiaoyu', 'jishu'];
 
 /**
  * 决策问题类型 → 召唤的动态 Agent（常驻 Agent 自动加入）
  */
 export const QUESTION_TYPES = {
-  career:        { label: '职业抉择', agents: ['qiangu', 'luxiang', 'yuntu', 'zhenxing', 'xuezhe'] },
-  finance:       { label: '财务决策', agents: ['qiangu', 'yuntu', 'fadu'] },
+  career:        { label: '职业抉择', agents: ['qiangu', 'luxiang', 'yuntu', 'zhenxing', 'jiaoyu'] },
+  finance:       { label: '财务决策', agents: ['qiangu', 'yuntu', 'falv'] },
   relationship:  { label: '情感关系', agents: ['xinhe', 'duiyan'] },
-  life:          { label: '人生方向', agents: ['xinhe', 'luxiang', 'yuntu', 'xuezhe'] },
+  life:          { label: '人生方向', agents: ['xinhe', 'luxiang', 'yuntu', 'jiaoyu'] },
   action:        { label: '行动抉择', agents: ['zhenxing', 'luxiang', 'jingyuan'] },
   communication: { label: '沟通谈判', agents: ['duiyan', 'xinhe'] },
   offer:         { label: 'Offer 抉择', agents: ['qiangu', 'fengyan', 'luxiang', 'xinhe'] },
   startup:       { label: '创业抉择', agents: ['zhenxing', 'fengyan', 'jingyuan', 'yuntu'] },
-  invest:        { label: '投资决策', agents: ['qiangu', 'fengyan', 'yuntu', 'fadu'] },
+  invest:        { label: '投资决策', agents: ['qiangu', 'fengyan', 'yuntu', 'falv'] },
   city:          { label: '城市迁移', agents: ['qiangu', 'luxiang', 'yuntu', 'fengyan', 'jingyuan'] },
   travel:        { label: '出行旅行', agents: ['luyou', 'fengyan', 'zhenxing'] },
-  health:        { label: '健康抉择', agents: ['yangsheng', 'xinhe', 'fengyan'] },
-  education:     { label: '学业成长', agents: ['xuezhe', 'luxiang', 'xinhe'] },
-  daily:         { label: '日常选择', agents: ['luyou', 'zhenxing', 'xinhe', 'yangsheng'] },
-  pet:           { label: '养宠决策', agents: ['yangsheng', 'qiangu', 'fengyan', 'xinhe'] },
-  legal:         { label: '法律维权', agents: ['fadu', 'fengyan', 'jingyuan'] },
+  health:        { label: '健康抉择', agents: ['jiankang', 'xinhe', 'fengyan'] },
+  education:     { label: '学业成长', agents: ['jiaoyu', 'luxiang', 'xinhe'] },
+  daily:         { label: '日常选择', agents: ['luyou', 'zhenxing', 'xinhe', 'jiankang'] },
+  pet:           { label: '养宠决策', agents: ['jiankang', 'qiangu', 'fengyan', 'xinhe'] },
+  legal:         { label: '法律维权', agents: ['falv', 'fengyan', 'jingyuan'] },
 };
 
 const TYPE_KEYWORDS = {

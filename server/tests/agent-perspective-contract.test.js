@@ -8,10 +8,11 @@ import { perspectiveForAgent } from '../src/services/reactLoop.js';
 const ALLOWED_PERSPECTIVES = new Set([
   'financial', 'career', 'risk', 'emotional', 'reflection', 'macro',
   'action', 'communication', 'legal', 'health', 'education', 'technical',
+  'experience',
 ]);
 
 test('every built-in agent declares a canonical perspective', () => {
-  assert.equal(AGENT_POOL.length, 12);
+  assert.equal(AGENT_POOL.length, 13);
   for (const agent of AGENT_POOL) {
     assert.ok(agent.perspective, `${agent.id} is missing perspective`);
     assert.ok(
