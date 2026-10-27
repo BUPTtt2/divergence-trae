@@ -434,6 +434,8 @@ node index.js        # 启动 Express server
 - Langfuse Cloud：OTel 端点 + Scores API（原 ingestion API 已废弃），traceId 必须 64 位十六进制
 - `llm_usage_events`（022）已扩展 `cache_hit_tokens` / `cache_miss_tokens`（032），`summarizeUsageEntries` 输出 `cacheHitRate`
 - DeepSeek 前缀缓存实测：1449 token 前缀第 2/3 次命中 1280（≈88%）；250 token 短前缀不命中
+- 覆盖范围（2026-10-27）：llmRouter 三个入口（callLLM/callLLMWithTools/callLLMStream）自动建 trace+generation；`/api/agent/*`、`/api/yan/*`、`/api/deliberation/*` 均挂 `llmTraceContext`（新轨未显式包上下文的 start/route/interject 也带 sessionId+stage）；用户反馈写 `user-feedback` score，`evalPipeline` 4 项指标写 `eval.*` score
+- 核查入口：`GET /api/ops/infrastructure` 返回 `langfuse.enabled/host`（需 admin）；本地三变量缺任一（尤其 SECRET_KEY）即全链路 no-op
 
 ### 13.4 线上
 | 端 | 地址 | 状态（2026-10-26） |
